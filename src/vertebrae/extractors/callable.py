@@ -4,6 +4,8 @@ from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
+from vertebrae.utils.validation import ensure_dense_numeric_2d
+
 
 class CallableExtractor:
     def __init__(
@@ -13,12 +15,14 @@ class CallableExtractor:
         fit_fn: Optional[Callable[[Any, Any], Any]] = None,
         modality: str = "unknown",
         extractor_type: str = "custom_callable",
+        recipe_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.name = name
         self.transform_fn = transform_fn
         self.fit_fn = fit_fn
         self.modality = modality
         self.extractor_type = extractor_type
+        self.recipe_data = recipe_data or {}
 
     def fit(self, X: Any, y: Any = None) -> "CallableExtractor":
         if self.fit_fn is not None:
@@ -26,7 +30,10 @@ class CallableExtractor:
         return self
 
     def transform(self, X: Any) -> np.ndarray:
-        return np.asarray(self.transform_fn(X))
+        return ensure_dense_numeric_2d(
+            self.transform_fn(X),
+            f"CallableExtractor '{self.name}' output",
+        )
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
         self.fit(X, y)
@@ -39,6 +46,7 @@ class CallableExtractor:
             "modality": self.modality,
             "transform_fn": _callable_name(self.transform_fn),
             "fit_fn": _callable_name(self.fit_fn) if self.fit_fn is not None else None,
+            "recipe_data": self.recipe_data,
         }
 
 

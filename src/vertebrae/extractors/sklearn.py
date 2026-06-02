@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 import numpy as np
 
+from vertebrae.utils.validation import ensure_dense_numeric_2d
+
 
 class SklearnExtractor:
     def __init__(
@@ -13,12 +15,14 @@ class SklearnExtractor:
         already_fitted: bool = False,
         extractor_type: str = "unsupervised_fitted",
         max_dense_bytes: int = 2_000_000_000,
+        allow_sparse: bool = False,
     ) -> None:
         self.name = name
         self.pipeline = pipeline
         self.already_fitted = already_fitted
         self.extractor_type = extractor_type
         self.max_dense_bytes = max_dense_bytes
+        self.allow_sparse = allow_sparse
         self.modality = "unknown"
 
     def fit(self, X: Any, y: Any = None) -> "SklearnExtractor":
@@ -34,7 +38,7 @@ class SklearnExtractor:
     def transform(self, X: Any) -> np.ndarray:
         if not hasattr(self.pipeline, "transform"):
             raise TypeError("pipeline must expose transform.")
-        return self._to_dense_array(self.pipeline.transform(X))
+        return self._prepare_output(self.pipeline.transform(X))
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
         if self.already_fitted:
@@ -42,7 +46,7 @@ class SklearnExtractor:
         if hasattr(self.pipeline, "fit_transform"):
             output = self.pipeline.fit_transform(X, y)
             self.already_fitted = True
-            return self._to_dense_array(output)
+            return self._prepare_output(output)
         self.fit(X, y)
         return self.transform(X)
 
@@ -62,11 +66,19 @@ class SklearnExtractor:
             ),
             "already_fitted": self.already_fitted,
             "max_dense_bytes": self.max_dense_bytes,
+            "allow_sparse": self.allow_sparse,
             "params": params,
         }
 
-    def _to_dense_array(self, output: Any) -> np.ndarray:
+    def _prepare_output(self, output: Any) -> np.ndarray:
         if hasattr(output, "toarray"):
+            if self.allow_sparse:
+                raise ValueError(
+                    "SklearnExtractor received sparse output with allow_sparse=True, but "
+                    "vertebrae scoring currently requires dense numeric embeddings. Add a "
+                    "dimensionality-reduction step such as TruncatedSVD or set "
+                    "allow_sparse=False to permit safe densification."
+                )
             dtype = getattr(output, "dtype", np.dtype(float))
             itemsize = np.dtype(dtype).itemsize
             rows, cols = output.shape
@@ -78,7 +90,7 @@ class SklearnExtractor:
                     f"{self.max_dense_bytes}."
                 )
             output = output.toarray()
-        return np.asarray(output)
+        return ensure_dense_numeric_2d(output, f"SklearnExtractor '{self.name}' output")
 
 
 def _is_simple_param(value: Any) -> bool:

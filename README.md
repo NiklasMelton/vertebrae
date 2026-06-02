@@ -1,14 +1,16 @@
 # vertebrae
 
-`vertebrae` is a practical benchmarking package for evaluating feature extractors and
-transfer-learning backbones on labeled datasets. It accepts precomputed embeddings or
-generates embeddings from extractors, scores them with `overlapindex`, and renders JSON
-or Markdown reports for practitioner-facing diagnostics.
+`vertebrae` benchmarks feature extractors and frozen transfer-learning backbones on
+labeled datasets. It can score precomputed embeddings or generate embeddings from
+local pipelines, callable feature functions, Hugging Face text/vision models, and
+sentence-transformers models.
 
-Version 1 uses MiniBatchKMeans-backed OverlapIndex scoring internally. Backend selection
-is intentionally not part of the public API.
+Scoring uses the existing `overlapindex` package. `vertebrae` intentionally exposes
+only MiniBatchKMeans-backed OverlapIndex scoring internally; ART, ARTMAP, Fuzzy ART,
+Hypersphere ART, `model_type`, `rho`, `r_hat`, and `match_tracking` are not public
+`vertebrae` options.
 
-## Installation
+## Install
 
 ```bash
 pip install vertebrae
@@ -20,13 +22,13 @@ For local development:
 poetry install --with dev
 ```
 
-Optional text-model integrations are installed with:
+Optional Hugging Face and sentence-transformers support:
 
 ```bash
 poetry install -E hf
 ```
 
-## Precomputed Embeddings
+## Precomputed embeddings
 
 ```python
 from vertebrae import BenchmarkDataset, Evaluator
@@ -36,47 +38,91 @@ dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y)
 
 result = Evaluator(
     dataset=dataset,
-    extractor=PrecomputedExtractor(name="embeddings"),
+    extractor=PrecomputedExtractor(name="my_embeddings"),
 ).run()
 
 print(result.to_dataframe())
+result.save_json("result.json")
 result.save_markdown("report.md")
 ```
 
-## Scikit-learn Pipeline
+## Scikit-learn text pipeline
 
 ```python
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import Normalizer
+
 from vertebrae import BenchmarkDataset, Evaluator
 from vertebrae.extractors import SklearnExtractor
 
-dataset = BenchmarkDataset.from_dataframe(
-    df,
-    input_col="text",
-    label_col="label",
-    modality="text",
-)
+pipeline = Pipeline([
+    ("tfidf", TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=20_000)),
+    ("svd", TruncatedSVD(n_components=128, random_state=42)),
+    ("norm", Normalizer()),
+])
 
-extractor = SklearnExtractor(name="tfidf_svd", pipeline=my_pipeline)
+dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
+extractor = SklearnExtractor(name="tfidf_bigram_svd128", pipeline=pipeline)
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
-## Multi-extractor Comparison
+## Hugging Face text
 
 ```python
-from vertebrae import Benchmark, BenchmarkDataset
-from vertebrae.extractors import SklearnExtractor
+from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae.extractors import HFTextExtractor
 
-dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
 
-benchmark = Benchmark(dataset)
-benchmark.add_extractor(SklearnExtractor("pca", pca_pipeline))
-benchmark.add_extractor(SklearnExtractor("svd", svd_pipeline))
+extractor = HFTextExtractor(
+    name="distilbert_mean_pool",
+    model_id="distilbert-base-uncased",
+    pooling="mean",
+    batch_size=16,
+)
 
-result = benchmark.run()
-result.save_json("results.json")
-result.save_markdown("report.md")
+result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
-Reports include dataset summary, ranking, per-class overlap diagnostics, stability
-summaries, probe results when available, warnings, recommendations, and reproducibility
-metadata.
+## Sentence-transformers
+
+```python
+from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae.extractors import SentenceTransformerExtractor
+
+dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
+
+extractor = SentenceTransformerExtractor(
+    name="minilm",
+    model_id="sentence-transformers/all-MiniLM-L6-v2",
+    batch_size=32,
+    normalize_embeddings=True,
+)
+
+result = Evaluator(dataset=dataset, extractor=extractor).run()
+```
+
+## Multi-extractor comparison
+
+```python
+from vertebrae import Benchmark
+
+benchmark = Benchmark(dataset)
+benchmark.add_extractor(tfidf_extractor)
+benchmark.add_extractor(minilm_extractor)
+benchmark.add_extractor(distilbert_extractor)
+
+result = benchmark.run()
+print(result.to_dataframe())
+result.save_markdown("comparison.md")
+```
+
+Reports include dataset summary, extractor recipes, ranking, per-class overlap
+diagnostics, stability summaries, probe results when enabled, warnings,
+recommendations, and reproducibility metadata.
+
+Distributed execution is planned but not implemented. The current implementation keeps
+embeddings as artifacts and scoring/reporting separate from live model objects so that
+future distributed backends can shard embedding jobs without changing the public API.

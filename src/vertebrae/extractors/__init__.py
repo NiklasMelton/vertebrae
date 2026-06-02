@@ -2,6 +2,7 @@
 
 from vertebrae.extractors.callable import CallableExtractor
 from vertebrae.extractors.huggingface_text import HFTextExtractor
+from vertebrae.extractors.huggingface_vision import HFVisionExtractor
 from vertebrae.extractors.precomputed import PrecomputedExtractor
 from vertebrae.extractors.sentence_transformers import SentenceTransformerExtractor
 from vertebrae.extractors.sklearn import SklearnExtractor
@@ -9,6 +10,7 @@ from vertebrae.extractors.sklearn import SklearnExtractor
 __all__ = [
     "CallableExtractor",
     "HFTextExtractor",
+    "HFVisionExtractor",
     "PrecomputedExtractor",
     "SentenceTransformerExtractor",
     "SklearnExtractor",

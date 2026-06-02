@@ -1,64 +1,57 @@
-"""Optional Hugging Face text embedding extractor."""
+"""Optional Hugging Face vision embedding extractor."""
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 
-class HFTextExtractor:
+class HFVisionExtractor:
     def __init__(
         self,
         name: str,
         model_id: str,
-        pooling: str = "mean",
-        batch_size: int = 32,
-        max_length: int = 512,
+        pooling: str = "cls",
+        batch_size: int = 16,
         device: Optional[str] = None,
         revision: Optional[str] = None,
         trust_remote_code: bool = False,
-        tokenizer_kwargs: Optional[Dict[str, Any]] = None,
+        processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
-        if pooling not in {"mean", "cls", "last_token"}:
-            raise ValueError("pooling must be one of: mean, cls, last_token.")
+        if pooling not in {"cls", "mean", "pooler"}:
+            raise ValueError("pooling must be one of: cls, mean, pooler.")
         self.name = name
         self.model_id = model_id
         self.pooling = pooling
         self.batch_size = batch_size
-        self.max_length = max_length
         self.device = device
         self.revision = revision
         self.trust_remote_code = trust_remote_code
-        self.tokenizer_kwargs = tokenizer_kwargs or {}
+        self.processor_kwargs = processor_kwargs or {}
         self.model_kwargs = model_kwargs or {}
-        self.modality = "text"
+        self.modality = "image"
         self.extractor_type = "frozen_pretrained"
-        self._tokenizer: Any = None
+        self._processor: Any = None
         self._model: Any = None
         self._torch: Any = None
+        self._image_module: Any = None
 
-    def fit(self, X: Any, y: Any = None) -> "HFTextExtractor":
+    def fit(self, X: Any, y: Any = None) -> "HFVisionExtractor":
         return self
 
     def transform(self, X: Any) -> np.ndarray:
-        tokenizer, model, torch = self._load_model()
-        texts = _validate_text_sequence(X, "HFTextExtractor")
+        processor, model, torch, image_module = self._load_model()
+        images = [_coerce_image(item, image_module) for item in _as_sequence(X)]
         outputs: List[np.ndarray] = []
         model.eval()
         with torch.no_grad():
-            for start in range(0, len(texts), self.batch_size):
-                batch = texts[start : start + self.batch_size]
-                encoded = tokenizer(
-                    batch,
-                    padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
-                    return_tensors="pt",
-                    **self.tokenizer_kwargs,
-                )
+            for start in range(0, len(images), self.batch_size):
+                batch = images[start : start + self.batch_size]
+                encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
-                hidden = model(**encoded).last_hidden_state
-                pooled = self._pool(hidden, encoded["attention_mask"], torch)
+                model_output = model(**encoded)
+                pooled = self._pool(model_output)
                 outputs.append(pooled.detach().cpu().numpy().astype(np.float32, copy=False))
         return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
 
@@ -73,11 +66,10 @@ class HFTextExtractor:
             "model_id": self.model_id,
             "pooling": self.pooling,
             "batch_size": self.batch_size,
-            "max_length": self.max_length,
             "device": self.device,
             "revision": self.revision,
             "trust_remote_code": self.trust_remote_code,
-            "tokenizer_kwargs": self.tokenizer_kwargs,
+            "processor_kwargs": self.processor_kwargs,
             "model_kwargs": self.model_kwargs,
         }
 
@@ -85,11 +77,13 @@ class HFTextExtractor:
         if self._model is None:
             try:
                 import torch
-                from transformers import AutoModel, AutoTokenizer
+                from PIL import Image
+                from transformers import AutoImageProcessor, AutoModel
             except ImportError as exc:
                 raise ImportError(
-                    "HFTextExtractor requires optional Hugging Face dependencies. "
-                    "Install with the documented Hugging Face extra or Poetry group."
+                    "HFVisionExtractor requires optional Hugging Face vision "
+                    "dependencies. Install with the documented Hugging Face extra or "
+                    "Poetry group."
                 ) from exc
             common_kwargs = {
                 "revision": self.revision,
@@ -98,10 +92,10 @@ class HFTextExtractor:
             common_kwargs = {
                 key: value for key, value in common_kwargs.items() if value is not None
             }
-            self._tokenizer = AutoTokenizer.from_pretrained(
+            self._processor = AutoImageProcessor.from_pretrained(
                 self.model_id,
                 **common_kwargs,
-                **self.tokenizer_kwargs,
+                **self.processor_kwargs,
             )
             self._model = AutoModel.from_pretrained(
                 self.model_id,
@@ -109,35 +103,40 @@ class HFTextExtractor:
                 **self.model_kwargs,
             )
             self._torch = torch
+            self._image_module = Image
             assert self._model is not None
             self._model.to(self._device(torch))
-        return self._tokenizer, self._model, self._torch
+        return self._processor, self._model, self._torch, self._image_module
 
     def _device(self, torch: Any) -> str:
         if self.device is not None:
             return self.device
         return "cuda" if torch.cuda.is_available() else "cpu"
 
-    def _pool(self, hidden: Any, mask: Any, torch: Any) -> Any:
+    def _pool(self, output: Any) -> Any:
+        if self.pooling == "pooler":
+            pooler_output = getattr(output, "pooler_output", None)
+            if pooler_output is None:
+                raise ValueError("pooler pooling requested, but model output has no pooler_output.")
+            return pooler_output
+        hidden = output.last_hidden_state
         if self.pooling == "cls":
             return hidden[:, 0, :]
-        if self.pooling == "last_token":
-            lengths = mask.sum(dim=1) - 1
-            batch_ids = torch.arange(hidden.shape[0], device=hidden.device)
-            return hidden[batch_ids, lengths, :]
-        expanded_mask = mask.unsqueeze(-1).expand(hidden.size()).float()
-        masked_hidden = hidden * expanded_mask
-        lengths = expanded_mask.sum(dim=1).clamp(min=1e-9)
-        return masked_hidden.sum(dim=1) / lengths
+        return hidden.mean(dim=1)
 
 
-def _validate_text_sequence(value: Any, owner: str) -> List[str]:
-    if isinstance(value, str):
-        raise ValueError(f"{owner} expects a sequence of strings, not a single string.")
+def _as_sequence(value: Any) -> list[Any]:
+    if isinstance(value, (str, Path)):
+        return [value]
     try:
-        texts = list(value)
+        return list(value)
     except TypeError as exc:
-        raise ValueError(f"{owner} expects a sequence of strings.") from exc
-    if not all(isinstance(text, str) for text in texts):
-        raise ValueError(f"{owner} expects every input item to be a string.")
-    return texts
+        raise ValueError("HFVisionExtractor expects images, image arrays, or image paths.") from exc
+
+
+def _coerce_image(value: Any, image_module: Any) -> Any:
+    if isinstance(value, (str, Path)):
+        return image_module.open(value).convert("RGB")
+    if isinstance(value, np.ndarray):
+        return image_module.fromarray(value)
+    return value

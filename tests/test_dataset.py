@@ -41,3 +41,34 @@ def test_from_dataframe_preserves_columns_and_counts():
     assert dataset.input_col == "text"
     assert dataset.label_col == "label"
     assert dataset.class_counts() == {"a": 2, "b": 2}
+
+
+def test_from_dataframe_accepts_tabular_column_list():
+    df = pd.DataFrame(
+        {
+            "age": [20, 25, 35, 42],
+            "income": [40_000, 52_000, 83_000, 91_000],
+            "state": ["CA", "CA", "NY", "NY"],
+            "target": ["low", "low", "high", "high"],
+        }
+    )
+
+    dataset = BenchmarkDataset.from_dataframe(
+        df,
+        input_col=["age", "income", "state"],
+        label_col="target",
+        modality="tabular",
+    )
+
+    assert list(dataset.X.columns) == ["age", "income", "state"]
+    assert dataset.metadata["input_columns"] == ["age", "income", "state"]
+
+
+def test_from_image_paths_sets_image_modality():
+    dataset = BenchmarkDataset.from_image_paths(
+        ["a.png", "b.png", "c.png", "d.png"],
+        ["cat", "cat", "dog", "dog"],
+    )
+
+    assert dataset.modality == "image"
+    assert dataset.metadata["source"] == "image_paths"

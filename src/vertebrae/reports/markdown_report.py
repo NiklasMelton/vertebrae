@@ -52,9 +52,31 @@ def render_markdown_report(result: Any) -> str:
                 f"### {item.name}",
                 "",
                 f"- Extractor type: {item.extractor_type}",
+                f"- Extractor family: {_extractor_family(item.extractor_type)}",
+                f"- Modality: {item.embedding_metadata.get('modality', '')}",
+                f"- Embedding dimension: {item.embedding_metadata.get('embedding_dim', '')}",
                 f"- Overlap macro: {item.overlap.macro_score:.4f}",
                 f"- Weakest class: {item.weakest_class or ''}",
                 f"- Recommendation: {item.recommendation}",
+                "",
+                "#### Recipe summary",
+                "",
+            ]
+        )
+        recipe = item.embedding_metadata.get("recipe") or item.embedding_metadata.get(
+            "extractor_recipe",
+            {},
+        )
+        if recipe:
+            for key, value in recipe.items():
+                if key in {"params"} and isinstance(value, dict):
+                    lines.append(f"- {key}: {len(value)} captured parameters")
+                else:
+                    lines.append(f"- {key}: {value}")
+        else:
+            lines.append("No extractor recipe was captured.")
+        lines.extend(
+            [
                 "",
                 "#### Per-class scores",
                 "",
@@ -140,3 +162,14 @@ def _format_float(value: Any) -> str:
     if isinstance(value, (float, int)):
         return f"{float(value):.4f}"
     return ""
+
+
+def _extractor_family(extractor_type: str) -> str:
+    families = {
+        "frozen_pretrained": "frozen pretrained backbone",
+        "unsupervised_fitted": "fitted sklearn pipeline",
+        "supervised_fitted": "fitted sklearn pipeline",
+        "custom_callable": "custom callable extractor",
+        "precomputed": "precomputed embeddings",
+    }
+    return families.get(extractor_type, extractor_type)

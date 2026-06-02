@@ -1,7 +1,7 @@
 """Dataset abstraction for benchmark inputs."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
@@ -16,7 +16,7 @@ class BenchmarkDataset:
     X: Any
     y: np.ndarray
     modality: str
-    input_col: Optional[str] = None
+    input_col: Optional[Union[str, list[str]]] = None
     label_col: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -36,23 +36,48 @@ class BenchmarkDataset:
     def from_dataframe(
         cls,
         df: Any,
-        input_col: str,
+        input_col: Union[str, list[str]],
         label_col: str,
         modality: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> "BenchmarkDataset":
-        if input_col not in df.columns:
-            raise ValueError(f"input_col '{input_col}' is not present in the dataframe.")
+        input_cols = [input_col] if isinstance(input_col, str) else list(input_col)
+        missing = [column for column in input_cols if column not in df.columns]
+        if missing:
+            raise ValueError(f"input_col contains columns not present in the dataframe: {missing}.")
         if label_col not in df.columns:
             raise ValueError(f"label_col '{label_col}' is not present in the dataframe.")
-        merged_metadata = {"source": "dataframe", "columns": list(df.columns)}
+        merged_metadata = {
+            "source": "dataframe",
+            "columns": list(df.columns),
+            "input_columns": input_cols,
+        }
         merged_metadata.update(metadata or {})
+        X = df[input_col].to_numpy() if isinstance(input_col, str) else df[input_cols].copy()
         dataset = cls(
-            X=df[input_col].to_numpy(),
+            X=X,
             y=df[label_col].to_numpy(),
             modality=modality,
             input_col=input_col,
             label_col=label_col,
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
+    def from_image_paths(
+        cls,
+        paths: Any,
+        labels: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        merged_metadata = {"source": "image_paths"}
+        merged_metadata.update(metadata or {})
+        dataset = cls(
+            X=np.asarray(paths, dtype=object),
+            y=np.asarray(labels),
+            modality="image",
             metadata=merged_metadata,
         )
         dataset.validate()

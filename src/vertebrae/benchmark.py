@@ -141,11 +141,16 @@ class Benchmark:
                 f"for {len(self.dataset.y)} labels."
             )
         metadata = {
+            "extractor_name": extractor.name,
+            "extractor_type": getattr(extractor, "extractor_type", "unknown"),
+            "modality": getattr(extractor, "modality", self.dataset.modality),
             "cache_hit": False,
             "cache_key": cache_key,
             "shape": list(embeddings.shape),
+            "n_samples": int(embeddings.shape[0]),
             "embedding_dim": int(embeddings.shape[1]),
             "dtype": str(embeddings.dtype),
+            "recipe": recipe,
             "extractor_recipe": recipe,
         }
         if self.cache_config.enabled:

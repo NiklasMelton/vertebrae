@@ -45,6 +45,15 @@ def recommendations_for_benchmark(extractor_results: List[Any]) -> List[str]:
         messages.append(
             "One or more extractors has a wide stability interval; rerun or inspect seeds."
         )
+    extractor_types = {result.extractor_type for result in ranked}
+    if "frozen_pretrained" in extractor_types and (
+        "unsupervised_fitted" in extractor_types or "supervised_fitted" in extractor_types
+    ):
+        messages.append(
+            "This comparison includes both frozen pretrained extractors and fitted "
+            "pipelines. Scores are comparable as representation diagnostics, but fitted "
+            "pipelines may have used the benchmark data during feature construction."
+        )
     return messages
 
 
