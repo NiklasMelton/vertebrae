@@ -1,0 +1,14 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.matplotlib_cache/
+.vertebrae_cache/
+examples/.matplotlib_cache/
+examples/.vertebrae_cache/
+examples/output/
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.egg-info/
