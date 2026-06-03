@@ -6,6 +6,7 @@ from vertebrae.benchmark import Benchmark
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
+    MemoryConfig,
     OverlapScoringConfig,
     ProbeConfig,
     StabilityConfig,
@@ -24,6 +25,7 @@ __all__ = [
     "EmbeddingJob",
     "Evaluator",
     "ExtractorResult",
+    "MemoryConfig",
     "OverlapScoringConfig",
     "ProbeConfig",
     "SampleBatch",

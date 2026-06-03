@@ -13,10 +13,12 @@ from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
+    MemoryConfig,
     OverlapScoringConfig,
     ProbeConfig,
     StabilityConfig,
 )
+from vertebrae.execution.jobs import SampleBatch
 from vertebrae.execution.local import LocalBackend
 from vertebrae.reports.recommendations import (
     recommendation_for_extractor,
@@ -26,6 +28,14 @@ from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.overlap import OverlapIndexScorer
 from vertebrae.scoring.probes import run_probes
 from vertebrae.scoring.stability import run_stability_analysis
+from vertebrae.utils.memory import (
+    EmbeddingMemoryEstimate,
+    assert_within_memory,
+    estimate_embedding_from_probe,
+    estimate_matrix_resident_bytes,
+    estimate_metadata_dense_scoring_bytes,
+    estimate_metadata_resident_bytes,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
@@ -52,6 +62,7 @@ class Benchmark:
         probe_config: Optional[ProbeConfig] = None,
         cache_config: Optional[CacheConfig] = None,
         embedding_config: Optional[EmbeddingConfig] = None,
+        memory_config: Optional[MemoryConfig] = None,
         execution: Optional[Any] = None,
     ) -> None:
         self.dataset = dataset
@@ -61,6 +72,7 @@ class Benchmark:
         self.probe_config = probe_config or ProbeConfig()
         self.cache_config = cache_config or CacheConfig()
         self.embedding_config = embedding_config or EmbeddingConfig()
+        self.memory_config = memory_config or MemoryConfig()
         self.execution = execution or LocalBackend()
 
     def add_extractor(self, extractor: Any) -> "Benchmark":
@@ -104,6 +116,7 @@ class Benchmark:
                 "probe_config": asdict(self.probe_config),
                 "cache_config": asdict(self.cache_config),
                 "embedding_config": asdict(self.embedding_config),
+                "memory_config": asdict(self.memory_config),
             },
         )
 
@@ -115,6 +128,7 @@ class Benchmark:
         runtime["embedding_seconds"] = perf_counter() - start
 
         score_start = perf_counter()
+        self._admit_scoring_memory(embedding_metadata)
         overlap = OverlapIndexScorer(self.scoring_config).score(embeddings, self.dataset.y)
         runtime["scoring_seconds"] = perf_counter() - score_start
         warnings.extend(overlap.warnings)
@@ -164,8 +178,9 @@ class Benchmark:
             and not self.cache_config.force_recompute
             and store.exists(cache_key)
         ):
-            embeddings = store.get_array(cache_key)
             metadata = store.get_json(cache_key)
+            self._admit_cached_embedding_load(metadata)
+            embeddings = store.get_array(cache_key)
             metadata["cache_hit"] = True
             return embeddings, metadata
 
@@ -181,6 +196,7 @@ class Benchmark:
             f"Extractor '{extractor.name}' embeddings",
             allow_sparse=True,
         )
+        self._admit_resident_embedding(embeddings)
         if embeddings.shape[0] != len(self.dataset.y):
             raise ValueError(
                 f"Extractor '{extractor.name}' returned {embeddings.shape[0]} embeddings "
@@ -215,41 +231,75 @@ class Benchmark:
     ) -> Tuple[Any, dict]:
         extractor.fit(self.dataset.X, self.dataset.y)
         n_samples = len(self.dataset.y)
+        batch_iterator = iter(
+            self.dataset.iter_batches(
+                batch_size=self.embedding_config.batch_size,
+                shard=self.embedding_config.shard,
+            )
+        )
+        try:
+            first_batch = next(batch_iterator)
+        except StopIteration as exc:
+            raise ValueError("At least one sample is required for embedding.") from exc
+        first_embeddings = self._embed_batch(extractor, first_batch)
+        memory_estimate = estimate_embedding_from_probe(
+            first_embeddings,
+            n_samples=n_samples,
+            batch_size=self.embedding_config.batch_size,
+            memory_config=self.memory_config,
+        )
+        self._admit_embedding_plan(memory_estimate)
+        batch_pairs = _prepend_batch(
+            first_batch.indices,
+            first_embeddings,
+            self._embedding_batches_from(extractor, batch_iterator),
+        )
         if self.cache_config.enabled:
             store.put_array_batches(
                 cache_key,
-                self._embedding_batches(extractor),
+                batch_pairs,
                 n_samples=n_samples,
                 require_complete=True,
             )
             embeddings = store.get_array(cache_key)
         else:
+            if memory_estimate.strategy == "stream_to_disk":
+                raise ValueError(
+                    "Embedding artifact is estimated to exceed the memory budget, but "
+                    "CacheConfig.enabled=False prevents streaming it to disk. Enable "
+                    "the cache or increase MemoryConfig.max_memory_bytes."
+                )
             embeddings = _combine_embedding_batches(
-                self._embedding_batches(extractor),
+                batch_pairs,
                 n_samples=n_samples,
             )
         metadata = self._embedding_metadata(extractor, embeddings, cache_key, recipe)
         metadata["streamed"] = True
         metadata["stream_batch_size"] = self.embedding_config.batch_size
+        metadata["memory_estimate"] = memory_estimate.to_dict()
         return embeddings, metadata
 
-    def _embedding_batches(self, extractor: Any) -> Iterator[Tuple[np.ndarray, Any]]:
-        for batch in self.dataset.iter_batches(
-            batch_size=self.embedding_config.batch_size,
-            shard=self.embedding_config.shard,
-        ):
-            embeddings = extractor.transform(batch.X)
-            embeddings = ensure_numeric_matrix(
-                embeddings,
-                f"Extractor '{extractor.name}' batch embeddings",
-                allow_sparse=True,
+    def _embedding_batches_from(
+        self,
+        extractor: Any,
+        batches: Iterator[SampleBatch],
+    ) -> Iterator[Tuple[np.ndarray, Any]]:
+        for batch in batches:
+            yield batch.indices, self._embed_batch(extractor, batch)
+
+    def _embed_batch(self, extractor: Any, batch: SampleBatch) -> Any:
+        embeddings = extractor.transform(batch.X)
+        embeddings = ensure_numeric_matrix(
+            embeddings,
+            f"Extractor '{extractor.name}' batch embeddings",
+            allow_sparse=True,
+        )
+        if embeddings.shape[0] != len(batch.indices):
+            raise ValueError(
+                f"Extractor '{extractor.name}' returned {embeddings.shape[0]} embeddings "
+                f"for a batch with {len(batch.indices)} samples."
             )
-            if embeddings.shape[0] != len(batch.indices):
-                raise ValueError(
-                    f"Extractor '{extractor.name}' returned {embeddings.shape[0]} embeddings "
-                    f"for a batch with {len(batch.indices)} samples."
-                )
-            yield batch.indices, embeddings
+        return embeddings
 
     def _embedding_metadata(
         self,
@@ -273,9 +323,59 @@ class Benchmark:
             "nnz": int(embeddings.nnz) if sparse_embeddings else None,
             "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
             "streamed": False,
+            "memory_estimate": None,
             "recipe": recipe,
             "extractor_recipe": recipe,
         }
+
+    def _admit_embedding_plan(self, estimate: EmbeddingMemoryEstimate) -> None:
+        batch_required = (
+            estimate.batch_embedding_bytes
+            + self.memory_config.model_memory_bytes
+            + self.memory_config.raw_batch_memory_bytes
+        )
+        assert_within_memory(
+            batch_required,
+            self.memory_config,
+            purpose="Embedding batch",
+        )
+        if estimate.strategy == "in_memory":
+            assert_within_memory(
+                estimate.resident_bytes,
+                self.memory_config,
+                purpose="Resident embedding artifact",
+            )
+        assert_within_memory(
+            estimate.dense_scoring_bytes,
+            self.memory_config,
+            purpose="Dense scoring input",
+        )
+
+    def _admit_resident_embedding(self, embeddings: Any) -> None:
+        required = estimate_matrix_resident_bytes(embeddings)
+        assert_within_memory(
+            required,
+            self.memory_config,
+            purpose="Resident embedding artifact",
+        )
+
+    def _admit_cached_embedding_load(self, metadata: dict) -> None:
+        required = estimate_metadata_resident_bytes(metadata)
+        if required is not None:
+            assert_within_memory(
+                required,
+                self.memory_config,
+                purpose="Cached embedding artifact load",
+            )
+
+    def _admit_scoring_memory(self, metadata: dict) -> None:
+        required = estimate_metadata_dense_scoring_bytes(metadata)
+        if required is not None:
+            assert_within_memory(
+                required,
+                self.memory_config,
+                purpose="Dense scoring input",
+            )
 
 
 def _weakest_class(per_class_scores: dict) -> Any:
@@ -337,3 +437,12 @@ def _check_batch_indices(indices: np.ndarray, n_rows: int, written: np.ndarray) 
         duplicates = indices[written[indices]]
         raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
     written[indices] = True
+
+
+def _prepend_batch(
+    indices: np.ndarray,
+    embeddings: Any,
+    remaining: Iterator[Tuple[np.ndarray, Any]],
+) -> Iterator[Tuple[np.ndarray, Any]]:
+    yield indices, embeddings
+    yield from remaining

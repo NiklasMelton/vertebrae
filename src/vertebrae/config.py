@@ -143,3 +143,45 @@ class EmbeddingConfig:
     def __post_init__(self) -> None:
         if self.batch_size < 1:
             raise ValueError("EmbeddingConfig.batch_size must be >= 1.")
+
+
+@dataclass
+class MemoryConfig:
+    """Memory budget and admission-control settings.
+
+    Attributes:
+        max_memory_bytes: Explicit process memory budget. When `None`, the budget
+            is derived from current available memory using `psutil`.
+        reserve_system_bytes: Memory to leave available for the OS and other
+            processes. When `None`, a conservative reserve is selected.
+        max_fraction: Maximum fraction of currently available memory to use.
+        allow_disk_spill: Whether large embedding artifacts may be streamed to disk.
+        fail_fast: Whether to raise before expensive work when estimates exceed
+            the configured budget.
+        probe_batch_size: Number of samples used to infer unknown embedding shape.
+        model_memory_bytes: Optional model memory hint included in admission checks.
+        raw_batch_memory_bytes: Optional raw batch memory hint included in checks.
+    """
+
+    max_memory_bytes: Optional[int] = None
+    reserve_system_bytes: Optional[int] = None
+    max_fraction: float = 0.75
+    allow_disk_spill: bool = True
+    fail_fast: bool = True
+    probe_batch_size: int = 4
+    model_memory_bytes: int = 0
+    raw_batch_memory_bytes: int = 0
+
+    def __post_init__(self) -> None:
+        if self.max_memory_bytes is not None and self.max_memory_bytes < 1:
+            raise ValueError("MemoryConfig.max_memory_bytes must be >= 1.")
+        if self.reserve_system_bytes is not None and self.reserve_system_bytes < 0:
+            raise ValueError("MemoryConfig.reserve_system_bytes must be >= 0.")
+        if not 0.0 < self.max_fraction <= 1.0:
+            raise ValueError("MemoryConfig.max_fraction must be in (0, 1].")
+        if self.probe_batch_size < 1:
+            raise ValueError("MemoryConfig.probe_batch_size must be >= 1.")
+        if self.model_memory_bytes < 0:
+            raise ValueError("MemoryConfig.model_memory_bytes must be >= 0.")
+        if self.raw_batch_memory_bytes < 0:
+            raise ValueError("MemoryConfig.raw_batch_memory_bytes must be >= 0.")

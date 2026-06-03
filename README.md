@@ -85,6 +85,23 @@ Future distributed embedding jobs can use `ShardSpec` to split sample indices
 deterministically. Shards use index modulo partitioning, so workers receive
 non-overlapping samples and do not duplicate embedding work.
 
+`MemoryConfig` controls fail-fast memory admission. By default, `vertebrae` uses
+`psutil` to derive a conservative budget from currently available system memory. When
+an embedding dimension is not known ahead of time, streaming-safe extractors run a
+small probe batch, estimate the final embedding and scoring memory footprint, and fail
+before the full job if the plan would exceed the budget:
+
+```python
+from vertebrae import MemoryConfig
+
+result = Evaluator(
+    dataset=dataset,
+    extractor=extractor,
+    embedding_config=EmbeddingConfig(batch_size=64),
+    memory_config=MemoryConfig(max_memory_bytes=24_000_000_000),
+).run()
+```
+
 ## Scikit-learn text pipeline
 
 ```python
