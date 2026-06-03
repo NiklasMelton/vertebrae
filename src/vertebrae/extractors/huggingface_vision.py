@@ -46,6 +46,7 @@ class HFVisionExtractor:
         self.model_kwargs = model_kwargs or {}
         self.modality = "image"
         self.extractor_type = "frozen_pretrained"
+        self.streaming_safe = True
         self._processor: Any = None
         self._model: Any = None
         self._torch: Any = None
@@ -79,12 +80,11 @@ class HFVisionExtractor:
         """
 
         processor, model, torch, image_module = self._load_model()
-        images = [_coerce_image(item, image_module) for item in _as_sequence(X)]
         outputs: List[np.ndarray] = []
         model.eval()
         with torch.no_grad():
-            for start in range(0, len(images), self.batch_size):
-                batch = images[start : start + self.batch_size]
+            for items in _iter_chunks(_as_iterable(X), self.batch_size):
+                batch = [_coerce_image(item, image_module) for item in items]
                 encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
                 model_output = model(**encoded)
@@ -124,6 +124,7 @@ class HFVisionExtractor:
             "trust_remote_code": self.trust_remote_code,
             "processor_kwargs": self.processor_kwargs,
             "model_kwargs": self.model_kwargs,
+            "streaming_safe": self.streaming_safe,
         }
 
     def _load_model(self) -> Any:
@@ -178,13 +179,24 @@ class HFVisionExtractor:
         return hidden.mean(dim=1)
 
 
-def _as_sequence(value: Any) -> list[Any]:
+def _as_iterable(value: Any) -> Any:
     if isinstance(value, (str, Path)):
-        return [value]
+        return iter([value])
     try:
-        return list(value)
+        return iter(value)
     except TypeError as exc:
         raise ValueError("HFVisionExtractor expects images, image arrays, or image paths.") from exc
+
+
+def _iter_chunks(items: Any, batch_size: int) -> Any:
+    batch = []
+    for item in items:
+        batch.append(item)
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
 def _coerce_image(value: Any, image_module: Any) -> Any:

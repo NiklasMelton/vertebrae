@@ -60,6 +60,31 @@ Sparse embeddings are cached as `.npz` files and densified only at the
 MiniBatchKMeans-backed OverlapIndex scoring boundary, subject to
 `OverlapScoringConfig.max_dense_bytes`.
 
+## Ephemeral large data, persistent embeddings
+
+For large inputs such as images, streaming-safe extractors materialize embeddings
+batch-by-batch. The original images are loaded only for the current embedding batch,
+while the smaller embedding artifact is written to the local cache:
+
+```python
+from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator
+from vertebrae.config import CacheConfig
+from vertebrae.extractors import HFVisionExtractor
+
+dataset = BenchmarkDataset.from_image_paths(paths, labels)
+
+result = Evaluator(
+    dataset=dataset,
+    extractor=HFVisionExtractor(name="vit", model_id="google/vit-base-patch16-224"),
+    embedding_config=EmbeddingConfig(batch_size=32),
+    cache_config=CacheConfig(cache_dir=".vertebrae_cache"),
+).run()
+```
+
+Future distributed embedding jobs can use `ShardSpec` to split sample indices
+deterministically. Shards use index modulo partitioning, so workers receive
+non-overlapping samples and do not duplicate embedding work.
+
 ## Scikit-learn text pipeline
 
 ```python

@@ -42,6 +42,7 @@ class SentenceTransformerExtractor:
         self.encode_kwargs = encode_kwargs or {}
         self.modality = "text"
         self.extractor_type = "frozen_pretrained"
+        self.streaming_safe = True
         self._model: Any = None
 
     def fit(self, X: Any, y: Any = None) -> "SentenceTransformerExtractor":
@@ -117,6 +118,7 @@ class SentenceTransformerExtractor:
             "show_progress_bar": self.show_progress_bar,
             "model_kwargs": self.model_kwargs,
             "encode_kwargs": self.encode_kwargs,
+            "streaming_safe": self.streaming_safe,
         }
 
     def _load_model(self) -> Any:

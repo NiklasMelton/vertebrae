@@ -48,6 +48,7 @@ class HFTextExtractor:
         self.model_kwargs = model_kwargs or {}
         self.modality = "text"
         self.extractor_type = "frozen_pretrained"
+        self.streaming_safe = True
         self._tokenizer: Any = None
         self._model: Any = None
         self._torch: Any = None
@@ -133,6 +134,7 @@ class HFTextExtractor:
             "trust_remote_code": self.trust_remote_code,
             "tokenizer_kwargs": self.tokenizer_kwargs,
             "model_kwargs": self.model_kwargs,
+            "streaming_safe": self.streaming_safe,
         }
 
     def _load_model(self) -> Any:

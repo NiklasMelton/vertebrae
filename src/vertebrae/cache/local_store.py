@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Tuple
 
 import numpy as np
 
@@ -54,6 +54,53 @@ class LocalArtifactStore:
         target = path / "embeddings.npy"
         np.save(target, np.asarray(arr))
         return str(target)
+
+    def put_array_batches(
+        self,
+        key: str,
+        batches: Iterable[Tuple[np.ndarray, Any]],
+        n_samples: int,
+        require_complete: bool = True,
+    ) -> str:
+        """Store embeddings from deterministic batches.
+
+        Args:
+            key: Artifact key.
+            batches: Iterable of `(indices, embeddings)` batch pairs.
+            n_samples: Total number of rows in the full embedding artifact.
+            require_complete: Whether every row must be written exactly once.
+
+        Returns:
+            Filesystem path to the saved artifact.
+
+        Raises:
+            ValueError: If batches contain duplicate indices, invalid shapes, or
+                incomplete coverage when `require_complete` is true.
+        """
+
+        path = self._path(key)
+        path.mkdir(parents=True, exist_ok=True)
+        iterator = iter(batches)
+        try:
+            first_indices, first_batch = next(iterator)
+        except StopIteration as exc:
+            raise ValueError("At least one embedding batch is required.") from exc
+
+        if is_sparse_matrix(first_batch):
+            return self._put_sparse_batches(
+                path,
+                [(first_indices, first_batch), *list(iterator)],
+                n_samples=n_samples,
+                require_complete=require_complete,
+            )
+        return self._put_dense_batches(
+            path,
+            first_indices=first_indices,
+            first_batch=first_batch,
+            remaining=iterator,
+            n_samples=n_samples,
+            require_complete=require_complete,
+        )
 
     def get_array(self, key: str) -> Any:
         """Load a dense or sparse embedding matrix.
@@ -107,3 +154,88 @@ class LocalArtifactStore:
     def _path(self, key: str) -> Path:
         clean_key = key.strip("/").replace("..", "__")
         return self.root / clean_key
+
+    def _put_dense_batches(
+        self,
+        path: Path,
+        first_indices: np.ndarray,
+        first_batch: Any,
+        remaining: Iterable[Tuple[np.ndarray, Any]],
+        n_samples: int,
+        require_complete: bool,
+    ) -> str:
+        first = np.asarray(first_batch)
+        if first.ndim != 2:
+            raise ValueError(f"Embedding batches must be 2D; got shape {first.shape}.")
+        target = path / "embeddings.npy"
+        written = np.zeros(n_samples, dtype=bool)
+        mmap = np.lib.format.open_memmap(
+            target,
+            mode="w+",
+            dtype=first.dtype,
+            shape=(n_samples, first.shape[1]),
+        )
+        self._write_dense_batch(mmap, written, first_indices, first)
+        for indices, batch in remaining:
+            if is_sparse_matrix(batch):
+                raise ValueError("Cannot mix dense and sparse embedding batches.")
+            arr = np.asarray(batch)
+            self._write_dense_batch(mmap, written, indices, arr)
+        mmap.flush()
+        if require_complete and not bool(np.all(written)):
+            missing = np.flatnonzero(~written)
+            raise ValueError(
+                f"Embedding batches did not cover all samples; missing {missing[:10]}."
+            )
+        return str(target)
+
+    def _write_dense_batch(
+        self,
+        mmap: np.ndarray,
+        written: np.ndarray,
+        indices: np.ndarray,
+        batch: np.ndarray,
+    ) -> None:
+        indices = np.asarray(indices, dtype=int)
+        if batch.ndim != 2:
+            raise ValueError(f"Embedding batches must be 2D; got shape {batch.shape}.")
+        if len(indices) != batch.shape[0]:
+            raise ValueError("Batch index count must match embedding row count.")
+        if np.any(written[indices]):
+            duplicates = indices[written[indices]]
+            raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
+        mmap[indices] = batch
+        written[indices] = True
+
+    def _put_sparse_batches(
+        self,
+        path: Path,
+        batches: list[Tuple[np.ndarray, Any]],
+        n_samples: int,
+        require_complete: bool,
+    ) -> str:
+        from scipy import sparse
+
+        rows = []
+        written = np.zeros(n_samples, dtype=bool)
+        for indices, batch in batches:
+            if not is_sparse_matrix(batch):
+                raise ValueError("Cannot mix sparse and dense embedding batches.")
+            indices = np.asarray(indices, dtype=int)
+            if len(indices) != batch.shape[0]:
+                raise ValueError("Batch index count must match embedding row count.")
+            if np.any(written[indices]):
+                duplicates = indices[written[indices]]
+                raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
+            rows.append((indices, batch))
+            written[indices] = True
+        if require_complete and not bool(np.all(written)):
+            missing = np.flatnonzero(~written)
+            raise ValueError(
+                f"Embedding batches did not cover all samples; missing {missing[:10]}."
+            )
+        rows.sort(key=lambda item: int(item[0][0]) if len(item[0]) else -1)
+        matrix = sparse.vstack([batch for _indices, batch in rows], format="csr")
+        target = path / "embeddings.npz"
+        sparse.save_npz(target, matrix)
+        return str(target)

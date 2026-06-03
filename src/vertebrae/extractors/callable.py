@@ -18,6 +18,8 @@ class CallableExtractor:
         extractor_type: Extractor family metadata.
         recipe_data: Extra serializable data to include in `recipe()`.
         allow_sparse: Whether sparse transform outputs are allowed.
+        streaming_safe: Whether independent batches can be transformed without
+            access to the full dataset.
     """
 
     def __init__(
@@ -29,6 +31,7 @@ class CallableExtractor:
         extractor_type: str = "custom_callable",
         recipe_data: Optional[Dict[str, Any]] = None,
         allow_sparse: bool = True,
+        streaming_safe: bool = False,
     ) -> None:
         self.name = name
         self.transform_fn = transform_fn
@@ -37,6 +40,7 @@ class CallableExtractor:
         self.extractor_type = extractor_type
         self.recipe_data = recipe_data or {}
         self.allow_sparse = allow_sparse
+        self.streaming_safe = streaming_safe
 
     def fit(self, X: Any, y: Any = None) -> "CallableExtractor":
         """Fit the callable extractor when a fit function is supplied.
@@ -98,6 +102,7 @@ class CallableExtractor:
             "fit_fn": _callable_name(self.fit_fn) if self.fit_fn is not None else None,
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
+            "streaming_safe": self.streaming_safe,
         }
 
 

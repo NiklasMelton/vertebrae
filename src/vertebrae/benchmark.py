@@ -3,14 +3,20 @@
 from dataclasses import asdict
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any, Iterable, List, Optional
+from typing import Any, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 
 from vertebrae import __version__
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import (
+    CacheConfig,
+    EmbeddingConfig,
+    OverlapScoringConfig,
+    ProbeConfig,
+    StabilityConfig,
+)
 from vertebrae.execution.local import LocalBackend
 from vertebrae.reports.recommendations import (
     recommendation_for_extractor,
@@ -33,6 +39,7 @@ class Benchmark:
         stability_config: Stability-analysis configuration.
         probe_config: Probe-classifier configuration.
         cache_config: Embedding cache configuration.
+        embedding_config: Embedding batching and streaming configuration.
         execution: Local execution backend.
     """
 
@@ -44,6 +51,7 @@ class Benchmark:
         stability_config: Optional[StabilityConfig] = None,
         probe_config: Optional[ProbeConfig] = None,
         cache_config: Optional[CacheConfig] = None,
+        embedding_config: Optional[EmbeddingConfig] = None,
         execution: Optional[Any] = None,
     ) -> None:
         self.dataset = dataset
@@ -52,6 +60,7 @@ class Benchmark:
         self.stability_config = stability_config or StabilityConfig()
         self.probe_config = probe_config or ProbeConfig()
         self.cache_config = cache_config or CacheConfig()
+        self.embedding_config = embedding_config or EmbeddingConfig()
         self.execution = execution or LocalBackend()
 
     def add_extractor(self, extractor: Any) -> "Benchmark":
@@ -94,6 +103,7 @@ class Benchmark:
                 "stability_config": asdict(self.stability_config),
                 "probe_config": asdict(self.probe_config),
                 "cache_config": asdict(self.cache_config),
+                "embedding_config": asdict(self.embedding_config),
             },
         )
 
@@ -159,6 +169,12 @@ class Benchmark:
             metadata["cache_hit"] = True
             return embeddings, metadata
 
+        if self._should_stream_embeddings(extractor):
+            embeddings, metadata = self._stream_embeddings(extractor, store, cache_key, recipe)
+            if self.cache_config.enabled:
+                store.put_json(cache_key, metadata)
+            return embeddings, metadata
+
         embeddings = extractor.fit_transform(self.dataset.X, self.dataset.y)
         embeddings = ensure_numeric_matrix(
             embeddings,
@@ -170,8 +186,80 @@ class Benchmark:
                 f"Extractor '{extractor.name}' returned {embeddings.shape[0]} embeddings "
                 f"for {len(self.dataset.y)} labels."
             )
+        metadata = self._embedding_metadata(extractor, embeddings, cache_key, recipe)
+        if self.cache_config.enabled:
+            store.put_array(cache_key, embeddings)
+            store.put_json(cache_key, metadata)
+        return embeddings, metadata
+
+    def _should_stream_embeddings(self, extractor: Any) -> bool:
+        if not self.embedding_config.streaming_enabled:
+            return False
+        shard = self.embedding_config.shard
+        if shard is not None and not shard.is_complete:
+            raise ValueError(
+                "Benchmark.run requires a complete embedding artifact for scoring. "
+                "Use BenchmarkDataset.iter_batches(..., shard=...) or a future embedding "
+                "job runner to materialize distributed shards without duplicate samples."
+            )
+        return bool(getattr(extractor, "streaming_safe", False)) or bool(
+            getattr(extractor, "already_fitted", False)
+        )
+
+    def _stream_embeddings(
+        self,
+        extractor: Any,
+        store: LocalArtifactStore,
+        cache_key: str,
+        recipe: dict,
+    ) -> Tuple[Any, dict]:
+        extractor.fit(self.dataset.X, self.dataset.y)
+        n_samples = len(self.dataset.y)
+        if self.cache_config.enabled:
+            store.put_array_batches(
+                cache_key,
+                self._embedding_batches(extractor),
+                n_samples=n_samples,
+                require_complete=True,
+            )
+            embeddings = store.get_array(cache_key)
+        else:
+            embeddings = _combine_embedding_batches(
+                self._embedding_batches(extractor),
+                n_samples=n_samples,
+            )
+        metadata = self._embedding_metadata(extractor, embeddings, cache_key, recipe)
+        metadata["streamed"] = True
+        metadata["stream_batch_size"] = self.embedding_config.batch_size
+        return embeddings, metadata
+
+    def _embedding_batches(self, extractor: Any) -> Iterator[Tuple[np.ndarray, Any]]:
+        for batch in self.dataset.iter_batches(
+            batch_size=self.embedding_config.batch_size,
+            shard=self.embedding_config.shard,
+        ):
+            embeddings = extractor.transform(batch.X)
+            embeddings = ensure_numeric_matrix(
+                embeddings,
+                f"Extractor '{extractor.name}' batch embeddings",
+                allow_sparse=True,
+            )
+            if embeddings.shape[0] != len(batch.indices):
+                raise ValueError(
+                    f"Extractor '{extractor.name}' returned {embeddings.shape[0]} embeddings "
+                    f"for a batch with {len(batch.indices)} samples."
+                )
+            yield batch.indices, embeddings
+
+    def _embedding_metadata(
+        self,
+        extractor: Any,
+        embeddings: Any,
+        cache_key: str,
+        recipe: dict,
+    ) -> dict:
         sparse_embeddings = is_sparse_matrix(embeddings)
-        metadata = {
+        return {
             "extractor_name": extractor.name,
             "extractor_type": getattr(extractor, "extractor_type", "unknown"),
             "modality": getattr(extractor, "modality", self.dataset.modality),
@@ -184,13 +272,10 @@ class Benchmark:
             "sparse": sparse_embeddings,
             "nnz": int(embeddings.nnz) if sparse_embeddings else None,
             "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
+            "streamed": False,
             "recipe": recipe,
             "extractor_recipe": recipe,
         }
-        if self.cache_config.enabled:
-            store.put_array(cache_key, embeddings)
-            store.put_json(cache_key, metadata)
-        return embeddings, metadata
 
 
 def _weakest_class(per_class_scores: dict) -> Any:
@@ -203,3 +288,52 @@ def _weakest_class(per_class_scores: dict) -> Any:
         return None, None
     label, score = min(numeric_scores.items(), key=lambda item: item[1])
     return label, score
+
+
+def _combine_embedding_batches(
+    batches: Iterable[Tuple[np.ndarray, Any]],
+    n_samples: int,
+) -> Any:
+    collected = list(batches)
+    if not collected:
+        raise ValueError("At least one embedding batch is required.")
+    first = collected[0][1]
+    written = np.zeros(n_samples, dtype=bool)
+    if is_sparse_matrix(first):
+        from scipy import sparse
+
+        rows = []
+        for indices, batch in collected:
+            if not is_sparse_matrix(batch):
+                raise ValueError("Cannot mix sparse and dense embedding batches.")
+            _check_batch_indices(indices, batch.shape[0], written)
+            rows.append(batch)
+        if not bool(np.all(written)):
+            missing = np.flatnonzero(~written)
+            raise ValueError(
+                f"Embedding batches did not cover all samples; missing {missing[:10]}."
+            )
+        return sparse.vstack(rows, format="csr")
+
+    first_arr = np.asarray(first)
+    output = np.empty((n_samples, first_arr.shape[1]), dtype=first_arr.dtype)
+    for indices, batch in collected:
+        if is_sparse_matrix(batch):
+            raise ValueError("Cannot mix sparse and dense embedding batches.")
+        arr = np.asarray(batch)
+        _check_batch_indices(indices, arr.shape[0], written)
+        output[np.asarray(indices, dtype=int)] = arr
+    if not bool(np.all(written)):
+        missing = np.flatnonzero(~written)
+        raise ValueError(f"Embedding batches did not cover all samples; missing {missing[:10]}.")
+    return output
+
+
+def _check_batch_indices(indices: np.ndarray, n_rows: int, written: np.ndarray) -> None:
+    indices = np.asarray(indices, dtype=int)
+    if len(indices) != n_rows:
+        raise ValueError("Batch index count must match embedding row count.")
+    if np.any(written[indices]):
+        duplicates = indices[written[indices]]
+        raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
+    written[indices] = True
