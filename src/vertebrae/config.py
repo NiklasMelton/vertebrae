@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple, Union
 
+from vertebrae.execution.jobs import ShardSpec
+
 
 @dataclass
 class OverlapScoringConfig:
@@ -119,3 +121,25 @@ class CacheConfig:
     cache_dir: str = ".vertebrae_cache"
     force_recompute: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class EmbeddingConfig:
+    """Configuration for embedding generation and materialization.
+
+    Attributes:
+        batch_size: Number of samples to pass to streaming-safe extractors.
+        streaming_enabled: Whether streaming-safe extractors should be embedded
+            batch-by-batch instead of in one full transform call.
+        shard: Optional deterministic shard assignment. Local benchmarking requires
+            a complete shard, but this field is available for future distributed
+            embedding jobs.
+    """
+
+    batch_size: int = 128
+    streaming_enabled: bool = True
+    shard: Optional[ShardSpec] = None
+
+    def __post_init__(self) -> None:
+        if self.batch_size < 1:
+            raise ValueError("EmbeddingConfig.batch_size must be >= 1.")

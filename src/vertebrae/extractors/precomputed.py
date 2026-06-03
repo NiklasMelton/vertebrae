@@ -18,6 +18,7 @@ class PrecomputedExtractor:
         self.name = name
         self.modality = "embeddings"
         self.extractor_type = "precomputed"
+        self.streaming_safe = True
 
     def fit(self, X: Any, y: Any = None) -> "PrecomputedExtractor":
         """No-op fit for precomputed embeddings.
@@ -68,4 +69,5 @@ class PrecomputedExtractor:
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
+            "streaming_safe": self.streaming_safe,
         }

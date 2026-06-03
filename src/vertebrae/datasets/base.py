@@ -1,11 +1,12 @@
 """Dataset abstraction for benchmark inputs."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Iterator, Optional, Union
 
 import numpy as np
 
 from vertebrae.cache.fingerprint import fingerprint_array_like
+from vertebrae.execution.jobs import SampleBatch, ShardSpec
 from vertebrae.utils.labels import class_counts
 from vertebrae.utils.validation import is_sparse_matrix
 
@@ -196,6 +197,32 @@ class BenchmarkDataset:
 
         return class_counts(np.asarray(self.y))
 
+    def iter_batches(
+        self,
+        batch_size: int,
+        shard: Optional[ShardSpec] = None,
+    ) -> Iterator[SampleBatch]:
+        """Yield deterministic sample batches for embedding.
+
+        Args:
+            batch_size: Maximum samples per batch.
+            shard: Optional non-overlapping shard assignment.
+
+        Yields:
+            Sample batches with original dataset indices and sliced inputs.
+
+        Raises:
+            ValueError: If `batch_size` is less than one.
+        """
+
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1.")
+        shard = shard or ShardSpec()
+        indices = shard.indices(len(self.y))
+        for start in range(0, len(indices), batch_size):
+            batch_indices = indices[start : start + batch_size]
+            yield SampleBatch(indices=batch_indices, X=_take_samples(self.X, batch_indices))
+
     def summary(self) -> Dict[str, Any]:
         """Summarize the dataset for result metadata and reports.
 
@@ -247,3 +274,20 @@ def _num_samples(X: Any) -> int:
     if is_sparse_matrix(X):
         return int(X.shape[0])
     return len(X)
+
+
+def _take_samples(X: Any, indices: np.ndarray) -> Any:
+    if is_sparse_matrix(X):
+        return X[indices]
+    if hasattr(X, "iloc"):
+        return X.iloc[indices]
+    if isinstance(X, np.ndarray):
+        return X[indices]
+    if isinstance(X, tuple):
+        return tuple(X[int(index)] for index in indices)
+    if isinstance(X, list):
+        return [X[int(index)] for index in indices]
+    try:
+        return X[indices]
+    except Exception:
+        return [X[int(index)] for index in indices]
