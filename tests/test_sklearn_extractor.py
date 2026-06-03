@@ -92,8 +92,10 @@ def test_sklearn_allow_sparse_errors_clearly():
         allow_sparse=True,
     )
 
-    with pytest.raises(ValueError, match="requires dense numeric embeddings"):
-        extractor.fit_transform(["alpha beta gamma", "alpha beta", "delta epsilon"])
+    embeddings = extractor.fit_transform(["alpha beta gamma", "alpha beta", "delta epsilon"])
+
+    assert embeddings.shape == (3, 5)
+    assert hasattr(embeddings, "tocsr")
 
 
 class AlreadyFittedTransformer:

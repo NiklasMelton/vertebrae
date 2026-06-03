@@ -7,11 +7,21 @@ import numpy as np
 
 from vertebrae.cache.fingerprint import fingerprint_array_like
 from vertebrae.utils.labels import class_counts
+from vertebrae.utils.validation import is_sparse_matrix
 
 
 @dataclass
 class BenchmarkDataset:
-    """A labeled dataset prepared for feature extraction or scoring."""
+    """A labeled dataset prepared for feature extraction or scoring.
+
+    Attributes:
+        X: Input samples, tabular frame, image paths, or embedding matrix.
+        y: One-dimensional label array.
+        modality: Dataset modality such as `"text"`, `"tabular"`, or `"embeddings"`.
+        input_col: Source dataframe input column or columns.
+        label_col: Source dataframe label column.
+        metadata: User and construction metadata.
+    """
 
     X: Any
     y: np.ndarray
@@ -28,6 +38,18 @@ class BenchmarkDataset:
         modality: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> "BenchmarkDataset":
+        """Create a dataset from array-like inputs and labels.
+
+        Args:
+            X: Input samples or feature matrix.
+            y: Class labels.
+            modality: Dataset modality.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated benchmark dataset.
+        """
+
         dataset = cls(X=X, y=np.asarray(y), modality=modality, metadata=metadata or {})
         dataset.validate()
         return dataset
@@ -41,6 +63,22 @@ class BenchmarkDataset:
         modality: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> "BenchmarkDataset":
+        """Create a dataset from a pandas DataFrame.
+
+        Args:
+            df: DataFrame containing inputs and labels.
+            input_col: Input column name or list of tabular feature columns.
+            label_col: Label column name.
+            modality: Dataset modality.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated benchmark dataset.
+
+        Raises:
+            ValueError: If requested columns are missing.
+        """
+
         input_cols = [input_col] if isinstance(input_col, str) else list(input_col)
         missing = [column for column in input_cols if column not in df.columns]
         if missing:
@@ -72,6 +110,17 @@ class BenchmarkDataset:
         labels: Any,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> "BenchmarkDataset":
+        """Create an image dataset from filesystem paths.
+
+        Args:
+            paths: Image file paths.
+            labels: Class labels.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated image dataset.
+        """
+
         merged_metadata = {"source": "image_paths"}
         merged_metadata.update(metadata or {})
         dataset = cls(
@@ -90,10 +139,21 @@ class BenchmarkDataset:
         labels: Any,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> "BenchmarkDataset":
+        """Create a dataset from precomputed dense or sparse embeddings.
+
+        Args:
+            embeddings: Dense array or scipy sparse embedding matrix.
+            labels: Class labels.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated embedding dataset.
+        """
+
         merged_metadata = {"precomputed_embeddings": True}
         merged_metadata.update(metadata or {})
         dataset = cls(
-            X=np.asarray(embeddings),
+            X=embeddings if is_sparse_matrix(embeddings) else np.asarray(embeddings),
             y=np.asarray(labels),
             modality="embeddings",
             metadata=merged_metadata,
@@ -102,11 +162,19 @@ class BenchmarkDataset:
         return dataset
 
     def validate(self) -> None:
+        """Validate dataset shape and labels.
+
+        Raises:
+            ValueError: If sample counts mismatch, labels are missing, too few
+                classes are present, or a class has fewer than two samples.
+        """
+
         if self.y.ndim != 1:
             raise ValueError("Labels must be one-dimensional.")
-        if len(self.X) != len(self.y):
+        n_samples = _num_samples(self.X)
+        if n_samples != len(self.y):
             raise ValueError(
-                f"X and y must have the same length; got {len(self.X)} and {len(self.y)}."
+                f"X and y must have the same length; got {n_samples} and {len(self.y)}."
             )
         if len(self.y) == 0:
             raise ValueError("Dataset must contain at least one sample.")
@@ -120,9 +188,21 @@ class BenchmarkDataset:
             raise ValueError(f"Each class must contain at least 2 samples; found {small}.")
 
     def class_counts(self) -> Dict[Any, int]:
+        """Count samples per class.
+
+        Returns:
+            Mapping from original label values to sample counts.
+        """
+
         return class_counts(np.asarray(self.y))
 
     def summary(self) -> Dict[str, Any]:
+        """Summarize the dataset for result metadata and reports.
+
+        Returns:
+            JSON-compatible dataset summary.
+        """
+
         return {
             "n_samples": int(len(self.y)),
             "n_classes": int(len(self.class_counts())),
@@ -134,6 +214,12 @@ class BenchmarkDataset:
         }
 
     def fingerprint(self) -> str:
+        """Compute a conservative dataset fingerprint for caching.
+
+        Returns:
+            Stable hash string derived from inputs, labels, modality, and metadata.
+        """
+
         return fingerprint_array_like(
             {
                 "X": self.X,
@@ -155,3 +241,9 @@ def _has_missing_labels(y: np.ndarray) -> bool:
         if y.dtype.kind in {"f", "c"}:
             return bool(np.isnan(y).any())
         return any(label is None for label in y)
+
+
+def _num_samples(X: Any) -> int:
+    if is_sparse_matrix(X):
+        return int(X.shape[0])
+    return len(X)

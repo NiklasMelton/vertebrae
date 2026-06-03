@@ -8,7 +8,14 @@ import numpy as np
 
 
 def make_json_safe(value: Any) -> Any:
-    """Convert common scientific Python objects into JSON-compatible values."""
+    """Convert common scientific Python objects into JSON-compatible values.
+
+    Args:
+        value: Value to convert.
+
+    Returns:
+        JSON-compatible representation.
+    """
 
     if is_dataclass(value) and not isinstance(value, type):
         return make_json_safe(asdict(value))  # type: ignore[arg-type]

@@ -8,6 +8,17 @@ def recommendation_for_extractor(
     stability: Optional[Dict[str, Any]],
     weakest_class_score: Optional[float],
 ) -> str:
+    """Compute a recommendation label for one extractor.
+
+    Args:
+        macro_score: Global OverlapIndex score.
+        stability: Optional stability summary.
+        weakest_class_score: Lowest per-class score when available.
+
+    Returns:
+        Recommendation label string.
+    """
+
     width = _stability_width(stability)
     if macro_score >= 0.9 and width <= 0.05:
         recommendation = "strong_candidate"
@@ -26,6 +37,15 @@ def recommendation_for_extractor(
 
 
 def recommendations_for_benchmark(extractor_results: List[Any]) -> List[str]:
+    """Compute practitioner-facing recommendations for a benchmark.
+
+    Args:
+        extractor_results: Evaluated extractor results.
+
+    Returns:
+        Recommendation messages for the report executive summary.
+    """
+
     if not extractor_results:
         return ["No extractors were evaluated."]
     ranked = sorted(extractor_results, key=lambda item: item.overlap.macro_score, reverse=True)

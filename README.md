@@ -1,9 +1,9 @@
 # vertebrae
 
 `vertebrae` benchmarks feature extractors and frozen transfer-learning backbones on
-labeled datasets. It can score precomputed embeddings or generate embeddings from
-local pipelines, callable feature functions, Hugging Face text/vision models, and
-sentence-transformers models.
+labeled datasets. It can score dense or sparse precomputed embeddings, or generate
+embeddings from local pipelines, callable feature functions, Hugging Face text/vision
+models, and sentence-transformers models.
 
 Scoring uses the existing `overlapindex` package. `vertebrae` intentionally exposes
 only MiniBatchKMeans-backed OverlapIndex scoring internally; ART, ARTMAP, Fuzzy ART,
@@ -45,6 +45,20 @@ print(result.to_dataframe())
 result.save_json("result.json")
 result.save_markdown("report.md")
 ```
+
+Sparse scipy matrices are accepted as embedding artifacts:
+
+```python
+from scipy import sparse
+from vertebrae import BenchmarkDataset
+
+Z_sparse = sparse.csr_matrix(Z)
+dataset = BenchmarkDataset.from_embeddings(Z_sparse, labels=y)
+```
+
+Sparse embeddings are cached as `.npz` files and densified only at the
+MiniBatchKMeans-backed OverlapIndex scoring boundary, subject to
+`OverlapScoringConfig.max_dense_bytes`.
 
 ## Scikit-learn text pipeline
 

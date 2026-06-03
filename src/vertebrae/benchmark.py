@@ -20,9 +20,22 @@ from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.overlap import OverlapIndexScorer
 from vertebrae.scoring.probes import run_probes
 from vertebrae.scoring.stability import run_stability_analysis
+from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
 class Benchmark:
+    """Run one or more extractors against a labeled dataset.
+
+    Args:
+        dataset: Dataset object with inputs and labels.
+        extractors: Optional iterable of extractors to evaluate.
+        scoring_config: OverlapIndex scoring configuration.
+        stability_config: Stability-analysis configuration.
+        probe_config: Probe-classifier configuration.
+        cache_config: Embedding cache configuration.
+        execution: Local execution backend.
+    """
+
     def __init__(
         self,
         dataset: Any,
@@ -42,10 +55,28 @@ class Benchmark:
         self.execution = execution or LocalBackend()
 
     def add_extractor(self, extractor: Any) -> "Benchmark":
+        """Add an extractor to this benchmark.
+
+        Args:
+            extractor: Feature extractor implementing the vertebrae protocol.
+
+        Returns:
+            This benchmark instance for fluent chaining.
+        """
+
         self.extractors.append(extractor)
         return self
 
     def run(self) -> BenchmarkResult:
+        """Run feature extraction, scoring, optional probes, and reporting aggregation.
+
+        Returns:
+            Aggregated benchmark result.
+
+        Raises:
+            ValueError: If no extractors are configured or dataset validation fails.
+        """
+
         self.dataset.validate()
         if not self.extractors:
             raise ValueError("At least one extractor must be provided.")
@@ -129,17 +160,17 @@ class Benchmark:
             return embeddings, metadata
 
         embeddings = extractor.fit_transform(self.dataset.X, self.dataset.y)
-        embeddings = np.asarray(embeddings)
-        if embeddings.ndim != 2:
+        embeddings = ensure_numeric_matrix(
+            embeddings,
+            f"Extractor '{extractor.name}' embeddings",
+            allow_sparse=True,
+        )
+        if embeddings.shape[0] != len(self.dataset.y):
             raise ValueError(
-                f"Extractor '{extractor.name}' returned non-2D embeddings "
-                f"with shape {embeddings.shape}."
-            )
-        if len(embeddings) != len(self.dataset.y):
-            raise ValueError(
-                f"Extractor '{extractor.name}' returned {len(embeddings)} embeddings "
+                f"Extractor '{extractor.name}' returned {embeddings.shape[0]} embeddings "
                 f"for {len(self.dataset.y)} labels."
             )
+        sparse_embeddings = is_sparse_matrix(embeddings)
         metadata = {
             "extractor_name": extractor.name,
             "extractor_type": getattr(extractor, "extractor_type", "unknown"),
@@ -150,6 +181,9 @@ class Benchmark:
             "n_samples": int(embeddings.shape[0]),
             "embedding_dim": int(embeddings.shape[1]),
             "dtype": str(embeddings.dtype),
+            "sparse": sparse_embeddings,
+            "nnz": int(embeddings.nnz) if sparse_embeddings else None,
+            "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
             "recipe": recipe,
             "extractor_recipe": recipe,
         }

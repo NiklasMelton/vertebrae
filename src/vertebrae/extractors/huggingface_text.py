@@ -6,6 +6,21 @@ import numpy as np
 
 
 class HFTextExtractor:
+    """Hugging Face text backbone extractor with explicit pooling.
+
+    Args:
+        name: User-facing extractor name.
+        model_id: Hugging Face model identifier or local path.
+        pooling: Pooling mode: `"mean"`, `"cls"`, or `"last_token"`.
+        batch_size: Number of texts encoded per batch.
+        max_length: Tokenizer truncation length.
+        device: Optional device string.
+        revision: Optional model revision.
+        trust_remote_code: Whether to allow remote model code.
+        tokenizer_kwargs: Extra keyword arguments for `AutoTokenizer`.
+        model_kwargs: Extra keyword arguments for `AutoModel`.
+    """
+
     def __init__(
         self,
         name: str,
@@ -38,9 +53,32 @@ class HFTextExtractor:
         self._torch: Any = None
 
     def fit(self, X: Any, y: Any = None) -> "HFTextExtractor":
+        """No-op fit for frozen Hugging Face text models.
+
+        Args:
+            X: Input text samples.
+            y: Optional labels.
+
+        Returns:
+            This extractor.
+        """
+
         return self
 
     def transform(self, X: Any) -> np.ndarray:
+        """Encode text inputs into dense embeddings.
+
+        Args:
+            X: Sequence of strings.
+
+        Returns:
+            Dense float32 embedding matrix.
+
+        Raises:
+            ImportError: If optional Hugging Face dependencies are missing.
+            ValueError: If inputs are invalid.
+        """
+
         tokenizer, model, torch = self._load_model()
         texts = _validate_text_sequence(X, "HFTextExtractor")
         outputs: List[np.ndarray] = []
@@ -63,9 +101,25 @@ class HFTextExtractor:
         return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        """Encode text inputs into dense embeddings.
+
+        Args:
+            X: Sequence of strings.
+            y: Optional labels.
+
+        Returns:
+            Dense float32 embedding matrix.
+        """
+
         return self.transform(X)
 
     def recipe(self) -> Dict[str, Any]:
+        """Return a serializable Hugging Face text recipe.
+
+        Returns:
+            JSON-compatible recipe dictionary.
+        """
+
         return {
             "name": self.name,
             "extractor_type": self.extractor_type,

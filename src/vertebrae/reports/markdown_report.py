@@ -5,12 +5,28 @@ from typing import Any, List
 
 
 def save_markdown_report(result: Any, path: str) -> None:
+    """Save a benchmark result as a Markdown report.
+
+    Args:
+        result: Result object renderable by `render_markdown_report`.
+        path: Destination file path.
+    """
+
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render_markdown_report(result), encoding="utf-8")
 
 
 def render_markdown_report(result: Any) -> str:
+    """Render a benchmark result as Markdown.
+
+    Args:
+        result: Benchmark result object.
+
+    Returns:
+        Markdown report text.
+    """
+
     data = result.to_dict()
     lines: List[str] = ["# vertebrae benchmark report", ""]
     dataset = data["dataset_summary"]

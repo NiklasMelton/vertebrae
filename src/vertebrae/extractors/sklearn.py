@@ -4,10 +4,25 @@ from typing import Any, Dict
 
 import numpy as np
 
-from vertebrae.utils.validation import ensure_dense_numeric_2d
+from vertebrae.utils.validation import (
+    ensure_dense_numeric_2d,
+    ensure_sparse_numeric_2d,
+    estimate_dense_nbytes,
+)
 
 
 class SklearnExtractor:
+    """Wrap a scikit-learn transformer or pipeline as an extractor.
+
+    Args:
+        name: User-facing extractor name.
+        pipeline: Object exposing `fit`, `transform`, or `fit_transform`.
+        already_fitted: Whether to skip fitting and call only `transform`.
+        extractor_type: Extractor family metadata.
+        max_dense_bytes: Maximum allowed sparse-to-dense conversion size.
+        allow_sparse: Whether sparse pipeline outputs should be preserved.
+    """
+
     def __init__(
         self,
         name: str,
@@ -26,6 +41,16 @@ class SklearnExtractor:
         self.modality = "unknown"
 
     def fit(self, X: Any, y: Any = None) -> "SklearnExtractor":
+        """Fit the wrapped scikit-learn object when needed.
+
+        Args:
+            X: Input samples.
+            y: Optional labels.
+
+        Returns:
+            This extractor.
+        """
+
         if not self.already_fitted:
             if not hasattr(self.pipeline, "fit"):
                 raise TypeError(
@@ -36,11 +61,30 @@ class SklearnExtractor:
         return self
 
     def transform(self, X: Any) -> np.ndarray:
+        """Transform inputs with the wrapped scikit-learn object.
+
+        Args:
+            X: Input samples.
+
+        Returns:
+            Dense or sparse numeric embedding matrix.
+        """
+
         if not hasattr(self.pipeline, "transform"):
             raise TypeError("pipeline must expose transform.")
         return self._prepare_output(self.pipeline.transform(X))
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        """Fit the pipeline if needed and transform inputs.
+
+        Args:
+            X: Input samples.
+            y: Optional labels.
+
+        Returns:
+            Dense or sparse numeric embedding matrix.
+        """
+
         if self.already_fitted:
             return self.transform(X)
         if hasattr(self.pipeline, "fit_transform"):
@@ -51,6 +95,12 @@ class SklearnExtractor:
         return self.transform(X)
 
     def recipe(self) -> Dict[str, Any]:
+        """Return a serializable scikit-learn extractor recipe.
+
+        Returns:
+            JSON-compatible recipe dictionary.
+        """
+
         params: Dict[str, Any] = {}
         if hasattr(self.pipeline, "get_params"):
             params = {
@@ -73,16 +123,8 @@ class SklearnExtractor:
     def _prepare_output(self, output: Any) -> np.ndarray:
         if hasattr(output, "toarray"):
             if self.allow_sparse:
-                raise ValueError(
-                    "SklearnExtractor received sparse output with allow_sparse=True, but "
-                    "vertebrae scoring currently requires dense numeric embeddings. Add a "
-                    "dimensionality-reduction step such as TruncatedSVD or set "
-                    "allow_sparse=False to permit safe densification."
-                )
-            dtype = getattr(output, "dtype", np.dtype(float))
-            itemsize = np.dtype(dtype).itemsize
-            rows, cols = output.shape
-            dense_bytes = int(rows) * int(cols) * int(itemsize)
+                return ensure_sparse_numeric_2d(output, f"SklearnExtractor '{self.name}' output")
+            dense_bytes = estimate_dense_nbytes(output)
             if dense_bytes > self.max_dense_bytes:
                 raise ValueError(
                     "Sparse extractor output would require "

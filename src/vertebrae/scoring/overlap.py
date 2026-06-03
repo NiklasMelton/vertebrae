@@ -8,11 +8,29 @@ import numpy as np
 from vertebrae.config import OverlapScoringConfig
 from vertebrae.utils.labels import class_counts, display_label
 from vertebrae.utils.serialization import make_json_safe
-from vertebrae.utils.validation import ensure_2d_numeric_array, l2_normalize_rows
+from vertebrae.utils.validation import (
+    ensure_numeric_matrix,
+    is_sparse_matrix,
+    l2_normalize_rows,
+    sparse_to_dense,
+)
 
 
 @dataclass
 class OverlapScoreResult:
+    """Structured result from OverlapIndex scoring.
+
+    Attributes:
+        macro_score: Global overlap score.
+        per_class_scores: Per-class scores returned by OverlapIndex.
+        pairwise_scores: Pairwise class scores returned by OverlapIndex.
+        sparse_adjacency: Sparse adjacency diagnostics when available.
+        class_counts: Counts per class.
+        k_per_class: Resolved MiniBatchKMeans k per class.
+        warnings: Scoring warnings.
+        metadata: Scoring metadata and backend details.
+    """
+
     macro_score: float
     per_class_scores: Dict[Any, Any] = field(default_factory=dict)
     pairwise_scores: Dict[Any, Any] = field(default_factory=dict)
@@ -23,6 +41,12 @@ class OverlapScoreResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize the score result to a JSON-safe dictionary.
+
+        Returns:
+            JSON-compatible score result.
+        """
+
         return make_json_safe(self)
 
 
@@ -32,6 +56,21 @@ def auto_k_for_class(
     max_k: int = 50,
     min_samples_per_cluster: int = 5,
 ) -> int:
+    """Resolve automatic k for a single class.
+
+    Args:
+        n_class: Number of samples in the class.
+        min_k: Lower target for automatic k resolution.
+        max_k: Maximum allowed k.
+        min_samples_per_cluster: Minimum samples expected per cluster.
+
+    Returns:
+        Resolved k value.
+
+    Raises:
+        ValueError: If the class has fewer than two samples.
+    """
+
     if n_class < 2:
         raise ValueError("Each class must contain at least 2 samples.")
     upper = max(1, n_class // min_samples_per_cluster)
@@ -43,6 +82,18 @@ def resolve_kmeans_k(
     config: OverlapScoringConfig,
     return_warnings: bool = False,
 ) -> Union[Dict[Any, int], Tuple[Dict[Any, int], List[str]]]:
+    """Resolve MiniBatchKMeans k values per class.
+
+    Args:
+        y: Class labels.
+        config: Overlap scoring configuration.
+        return_warnings: Whether to also return warning strings.
+
+    Returns:
+        Mapping from class labels to resolved k values. When `return_warnings`
+        is true, returns `(k_per_class, warnings)`.
+    """
+
     y_arr = np.asarray(y)
     counts = class_counts(y_arr)
     warnings: List[str] = []
@@ -85,23 +136,58 @@ def resolve_kmeans_k(
 
 
 class OverlapIndexScorer:
-    """The only internal adapter allowed to instantiate overlapindex.OverlapIndex."""
+    """Internal adapter for MiniBatchKMeans-backed OverlapIndex scoring.
+
+    Args:
+        config: Optional scoring configuration.
+    """
 
     def __init__(self, config: Optional[OverlapScoringConfig] = None) -> None:
         self.config = config or OverlapScoringConfig()
 
     def score(self, Z: Any, y: Any, seed: Optional[int] = None) -> OverlapScoreResult:
-        embeddings = ensure_2d_numeric_array(Z, "embeddings")
+        """Score dense or sparse embeddings with OverlapIndex.
+
+        Sparse embeddings are validated and densified at this boundary because
+        the configured OverlapIndex backend consumes dense arrays.
+
+        Args:
+            Z: Dense or sparse embedding matrix.
+            y: Class labels.
+            seed: Optional random seed forwarded to MiniBatchKMeans.
+
+        Returns:
+            Structured scoring result.
+
+        Raises:
+            ImportError: If `overlapindex` is not installed.
+            ValueError: If embeddings are invalid or too large to densify.
+        """
+
+        embeddings = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
         labels = np.asarray(y)
-        if len(embeddings) != len(labels):
+        if embeddings.shape[0] != len(labels):
             raise ValueError(
                 "embeddings and labels must have the same length; "
-                f"got {len(embeddings)} and {len(labels)}."
+                f"got {embeddings.shape[0]} and {len(labels)}."
+            )
+        warnings: List[str] = []
+        sparse_input = is_sparse_matrix(embeddings)
+        if sparse_input:
+            embeddings = sparse_to_dense(
+                embeddings,
+                "embeddings",
+                max_dense_bytes=self.config.max_dense_bytes,
+            )
+            warnings.append(
+                "Sparse embeddings were densified for MiniBatchKMeans-backed "
+                "OverlapIndex scoring."
             )
         if self.config.normalize_embeddings:
             embeddings = l2_normalize_rows(embeddings)
 
-        k_per_class, warnings = resolve_kmeans_k(labels, self.config, return_warnings=True)
+        k_per_class, k_warnings = resolve_kmeans_k(labels, self.config, return_warnings=True)
+        warnings.extend(k_warnings)
         kmeans_kwargs = dict(self.config.kmeans_kwargs or {})
         if seed is not None:
             kmeans_kwargs["random_state"] = seed
@@ -122,6 +208,8 @@ class OverlapIndexScorer:
             "offline_chunk_size": self.config.offline_chunk_size,
             "seed": seed,
             "kmeans_kwargs": kmeans_kwargs,
+            "sparse_input": sparse_input,
+            "scoring_input_format": "dense",
         }
         return OverlapScoreResult(
             macro_score=macro_score,

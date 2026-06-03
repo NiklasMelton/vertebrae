@@ -7,6 +7,20 @@ import numpy as np
 
 
 class HFVisionExtractor:
+    """Hugging Face vision backbone extractor with explicit pooling.
+
+    Args:
+        name: User-facing extractor name.
+        model_id: Hugging Face model identifier or local path.
+        pooling: Pooling mode: `"cls"`, `"mean"`, or `"pooler"`.
+        batch_size: Number of images encoded per batch.
+        device: Optional device string.
+        revision: Optional model revision.
+        trust_remote_code: Whether to allow remote model code.
+        processor_kwargs: Extra keyword arguments for `AutoImageProcessor`.
+        model_kwargs: Extra keyword arguments for `AutoModel`.
+    """
+
     def __init__(
         self,
         name: str,
@@ -38,9 +52,32 @@ class HFVisionExtractor:
         self._image_module: Any = None
 
     def fit(self, X: Any, y: Any = None) -> "HFVisionExtractor":
+        """No-op fit for frozen Hugging Face vision models.
+
+        Args:
+            X: Image inputs.
+            y: Optional labels.
+
+        Returns:
+            This extractor.
+        """
+
         return self
 
     def transform(self, X: Any) -> np.ndarray:
+        """Encode image inputs into dense embeddings.
+
+        Args:
+            X: PIL images, NumPy image arrays, image paths, or a sequence of them.
+
+        Returns:
+            Dense float32 embedding matrix.
+
+        Raises:
+            ImportError: If optional Hugging Face vision dependencies are missing.
+            ValueError: If pooling is invalid for the model output.
+        """
+
         processor, model, torch, image_module = self._load_model()
         images = [_coerce_image(item, image_module) for item in _as_sequence(X)]
         outputs: List[np.ndarray] = []
@@ -56,9 +93,25 @@ class HFVisionExtractor:
         return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        """Encode image inputs into dense embeddings.
+
+        Args:
+            X: Image inputs.
+            y: Optional labels.
+
+        Returns:
+            Dense float32 embedding matrix.
+        """
+
         return self.transform(X)
 
     def recipe(self) -> Dict[str, Any]:
+        """Return a serializable Hugging Face vision recipe.
+
+        Returns:
+            JSON-compatible recipe dictionary.
+        """
+
         return {
             "name": self.name,
             "extractor_type": self.extractor_type,

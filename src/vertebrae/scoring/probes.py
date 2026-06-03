@@ -9,6 +9,17 @@ from vertebrae.utils.labels import class_counts
 
 
 def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional[Dict[str, Any]]:
+    """Evaluate lightweight probe classifiers on embeddings.
+
+    Args:
+        Z: Dense or sparse embedding matrix.
+        y: Class labels.
+        config: Probe configuration.
+
+    Returns:
+        Probe result dictionary, or `None` when disabled.
+    """
+
     probe_config = config or ProbeConfig()
     if not probe_config.enabled:
         return None

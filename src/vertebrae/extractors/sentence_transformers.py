@@ -8,6 +8,19 @@ from vertebrae.utils.validation import ensure_dense_numeric_2d
 
 
 class SentenceTransformerExtractor:
+    """Sentence-transformers embedding extractor.
+
+    Args:
+        name: User-facing extractor name.
+        model_id: Sentence-transformers model identifier or local path.
+        batch_size: Batch size passed to `model.encode`.
+        normalize_embeddings: Whether sentence-transformers should normalize outputs.
+        device: Optional device string.
+        show_progress_bar: Whether to show sentence-transformers progress output.
+        model_kwargs: Extra keyword arguments for `SentenceTransformer`.
+        encode_kwargs: Extra keyword arguments for `model.encode`.
+    """
+
     def __init__(
         self,
         name: str,
@@ -32,9 +45,32 @@ class SentenceTransformerExtractor:
         self._model: Any = None
 
     def fit(self, X: Any, y: Any = None) -> "SentenceTransformerExtractor":
+        """No-op fit for frozen sentence-transformers models.
+
+        Args:
+            X: Input text samples.
+            y: Optional labels.
+
+        Returns:
+            This extractor.
+        """
+
         return self
 
     def transform(self, X: Any) -> np.ndarray:
+        """Encode text inputs into dense embeddings.
+
+        Args:
+            X: Sequence of strings.
+
+        Returns:
+            Dense numeric embedding matrix.
+
+        Raises:
+            ImportError: If sentence-transformers is not installed.
+            ValueError: If inputs are not strings or output is invalid.
+        """
+
         model = self._load_model()
         texts = _validate_text_sequence(X, "SentenceTransformerExtractor")
         output = model.encode(
@@ -51,9 +87,25 @@ class SentenceTransformerExtractor:
         )
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        """Encode text inputs into dense embeddings.
+
+        Args:
+            X: Sequence of strings.
+            y: Optional labels.
+
+        Returns:
+            Dense numeric embedding matrix.
+        """
+
         return self.transform(X)
 
     def recipe(self) -> Dict[str, Any]:
+        """Return a serializable sentence-transformers recipe.
+
+        Returns:
+            JSON-compatible recipe dictionary.
+        """
+
         return {
             "name": self.name,
             "extractor_type": self.extractor_type,

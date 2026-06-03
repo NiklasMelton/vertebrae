@@ -15,6 +15,18 @@ def run_stability_analysis(
     scoring_config: OverlapScoringConfig,
     stability_config: Optional[StabilityConfig] = None,
 ) -> Optional[Dict[str, Any]]:
+    """Run prototype or subsample stability analysis.
+
+    Args:
+        Z: Dense or sparse embedding matrix.
+        y: Class labels.
+        scoring_config: OverlapIndex scoring configuration.
+        stability_config: Stability-analysis configuration.
+
+    Returns:
+        Stability summary dictionary, or `None` when disabled.
+    """
+
     config = stability_config or StabilityConfig()
     if not config.enabled or config.mode == "none":
         return None
