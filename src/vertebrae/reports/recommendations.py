@@ -9,16 +9,16 @@ def recommendation_for_extractor(
     weakest_class_score: Optional[float],
 ) -> str:
     width = _stability_width(stability)
-    if macro_score >= 0.85 and width <= 0.05:
+    if macro_score >= 0.9 and width <= 0.05:
         recommendation = "strong_candidate"
-    elif macro_score >= 0.70:
+    elif macro_score >= 0.80:
         recommendation = "promising_inspect_weak_classes"
-    elif macro_score >= 0.55:
+    elif macro_score >= 0.75:
         recommendation = "moderate_overlap_fine_tuning_likely"
     else:
         recommendation = "poor_frozen_representation"
 
-    if weakest_class_score is not None and weakest_class_score < 0.60:
+    if weakest_class_score is not None and weakest_class_score < 0.7:
         recommendation += "_weak_class_attention"
     if width > 0.15:
         recommendation += "_unstable"
