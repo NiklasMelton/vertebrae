@@ -1,14 +1,25 @@
 """Execution backends."""
 
+from vertebrae.execution.dask_backend import DaskBackend, DaskJobHandle
 from vertebrae.execution.distributed import (
+    benchmark_result_from_artifacts,
+    collect_score_artifacts,
     embedding_artifact_key,
     embedding_shard_key,
+    labels_artifact_key,
     materialize_and_merge_embeddings,
     materialize_embedding_shard,
     materialize_embedding_shards,
+    materialize_label_artifact,
     merge_embedding_shards,
     plan_embedding_shard_jobs,
+    plan_scoring_jobs,
+    score_embedding_artifact,
+    score_embedding_artifacts,
+    scoring_artifact_key,
+    validate_embedding_label_artifacts,
 )
+from vertebrae.execution.factory import create_execution_backend
 from vertebrae.execution.jobs import (
     EmbeddingJob,
     EmbeddingMergeJob,
@@ -19,22 +30,37 @@ from vertebrae.execution.jobs import (
     ShardSpec,
 )
 from vertebrae.execution.local import LocalBackend, LocalJobHandle
+from vertebrae.execution.ray_backend import RayBackend, RayJobHandle
 
 __all__ = [
+    "DaskBackend",
+    "DaskJobHandle",
     "EmbeddingJob",
     "EmbeddingMergeJob",
     "EmbeddingShardJob",
     "LocalBackend",
     "LocalJobHandle",
+    "RayBackend",
+    "RayJobHandle",
     "ResourceSpec",
     "SampleBatch",
     "ScoringJob",
     "ShardSpec",
     "embedding_artifact_key",
     "embedding_shard_key",
+    "benchmark_result_from_artifacts",
+    "collect_score_artifacts",
+    "labels_artifact_key",
     "materialize_and_merge_embeddings",
     "materialize_embedding_shard",
     "materialize_embedding_shards",
+    "materialize_label_artifact",
     "merge_embedding_shards",
     "plan_embedding_shard_jobs",
+    "plan_scoring_jobs",
+    "score_embedding_artifact",
+    "score_embedding_artifacts",
+    "scoring_artifact_key",
+    "validate_embedding_label_artifacts",
+    "create_execution_backend",
 ]

@@ -6,6 +6,7 @@ from typing import Any, Iterable, Tuple
 
 import numpy as np
 
+from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import is_sparse_matrix
 
 
@@ -119,6 +120,37 @@ class LocalArtifactStore:
 
             return sparse.load_npz(sparse_target)
         return np.load(path / "embeddings.npy", allow_pickle=False)
+
+    def put_labels(self, key: str, labels: Any) -> str:
+        """Store labels as a JSON artifact.
+
+        Args:
+            key: Artifact key.
+            labels: One-dimensional labels.
+
+        Returns:
+            Filesystem path to the saved labels file.
+        """
+
+        path = self._path(key)
+        path.mkdir(parents=True, exist_ok=True)
+        target = path / "labels.json"
+        with target.open("w", encoding="utf-8") as f:
+            json.dump(make_json_safe(list(np.asarray(labels))), f, indent=2, sort_keys=True)
+        return str(target)
+
+    def get_labels(self, key: str) -> np.ndarray:
+        """Load labels from a JSON artifact.
+
+        Args:
+            key: Artifact key.
+
+        Returns:
+            One-dimensional label array.
+        """
+
+        with (self._path(key) / "labels.json").open("r", encoding="utf-8") as f:
+            return np.asarray(json.load(f))
 
     def put_json(self, key: str, obj: dict) -> str:
         """Store JSON metadata for an artifact key.

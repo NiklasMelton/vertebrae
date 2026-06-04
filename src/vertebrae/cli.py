@@ -10,12 +10,22 @@ from typing import Any, Optional, Sequence
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.execution import (
     EmbeddingMergeJob,
+    ScoringJob,
     ShardSpec,
+    benchmark_result_from_artifacts,
+    collect_score_artifacts,
+    create_execution_backend,
     embedding_artifact_key,
     embedding_shard_key,
+    labels_artifact_key,
     materialize_embedding_shard,
+    materialize_label_artifact,
     merge_embedding_shards,
     plan_embedding_shard_jobs,
+    plan_scoring_jobs,
+    score_embedding_artifact,
+    score_embedding_artifacts,
+    scoring_artifact_key,
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
 
@@ -53,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(plan)
     plan.add_argument("--total-shards", type=int, required=True)
     plan.add_argument("--batch-size", type=int, default=128)
+    _add_backend_args(plan, include_local_parallel=True)
     plan.add_argument("--output-json")
     plan.set_defaults(func=_cmd_plan)
 
@@ -75,6 +86,59 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--output-json")
     merge.set_defaults(func=_cmd_merge_embeddings)
 
+    labels = subparsers.add_parser("write-labels", help="Materialize dataset labels.")
+    labels.add_argument("--dataset-pickle", required=True)
+    _add_cache_arg(labels)
+    labels.add_argument("--output-key")
+    labels.add_argument("--output-json")
+    labels.set_defaults(func=_cmd_write_labels)
+
+    score = subparsers.add_parser("score", help="Score persisted embeddings and labels.")
+    _add_cache_arg(score)
+    score.add_argument("--embedding-key")
+    score.add_argument("--labels-key")
+    score.add_argument("--output-key")
+    score.add_argument("--plan-json")
+    score.add_argument("--scoring-config-pickle")
+    score.add_argument("--seed", type=int)
+    score.add_argument("--output-json")
+    score.set_defaults(func=_cmd_score)
+
+    repeats = subparsers.add_parser("score-repeats", help="Run repeated scoring jobs.")
+    _add_cache_arg(repeats)
+    repeats.add_argument("--embedding-key")
+    repeats.add_argument("--labels-key")
+    repeats.add_argument("--plan-json")
+    repeats.add_argument("--seed", action="append", type=int, default=[])
+    repeats.add_argument("--repeats", type=int)
+    repeats.add_argument("--random-state", type=int, default=42)
+    repeats.add_argument("--scoring-config-pickle")
+    _add_backend_args(repeats, include_local_parallel=True)
+    repeats.add_argument("--output-json")
+    repeats.set_defaults(func=_cmd_score_repeats)
+
+    collect = subparsers.add_parser("collect-scores", help="Collect score artifacts.")
+    _add_cache_arg(collect)
+    collect.add_argument("--score-key", action="append", default=[])
+    collect.add_argument("--score-plan-json")
+    collect.add_argument("--output-key", required=True)
+    collect.add_argument("--interval-level", type=float, default=0.95)
+    collect.add_argument("--output-json")
+    collect.set_defaults(func=_cmd_collect_scores)
+
+    artifacts = subparsers.add_parser(
+        "benchmark-from-artifacts",
+        help="Build a benchmark-style result from score artifacts.",
+    )
+    _add_cache_arg(artifacts)
+    artifacts.add_argument("--score-key", required=True)
+    artifacts.add_argument("--stability-key")
+    artifacts.add_argument("--output-key")
+    artifacts.add_argument("--json-output")
+    artifacts.add_argument("--markdown-output")
+    artifacts.add_argument("--output-json")
+    artifacts.set_defaults(func=_cmd_benchmark_from_artifacts)
+
     slurm = subparsers.add_parser("slurm-array", help="Generate a SLURM array script.")
     _add_object_args(slurm)
     _add_cache_arg(slurm)
@@ -89,6 +153,38 @@ def build_parser() -> argparse.ArgumentParser:
     slurm.add_argument("--python-executable", default=sys.executable)
     slurm.add_argument("--output-json")
     slurm.set_defaults(func=_cmd_slurm_array)
+
+    slurm_score = subparsers.add_parser(
+        "slurm-score-array",
+        help="Generate a SLURM array script for repeated scoring.",
+    )
+    _add_cache_arg(slurm_score)
+    slurm_score.add_argument("--embedding-key")
+    slurm_score.add_argument("--labels-key")
+    slurm_score.add_argument("--plan-json")
+    slurm_score.add_argument("--repeats", type=int, required=True)
+    slurm_score.add_argument("--random-state", type=int, default=42)
+    slurm_score.add_argument("--script-output", required=True)
+    slurm_score.add_argument("--job-name", default="vertebrae-score")
+    slurm_score.add_argument("--time", default="04:00:00")
+    slurm_score.add_argument("--mem", default="16G")
+    slurm_score.add_argument("--cpus-per-task", type=int, default=1)
+    slurm_score.add_argument("--partition")
+    slurm_score.add_argument("--python-executable", default=sys.executable)
+    slurm_score.add_argument("--output-json")
+    slurm_score.set_defaults(func=_cmd_slurm_score_array)
+
+    run_embed = subparsers.add_parser(
+        "run-embedding-shards",
+        help="Run embedding shards with the selected execution backend.",
+    )
+    _add_object_args(run_embed)
+    _add_cache_arg(run_embed)
+    run_embed.add_argument("--total-shards", type=int, required=True)
+    run_embed.add_argument("--batch-size", type=int, default=128)
+    _add_backend_args(run_embed, include_local_parallel=True)
+    run_embed.add_argument("--output-json")
+    run_embed.set_defaults(func=_cmd_run_embedding_shards)
 
     return parser
 
@@ -109,9 +205,12 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "cache_dir": args.cache_dir,
         "base_key": base_key,
         "output_key": base_key,
+        "labels_key": labels_artifact_key(dataset),
+        "score_key": scoring_artifact_key(base_key),
         "n_samples": int(len(dataset.y)),
         "total_shards": args.total_shards,
         "batch_size": args.batch_size,
+        "backend": args.backend,
         "shard_jobs": [
             {
                 "total_shards": job.shard.total_shards,
@@ -162,6 +261,104 @@ def _cmd_merge_embeddings(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_write_labels(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    return materialize_label_artifact(
+        dataset,
+        LocalArtifactStore(args.cache_dir),
+        key=args.output_key,
+    )
+
+
+def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
+    plan = _load_json(args.plan_json) if args.plan_json else {}
+    embedding_key = args.embedding_key or plan.get("output_key")
+    labels_key = args.labels_key or plan.get("labels_key")
+    if embedding_key is None:
+        raise ValueError("score requires --embedding-key or --plan-json.")
+    if labels_key is None:
+        raise ValueError("score requires --labels-key or --plan-json.")
+    output_key = args.output_key or scoring_artifact_key(embedding_key, seed=args.seed)
+    scoring_config = (
+        _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
+    )
+    return score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_key,
+            labels_key=labels_key,
+            output_key=output_key,
+            scoring_config=scoring_config,
+            seed=args.seed,
+        ),
+        LocalArtifactStore(args.cache_dir),
+    )
+
+
+def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
+    embedding_key, labels_key = _embedding_and_labels_from_args(args)
+    seeds = args.seed or _repeat_seeds(args.repeats, args.random_state)
+    scoring_config = (
+        _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
+    )
+    jobs = plan_scoring_jobs(
+        embedding_key=embedding_key,
+        labels_key=labels_key,
+        seeds=seeds,
+        scoring_config=scoring_config,
+    )
+    backend = _create_backend_from_args(args)
+    artifacts = score_embedding_artifacts(jobs, LocalArtifactStore(args.cache_dir), backend)
+    return {
+        "artifact_type": "score_plan",
+        "backend": args.backend,
+        "embedding_key": embedding_key,
+        "labels_key": labels_key,
+        "score_keys": [artifact["output_key"] for artifact in artifacts],
+        "seeds": seeds,
+    }
+
+
+def _cmd_collect_scores(args: argparse.Namespace) -> dict[str, Any]:
+    plan = _load_json(args.score_plan_json) if args.score_plan_json else {}
+    score_keys = args.score_key or plan.get("score_keys", [])
+    if not score_keys:
+        raise ValueError("collect-scores requires --score-key or --score-plan-json.")
+    return collect_score_artifacts(
+        score_keys=score_keys,
+        store=LocalArtifactStore(args.cache_dir),
+        output_key=args.output_key,
+        interval_level=args.interval_level,
+    )
+
+
+def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
+    result = benchmark_result_from_artifacts(
+        score_key=args.score_key,
+        store=LocalArtifactStore(args.cache_dir),
+        output_key=args.output_key,
+        stability_key=args.stability_key,
+    )
+    if args.json_output:
+        _write_json_file(result, args.json_output)
+    if args.markdown_output:
+        from vertebrae.reports.markdown_report import render_markdown_report
+        from vertebrae.results import BenchmarkResult, ExtractorResult
+        from vertebrae.scoring.overlap import OverlapScoreResult
+
+        markdown = render_markdown_report(
+            _benchmark_result_from_dict(
+                result,
+                BenchmarkResult,
+                ExtractorResult,
+                OverlapScoreResult,
+            )
+        )
+        target = Path(args.markdown_output)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(markdown, encoding="utf-8")
+    return result
+
+
 def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
@@ -169,6 +366,7 @@ def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
     script = _render_slurm_array_script(
         args=args,
         output_key=base_key,
+        labels_key=labels_artifact_key(dataset),
         n_samples=len(dataset.y),
     )
     target = Path(args.script_output)
@@ -183,9 +381,51 @@ def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _cmd_run_embedding_shards(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    jobs = plan_embedding_shard_jobs(
+        dataset=dataset,
+        extractor=extractor,
+        total_shards=args.total_shards,
+        batch_size=args.batch_size,
+    )
+    backend = _create_backend_from_args(args)
+    from vertebrae.execution import materialize_embedding_shards
+
+    manifests = materialize_embedding_shards(
+        jobs=jobs,
+        store=LocalArtifactStore(args.cache_dir),
+        execution=backend,
+    )
+    return {
+        "artifact_type": "embedding_shard_plan",
+        "backend": args.backend,
+        "shard_keys": [manifest["output_key"] for manifest in manifests],
+        "n_shards": len(manifests),
+    }
+
+
+def _cmd_slurm_score_array(args: argparse.Namespace) -> dict[str, Any]:
+    embedding_key, labels_key = _embedding_and_labels_from_args(args)
+    seeds = _repeat_seeds(args.repeats, args.random_state)
+    script = _render_slurm_score_array_script(args=args, seeds=seeds)
+    target = Path(args.script_output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(script, encoding="utf-8")
+    return {
+        "script_path": str(target),
+        "embedding_key": embedding_key,
+        "labels_key": labels_key,
+        "score_keys": [scoring_artifact_key(embedding_key, seed=seed) for seed in seeds],
+        "seeds": seeds,
+    }
+
+
 def _render_slurm_array_script(
     args: argparse.Namespace,
     output_key: str,
+    labels_key: str,
     n_samples: int,
 ) -> str:
     lines = [
@@ -221,6 +461,65 @@ def _render_slurm_array_script(
         shard = ShardSpec(total_shards=args.total_shards, shard_index=shard_index)
         suffix = " \\" if shard_index < args.total_shards - 1 else ""
         lines.append(f"#   --shard-key {embedding_shard_key(output_key, shard)}{suffix}")
+    lines.extend(
+        [
+            "#",
+            "# Then materialize labels and score:",
+            f"# {args.python_executable} -m vertebrae.cli write-labels \\",
+            f"#   --dataset-pickle {args.dataset_pickle} \\",
+            f"#   --cache-dir {args.cache_dir}",
+            f"# {args.python_executable} -m vertebrae.cli score \\",
+            f"#   --cache-dir {args.cache_dir} \\",
+            f"#   --embedding-key {output_key} \\",
+            f"#   --labels-key {labels_key}",
+            "#",
+            "# For distributed stability scoring, generate a scoring array with:",
+            f"# {args.python_executable} -m vertebrae.cli slurm-score-array \\",
+            f"#   --cache-dir {args.cache_dir} \\",
+            f"#   --embedding-key {output_key} \\",
+            f"#   --labels-key {labels_key} \\",
+            "#   --repeats 20 \\",
+            "#   --script-output vertebrae_score.sbatch",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int]) -> str:
+    embedding_key, labels_key = _embedding_and_labels_from_args(args)
+    lines = [
+        "#!/usr/bin/env bash",
+        f"#SBATCH --job-name={args.job_name}",
+        f"#SBATCH --array=0-{len(seeds) - 1}",
+        f"#SBATCH --time={args.time}",
+        f"#SBATCH --mem={args.mem}",
+        f"#SBATCH --cpus-per-task={args.cpus_per_task}",
+    ]
+    if args.partition:
+        lines.append(f"#SBATCH --partition={args.partition}")
+    seed_values = " ".join(str(seed) for seed in seeds)
+    lines.extend(
+        [
+            "set -euo pipefail",
+            f"SEEDS=({seed_values})",
+            "SEED=${SEEDS[${SLURM_ARRAY_TASK_ID}]}",
+            "",
+            f"{args.python_executable} -m vertebrae.cli score \\",
+            f"  --cache-dir {args.cache_dir} \\",
+            f"  --embedding-key {embedding_key} \\",
+            f"  --labels-key {labels_key} \\",
+            "  --seed ${SEED}",
+            "",
+            "# After the array completes, collect scores with:",
+            f"# {args.python_executable} -m vertebrae.cli collect-scores \\",
+            f"#   --cache-dir {args.cache_dir} \\",
+            f"#   --output-key {embedding_key}/scores/stability \\",
+        ]
+    )
+    for index, seed in enumerate(seeds):
+        suffix = " \\" if index < len(seeds) - 1 else ""
+        lines.append(f"#   --score-key {scoring_artifact_key(embedding_key, seed=seed)}{suffix}")
     lines.append("")
     return "\n".join(lines)
 
@@ -234,6 +533,18 @@ def _add_cache_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cache-dir", default=".vertebrae_cache")
 
 
+def _add_backend_args(
+    parser: argparse.ArgumentParser,
+    include_local_parallel: bool = False,
+) -> None:
+    parser.add_argument("--backend", choices=["local", "ray", "dask"], default="local")
+    parser.add_argument("--ray-address")
+    parser.add_argument("--dask-address")
+    if include_local_parallel:
+        parser.add_argument("--n-jobs", type=int, default=1)
+        parser.add_argument("--joblib-backend", default="loky")
+
+
 def _load_pickle(path: str) -> Any:
     with Path(path).open("rb") as f:
         return pickle.load(f)
@@ -242,6 +553,74 @@ def _load_pickle(path: str) -> Any:
 def _load_json(path: str) -> dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _create_backend_from_args(args: argparse.Namespace) -> Any:
+    return create_execution_backend(
+        args.backend,
+        n_jobs=getattr(args, "n_jobs", 1),
+        joblib_backend=getattr(args, "joblib_backend", "loky"),
+        ray_address=getattr(args, "ray_address", None),
+        dask_address=getattr(args, "dask_address", None),
+    )
+
+
+def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]:
+    plan = _load_json(args.plan_json) if getattr(args, "plan_json", None) else {}
+    embedding_key = getattr(args, "embedding_key", None) or plan.get("output_key")
+    labels_key = getattr(args, "labels_key", None) or plan.get("labels_key")
+    if embedding_key is None:
+        raise ValueError("An embedding key or plan JSON is required.")
+    if labels_key is None:
+        raise ValueError("A labels key or plan JSON is required.")
+    return embedding_key, labels_key
+
+
+def _repeat_seeds(repeats: Any, random_state: int) -> list[int]:
+    if repeats is None or int(repeats) < 1:
+        raise ValueError("repeats must be >= 1.")
+    import numpy as np
+
+    rng = np.random.default_rng(random_state)
+    return [int(seed) for seed in rng.integers(0, np.iinfo(np.int32).max, size=int(repeats))]
+
+
+def _write_json_file(payload: dict[str, Any], path: str) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
+
+
+def _benchmark_result_from_dict(
+    data: dict[str, Any],
+    benchmark_cls: Any,
+    extractor_cls: Any,
+    overlap_cls: Any,
+) -> Any:
+    extractor_results = []
+    for item in data.get("extractor_results", []):
+        overlap = overlap_cls(**item["overlap"])
+        extractor_results.append(
+            extractor_cls(
+                name=item["name"],
+                extractor_type=item["extractor_type"],
+                overlap=overlap,
+                stability=item.get("stability"),
+                probes=item.get("probes"),
+                embedding_metadata=item.get("embedding_metadata", {}),
+                runtime=item.get("runtime", {}),
+                warnings=item.get("warnings", []),
+                recommendation=item.get("recommendation", ""),
+                weakest_class=item.get("weakest_class"),
+                weakest_class_score=item.get("weakest_class_score"),
+            )
+        )
+    return benchmark_cls(
+        dataset_summary=data.get("dataset_summary", {}),
+        extractor_results=extractor_results,
+        recommendations=data.get("recommendations", []),
+        metadata=data.get("metadata", {}),
+    )
 
 
 def _write_json_payload(payload: dict[str, Any], output_json: Optional[str]) -> None:

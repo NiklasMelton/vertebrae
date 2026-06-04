@@ -200,6 +200,7 @@ class ScoringJob:
         embedding_key: Artifact-store key for embeddings.
         labels_key: Artifact-store key or URI for labels.
         output_key: Artifact-store key for scoring results.
+        scoring_config: Optional OverlapIndex scoring configuration.
         seed: Optional scoring seed, commonly used for stability repeats.
         resources: Resource request for scoring.
     """
@@ -207,5 +208,6 @@ class ScoringJob:
     embedding_key: str
     labels_key: str
     output_key: str
+    scoring_config: Any = None
     seed: Optional[int] = None
     resources: ResourceSpec = ResourceSpec()
