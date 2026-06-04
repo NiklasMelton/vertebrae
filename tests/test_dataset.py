@@ -72,3 +72,31 @@ def test_from_image_paths_sets_image_modality():
 
     assert dataset.modality == "image"
     assert dataset.metadata["source"] == "image_paths"
+
+
+def test_stratified_subsample_indices_preserve_classes():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(12, 2),
+        ["a"] * 6 + ["b"] * 4 + ["c"] * 2,
+        modality="tabular",
+    )
+
+    indices = dataset.stratified_subsample_indices(rate=0.5, random_state=1)
+    subset = dataset.subset(indices)
+
+    assert len(indices) == 7
+    assert subset.class_counts() == {"a": 3, "b": 2, "c": 2}
+    assert subset.metadata["sample_indices"] == indices.tolist()
+
+
+def test_nested_subset_preserves_original_sample_indices():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(12, 2),
+        ["a"] * 6 + ["b"] * 6,
+        modality="tabular",
+    )
+
+    first = dataset.subset([1, 2, 3, 7, 8, 9])
+    second = first.subset([0, 2, 3, 5])
+
+    assert second.metadata["sample_indices"] == [1, 3, 7, 9]
