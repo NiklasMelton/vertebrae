@@ -1,16 +1,10 @@
 # vertebrae
 
-`vertebrae` benchmarks feature extractors and frozen transfer-learning backbones on
-labeled datasets. It can score dense or sparse precomputed embeddings, or generate
-embeddings from local pipelines, callable feature functions, Hugging Face text/vision
-models, and sentence-transformers models.
+`vertebrae` is a Python package for evaluating feature extractors and transfer-learning backbones on labeled datasets. It supports precomputed embeddings, scikit-learn pipelines, custom callable extractors, and optional Hugging Face and sentence-transformers workflows.
 
-Scoring uses the existing `overlapindex` package. `vertebrae` intentionally exposes
-only MiniBatchKMeans-backed OverlapIndex scoring internally; ART, ARTMAP, Fuzzy ART,
-Hypersphere ART, `model_type`, `rho`, `r_hat`, and `match_tracking` are not public
-`vertebrae` options.
+The package uses the `overlapindex` library as its separation metric and wraps the full evaluation flow around practical dataset handling, caching, stability analysis, probe classifiers, and report generation.
 
-## Install
+## Installation
 
 ```bash
 pip install vertebrae
@@ -25,113 +19,30 @@ poetry install --with dev
 Optional Hugging Face and sentence-transformers support:
 
 ```bash
-poetry install -E hf
+pip install "vertebrae[hf]"
 ```
 
-## Precomputed embeddings
+## Quick Start
+
+### Precomputed embeddings
 
 ```python
 from vertebrae import BenchmarkDataset, Evaluator
 from vertebrae.extractors import PrecomputedExtractor
 
 dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y)
+extractor = PrecomputedExtractor(name="baseline_embeddings")
 
-result = Evaluator(
-    dataset=dataset,
-    extractor=PrecomputedExtractor(name="my_embeddings"),
-).run()
+result = Evaluator(dataset=dataset, extractor=extractor).run()
 
 print(result.to_dataframe())
 result.save_json("result.json")
 result.save_markdown("report.md")
 ```
 
-Sparse scipy matrices are accepted as embedding artifacts:
+Sparse matrices are supported as embedding inputs as well.
 
-```python
-from scipy import sparse
-from vertebrae import BenchmarkDataset
-
-Z_sparse = sparse.csr_matrix(Z)
-dataset = BenchmarkDataset.from_embeddings(Z_sparse, labels=y)
-```
-
-Sparse embeddings are cached as `.npz` files and densified only at the
-MiniBatchKMeans-backed OverlapIndex scoring boundary, subject to
-`OverlapScoringConfig.max_dense_bytes`.
-
-## Ephemeral large data, persistent embeddings
-
-For large inputs such as images, streaming-safe extractors materialize embeddings
-batch-by-batch. The original images are loaded only for the current embedding batch,
-while the smaller embedding artifact is written to the local cache:
-
-```python
-from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator
-from vertebrae.config import CacheConfig
-from vertebrae.extractors import HFVisionExtractor
-
-dataset = BenchmarkDataset.from_image_paths(paths, labels)
-
-result = Evaluator(
-    dataset=dataset,
-    extractor=HFVisionExtractor(name="vit", model_id="google/vit-base-patch16-224"),
-    embedding_config=EmbeddingConfig(batch_size=32),
-    cache_config=CacheConfig(cache_dir=".vertebrae_cache"),
-).run()
-```
-
-Future distributed embedding jobs can use `ShardSpec` to split sample indices
-deterministically. Shards use index modulo partitioning, so workers receive
-non-overlapping samples and do not duplicate embedding work.
-
-Local artifact-backed sharding is available for CPU workers or staged GPU workflows:
-
-```python
-from vertebrae import LocalBackend
-from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.execution import materialize_and_merge_embeddings
-
-store = LocalArtifactStore(".vertebrae_cache")
-manifest = materialize_and_merge_embeddings(
-    dataset=dataset,
-    extractor=extractor,
-    store=store,
-    execution=LocalBackend(n_jobs=4),
-    total_shards=4,
-    batch_size=128,
-)
-```
-
-The same shard workflow is exposed through the `vertebrae` CLI for HPC array jobs:
-`vertebrae plan`, `vertebrae embed-shard`, `vertebrae merge-embeddings`, and
-`vertebrae slurm-array`.
-
-`MemoryConfig` controls fail-fast memory admission. By default, `vertebrae` uses
-`psutil` to derive a conservative budget from currently available system memory. When
-an embedding dimension is not known ahead of time, streaming-safe extractors run a
-small probe batch and estimate the final embedding and scoring memory footprint. If
-the full plan would exceed the budget, `vertebrae` records a warning and uses the
-largest class-stratified subsample rate expected to fit. Set `subsample_rate` below
-`1.0` to request subsampling explicitly, or disable
-`auto_subsample_on_memory_exceeded` to restore hard fail-fast behavior:
-
-```python
-from vertebrae import MemoryConfig
-
-result = Evaluator(
-    dataset=dataset,
-    extractor=extractor,
-    embedding_config=EmbeddingConfig(batch_size=64),
-    memory_config=MemoryConfig(
-        max_memory_bytes=24_000_000_000,
-        subsample_rate=0.5,
-        auto_subsample_on_memory_exceeded=True,
-    ),
-).run()
-```
-
-## Scikit-learn text pipeline
+### Scikit-learn pipelines
 
 ```python
 from sklearn.decomposition import TruncatedSVD
@@ -142,72 +53,90 @@ from sklearn.preprocessing import Normalizer
 from vertebrae import BenchmarkDataset, Evaluator
 from vertebrae.extractors import SklearnExtractor
 
-pipeline = Pipeline([
-    ("tfidf", TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=20_000)),
-    ("svd", TruncatedSVD(n_components=128, random_state=42)),
-    ("norm", Normalizer()),
-])
-
-dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
-extractor = SklearnExtractor(name="tfidf_bigram_svd128", pipeline=pipeline)
-result = Evaluator(dataset=dataset, extractor=extractor).run()
-```
-
-## Hugging Face text
-
-```python
-from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.extractors import HFTextExtractor
-
-dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
-
-extractor = HFTextExtractor(
-    name="distilbert_mean_pool",
-    model_id="distilbert-base-uncased",
-    pooling="mean",
-    batch_size=16,
+pipeline = Pipeline(
+    [
+        ("tfidf", TfidfVectorizer(ngram_range=(1, 2), min_df=2)),
+        ("svd", TruncatedSVD(n_components=128, random_state=42)),
+        ("norm", Normalizer()),
+    ]
 )
 
-result = Evaluator(dataset=dataset, extractor=extractor).run()
-```
-
-## Sentence-transformers
-
-```python
-from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.extractors import SentenceTransformerExtractor
-
 dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
-
-extractor = SentenceTransformerExtractor(
-    name="minilm",
-    model_id="sentence-transformers/all-MiniLM-L6-v2",
-    batch_size=32,
-    normalize_embeddings=True,
-)
+extractor = SklearnExtractor(name="tfidf_svd", pipeline=pipeline)
 
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
-## Multi-extractor comparison
+### Multi-extractor comparison
 
 ```python
 from vertebrae import Benchmark
 
 benchmark = Benchmark(dataset)
 benchmark.add_extractor(tfidf_extractor)
-benchmark.add_extractor(minilm_extractor)
-benchmark.add_extractor(distilbert_extractor)
+benchmark.add_extractor(sentence_transformer_extractor)
+benchmark.add_extractor(custom_extractor)
 
 result = benchmark.run()
 print(result.to_dataframe())
-result.save_markdown("comparison.md")
 ```
 
-Reports include dataset summary, extractor recipes, ranking, per-class overlap
-diagnostics, stability summaries, probe results when enabled, warnings,
-recommendations, and reproducibility metadata.
+## Supported Workflows
 
-Distributed execution is planned but not implemented. The current implementation keeps
-embeddings as artifacts and scoring/reporting separate from live model objects so that
-future distributed backends can shard embedding jobs without changing the public API.
+`vertebrae` is designed for:
+
+- precomputed dense or sparse embeddings,
+- NumPy arrays and pandas DataFrames,
+- scikit-learn transformers and pipelines,
+- custom Python callable extractors,
+- single-extractor evaluation,
+- multi-extractor comparisons,
+- JSON and Markdown reports,
+- repeated-run stability analysis,
+- lightweight probe classifier checks,
+- local embedding caching and reproducible artifacts.
+
+## Reports and Results
+
+Each benchmark run returns structured results that include:
+
+- dataset summary,
+- extractor summary and recipe metadata,
+- overlap scores and per-class scores,
+- stability summaries,
+- probe results when enabled,
+- warnings and recommendations,
+- reproducibility metadata.
+
+Results can be rendered directly to Markdown or JSON:
+
+```python
+result.save_json("result.json")
+result.save_markdown("report.md")
+```
+
+You can also convert rankings into a DataFrame with `result.to_dataframe()`.
+
+## Optional Extractors
+
+Optional integrations are available through the `hf` extra:
+
+- `SentenceTransformerExtractor`
+- `HFTextExtractor`
+- `HFVisionExtractor`
+
+These workflows rely on optional dependencies and lazy imports, so the core package stays lightweight.
+
+## Command Line Interface
+
+`vertebrae` includes a CLI for deterministic embedding shard planning and artifact merging in local or batch-style workflows. Run `vertebrae --help` to see the available commands.
+
+## Notes
+
+- The package targets Python `>=3.9,<3.13`.
+- `overlapindex>=0.1.1` is required.
+- The public API is centered on `BenchmarkDataset`, `Evaluator`, `Benchmark`, extractor wrappers, and structured result objects.
+
+## License
+
+MIT
