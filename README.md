@@ -88,8 +88,11 @@ non-overlapping samples and do not duplicate embedding work.
 `MemoryConfig` controls fail-fast memory admission. By default, `vertebrae` uses
 `psutil` to derive a conservative budget from currently available system memory. When
 an embedding dimension is not known ahead of time, streaming-safe extractors run a
-small probe batch, estimate the final embedding and scoring memory footprint, and fail
-before the full job if the plan would exceed the budget:
+small probe batch and estimate the final embedding and scoring memory footprint. If
+the full plan would exceed the budget, `vertebrae` records a warning and uses the
+largest class-stratified subsample rate expected to fit. Set `subsample_rate` below
+`1.0` to request subsampling explicitly, or disable
+`auto_subsample_on_memory_exceeded` to restore hard fail-fast behavior:
 
 ```python
 from vertebrae import MemoryConfig
@@ -98,7 +101,11 @@ result = Evaluator(
     dataset=dataset,
     extractor=extractor,
     embedding_config=EmbeddingConfig(batch_size=64),
-    memory_config=MemoryConfig(max_memory_bytes=24_000_000_000),
+    memory_config=MemoryConfig(
+        max_memory_bytes=24_000_000_000,
+        subsample_rate=0.5,
+        auto_subsample_on_memory_exceeded=True,
+    ),
 ).run()
 ```
 

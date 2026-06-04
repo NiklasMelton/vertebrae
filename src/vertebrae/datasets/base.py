@@ -223,6 +223,78 @@ class BenchmarkDataset:
             batch_indices = indices[start : start + batch_size]
             yield SampleBatch(indices=batch_indices, X=_take_samples(self.X, batch_indices))
 
+    def stratified_subsample_indices(
+        self,
+        rate: float,
+        random_state: int = 42,
+        min_samples_per_class: int = 2,
+    ) -> np.ndarray:
+        """Select class-stratified sample indices without replacement.
+
+        Args:
+            rate: Fraction of each class to keep. Must be in `(0, 1]`.
+            random_state: Random seed for reproducible selection.
+            min_samples_per_class: Minimum retained samples per class when possible.
+
+        Returns:
+            Sorted original sample indices for the stratified subset.
+
+        Raises:
+            ValueError: If `rate` is outside `(0, 1]`.
+        """
+
+        if not 0.0 < rate <= 1.0:
+            raise ValueError("subsample rate must be in (0, 1].")
+        if rate >= 1.0:
+            return np.arange(len(self.y), dtype=int)
+        rng = np.random.default_rng(random_state)
+        selected = []
+        for label in np.unique(self.y):
+            class_indices = np.flatnonzero(self.y == label)
+            target = int(np.floor(len(class_indices) * rate))
+            if len(class_indices) >= min_samples_per_class:
+                target = max(min_samples_per_class, target)
+            target = max(1, min(len(class_indices), target))
+            selected.extend(rng.choice(class_indices, size=target, replace=False).tolist())
+        return np.asarray(sorted(selected), dtype=int)
+
+    def subset(self, indices: Any, metadata: Optional[Dict[str, Any]] = None) -> "BenchmarkDataset":
+        """Create a dataset subset by original sample indices.
+
+        Args:
+            indices: Sample indices to retain.
+            metadata: Additional metadata to merge into the subset.
+
+        Returns:
+            Validated dataset containing only the selected samples.
+        """
+
+        index_array = np.asarray(indices, dtype=int)
+        parent_indices = self.metadata.get("sample_indices")
+        if parent_indices is None:
+            sample_indices = index_array.tolist()
+        else:
+            sample_indices = np.asarray(parent_indices, dtype=int)[index_array].tolist()
+        merged_metadata = dict(self.metadata)
+        merged_metadata.update(
+            {
+                "subset": True,
+                "parent_n_samples": int(len(self.y)),
+                "sample_indices": sample_indices,
+            }
+        )
+        merged_metadata.update(metadata or {})
+        dataset = BenchmarkDataset(
+            X=_take_samples(self.X, index_array),
+            y=self.y[index_array],
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
     def summary(self) -> Dict[str, Any]:
         """Summarize the dataset for result metadata and reports.
 

@@ -244,6 +244,26 @@ def assert_within_memory(
     return budget
 
 
+def largest_fitting_subsample_rate(
+    required_bytes: int,
+    memory_config: MemoryConfig,
+) -> float:
+    """Estimate the largest sample fraction that fits the memory budget.
+
+    Args:
+        required_bytes: Estimated bytes for the full sample set.
+        memory_config: Memory configuration.
+
+    Returns:
+        Fraction in `(0, 1]` that should fit the configured budget.
+    """
+
+    if required_bytes < 1:
+        return 1.0
+    budget = resolve_memory_budget(memory_config)
+    return min(1.0, max(0.0, budget.max_memory_bytes / float(required_bytes)))
+
+
 def sparse_matrix_nbytes(matrix: Any) -> int:
     """Estimate resident bytes for an existing scipy sparse matrix."""
 

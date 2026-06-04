@@ -161,6 +161,14 @@ class MemoryConfig:
         probe_batch_size: Number of samples used to infer unknown embedding shape.
         model_memory_bytes: Optional model memory hint included in admission checks.
         raw_batch_memory_bytes: Optional raw batch memory hint included in checks.
+        subsample_rate: Fraction of samples to keep before embedding and scoring.
+            A value of `1.0` disables user-requested subsampling.
+        subsample_random_state: Seed used for deterministic stratified subsampling.
+        min_subsample_samples_per_class: Minimum retained samples per class when
+            class sizes allow it.
+        auto_subsample_on_memory_exceeded: Whether to warn and select the largest
+            fitting stratified subsample instead of raising when a full embedding
+            artifact would exceed memory.
     """
 
     max_memory_bytes: Optional[int] = None
@@ -171,6 +179,10 @@ class MemoryConfig:
     probe_batch_size: int = 4
     model_memory_bytes: int = 0
     raw_batch_memory_bytes: int = 0
+    subsample_rate: float = 1.0
+    subsample_random_state: int = 42
+    min_subsample_samples_per_class: int = 2
+    auto_subsample_on_memory_exceeded: bool = True
 
     def __post_init__(self) -> None:
         if self.max_memory_bytes is not None and self.max_memory_bytes < 1:
@@ -185,3 +197,7 @@ class MemoryConfig:
             raise ValueError("MemoryConfig.model_memory_bytes must be >= 0.")
         if self.raw_batch_memory_bytes < 0:
             raise ValueError("MemoryConfig.raw_batch_memory_bytes must be >= 0.")
+        if not 0.0 < self.subsample_rate <= 1.0:
+            raise ValueError("MemoryConfig.subsample_rate must be in (0, 1].")
+        if self.min_subsample_samples_per_class < 1:
+            raise ValueError("MemoryConfig.min_subsample_samples_per_class must be >= 1.")
