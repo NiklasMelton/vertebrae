@@ -85,6 +85,28 @@ Future distributed embedding jobs can use `ShardSpec` to split sample indices
 deterministically. Shards use index modulo partitioning, so workers receive
 non-overlapping samples and do not duplicate embedding work.
 
+Local artifact-backed sharding is available for CPU workers or staged GPU workflows:
+
+```python
+from vertebrae import LocalBackend
+from vertebrae.cache.local_store import LocalArtifactStore
+from vertebrae.execution import materialize_and_merge_embeddings
+
+store = LocalArtifactStore(".vertebrae_cache")
+manifest = materialize_and_merge_embeddings(
+    dataset=dataset,
+    extractor=extractor,
+    store=store,
+    execution=LocalBackend(n_jobs=4),
+    total_shards=4,
+    batch_size=128,
+)
+```
+
+The same shard workflow is exposed through the `vertebrae` CLI for HPC array jobs:
+`vertebrae plan`, `vertebrae embed-shard`, `vertebrae merge-embeddings`, and
+`vertebrae slurm-array`.
+
 `MemoryConfig` controls fail-fast memory admission. By default, `vertebrae` uses
 `psutil` to derive a conservative budget from currently available system memory. When
 an embedding dimension is not known ahead of time, streaming-safe extractors run a

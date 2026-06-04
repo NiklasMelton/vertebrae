@@ -216,7 +216,10 @@ class LocalArtifactStore:
     ) -> str:
         from scipy import sparse
 
-        rows = []
+        row_parts = []
+        col_parts = []
+        data_parts = []
+        n_features = None
         written = np.zeros(n_samples, dtype=bool)
         for indices, batch in batches:
             if not is_sparse_matrix(batch):
@@ -224,18 +227,34 @@ class LocalArtifactStore:
             indices = np.asarray(indices, dtype=int)
             if len(indices) != batch.shape[0]:
                 raise ValueError("Batch index count must match embedding row count.")
+            if n_features is None:
+                n_features = int(batch.shape[1])
+            elif int(batch.shape[1]) != n_features:
+                raise ValueError("Sparse embedding batches must have a consistent column count.")
             if np.any(written[indices]):
                 duplicates = indices[written[indices]]
                 raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
-            rows.append((indices, batch))
+            coo = batch.tocoo()
+            row_parts.append(indices[coo.row])
+            col_parts.append(coo.col)
+            data_parts.append(coo.data)
             written[indices] = True
         if require_complete and not bool(np.all(written)):
             missing = np.flatnonzero(~written)
             raise ValueError(
                 f"Embedding batches did not cover all samples; missing {missing[:10]}."
             )
-        rows.sort(key=lambda item: int(item[0][0]) if len(item[0]) else -1)
-        matrix = sparse.vstack([batch for _indices, batch in rows], format="csr")
+        if n_features is None:
+            raise ValueError("At least one sparse embedding batch is required.")
+        if row_parts:
+            row = np.concatenate(row_parts)
+            col = np.concatenate(col_parts)
+            data = np.concatenate(data_parts)
+        else:
+            row = np.array([], dtype=int)
+            col = np.array([], dtype=int)
+            data = np.array([], dtype=float)
+        matrix = sparse.csr_matrix((data, (row, col)), shape=(n_samples, n_features))
         target = path / "embeddings.npz"
         sparse.save_npz(target, matrix)
         return str(target)

@@ -13,7 +13,23 @@ from vertebrae.config import (
 )
 from vertebrae.datasets import BenchmarkDataset
 from vertebrae.evaluator import Evaluator
-from vertebrae.execution import EmbeddingJob, SampleBatch, ShardSpec
+from vertebrae.execution import (
+    EmbeddingJob,
+    EmbeddingMergeJob,
+    EmbeddingShardJob,
+    LocalBackend,
+    ResourceSpec,
+    SampleBatch,
+    ScoringJob,
+    ShardSpec,
+    embedding_artifact_key,
+    embedding_shard_key,
+    materialize_and_merge_embeddings,
+    materialize_embedding_shard,
+    materialize_embedding_shards,
+    merge_embedding_shards,
+    plan_embedding_shard_jobs,
+)
 from vertebrae.results import BenchmarkResult, ExtractorResult
 
 __all__ = [
@@ -23,12 +39,24 @@ __all__ = [
     "CacheConfig",
     "EmbeddingConfig",
     "EmbeddingJob",
+    "EmbeddingMergeJob",
+    "EmbeddingShardJob",
     "Evaluator",
     "ExtractorResult",
+    "LocalBackend",
     "MemoryConfig",
     "OverlapScoringConfig",
     "ProbeConfig",
+    "ResourceSpec",
     "SampleBatch",
+    "ScoringJob",
     "ShardSpec",
     "StabilityConfig",
+    "embedding_artifact_key",
+    "embedding_shard_key",
+    "materialize_and_merge_embeddings",
+    "materialize_embedding_shard",
+    "materialize_embedding_shards",
+    "merge_embedding_shards",
+    "plan_embedding_shard_jobs",
 ]
