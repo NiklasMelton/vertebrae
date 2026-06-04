@@ -103,6 +103,10 @@ manifest = materialize_and_merge_embeddings(
 )
 ```
 
+The same shard workflow is exposed through the `vertebrae` CLI for HPC array jobs:
+`vertebrae plan`, `vertebrae embed-shard`, `vertebrae merge-embeddings`, and
+`vertebrae slurm-array`.
+
 `MemoryConfig` controls fail-fast memory admission. By default, `vertebrae` uses
 `psutil` to derive a conservative budget from currently available system memory. When
 an embedding dimension is not known ahead of time, streaming-safe extractors run a
