@@ -10,12 +10,17 @@ from typing import Any, Optional, Sequence
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.execution import (
     EmbeddingMergeJob,
+    ScoringJob,
     ShardSpec,
     embedding_artifact_key,
     embedding_shard_key,
+    labels_artifact_key,
     materialize_embedding_shard,
+    materialize_label_artifact,
     merge_embedding_shards,
     plan_embedding_shard_jobs,
+    score_embedding_artifact,
+    scoring_artifact_key,
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
 
@@ -75,6 +80,24 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--output-json")
     merge.set_defaults(func=_cmd_merge_embeddings)
 
+    labels = subparsers.add_parser("write-labels", help="Materialize dataset labels.")
+    labels.add_argument("--dataset-pickle", required=True)
+    _add_cache_arg(labels)
+    labels.add_argument("--output-key")
+    labels.add_argument("--output-json")
+    labels.set_defaults(func=_cmd_write_labels)
+
+    score = subparsers.add_parser("score", help="Score persisted embeddings and labels.")
+    _add_cache_arg(score)
+    score.add_argument("--embedding-key")
+    score.add_argument("--labels-key")
+    score.add_argument("--output-key")
+    score.add_argument("--plan-json")
+    score.add_argument("--scoring-config-pickle")
+    score.add_argument("--seed", type=int)
+    score.add_argument("--output-json")
+    score.set_defaults(func=_cmd_score)
+
     slurm = subparsers.add_parser("slurm-array", help="Generate a SLURM array script.")
     _add_object_args(slurm)
     _add_cache_arg(slurm)
@@ -109,6 +132,8 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "cache_dir": args.cache_dir,
         "base_key": base_key,
         "output_key": base_key,
+        "labels_key": labels_artifact_key(dataset),
+        "score_key": scoring_artifact_key(base_key),
         "n_samples": int(len(dataset.y)),
         "total_shards": args.total_shards,
         "batch_size": args.batch_size,
@@ -162,6 +187,39 @@ def _cmd_merge_embeddings(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_write_labels(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    return materialize_label_artifact(
+        dataset,
+        LocalArtifactStore(args.cache_dir),
+        key=args.output_key,
+    )
+
+
+def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
+    plan = _load_json(args.plan_json) if args.plan_json else {}
+    embedding_key = args.embedding_key or plan.get("output_key")
+    labels_key = args.labels_key or plan.get("labels_key")
+    if embedding_key is None:
+        raise ValueError("score requires --embedding-key or --plan-json.")
+    if labels_key is None:
+        raise ValueError("score requires --labels-key or --plan-json.")
+    output_key = args.output_key or scoring_artifact_key(embedding_key, seed=args.seed)
+    scoring_config = (
+        _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
+    )
+    return score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_key,
+            labels_key=labels_key,
+            output_key=output_key,
+            scoring_config=scoring_config,
+            seed=args.seed,
+        ),
+        LocalArtifactStore(args.cache_dir),
+    )
+
+
 def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
@@ -169,6 +227,7 @@ def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
     script = _render_slurm_array_script(
         args=args,
         output_key=base_key,
+        labels_key=labels_artifact_key(dataset),
         n_samples=len(dataset.y),
     )
     target = Path(args.script_output)
@@ -186,6 +245,7 @@ def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
 def _render_slurm_array_script(
     args: argparse.Namespace,
     output_key: str,
+    labels_key: str,
     n_samples: int,
 ) -> str:
     lines = [
@@ -221,7 +281,20 @@ def _render_slurm_array_script(
         shard = ShardSpec(total_shards=args.total_shards, shard_index=shard_index)
         suffix = " \\" if shard_index < args.total_shards - 1 else ""
         lines.append(f"#   --shard-key {embedding_shard_key(output_key, shard)}{suffix}")
-    lines.append("")
+    lines.extend(
+        [
+            "#",
+            "# Then materialize labels and score:",
+            f"# {args.python_executable} -m vertebrae.cli write-labels \\",
+            f"#   --dataset-pickle {args.dataset_pickle} \\",
+            f"#   --cache-dir {args.cache_dir}",
+            f"# {args.python_executable} -m vertebrae.cli score \\",
+            f"#   --cache-dir {args.cache_dir} \\",
+            f"#   --embedding-key {output_key} \\",
+            f"#   --labels-key {labels_key}",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 

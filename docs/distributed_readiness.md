@@ -12,7 +12,7 @@ the same boundaries needed for future HPC, Ray, Dask, and multi-GPU backends:
 - `ExecutionBackend` supports `submit`, `gather`, `status`, and `map`, with only
   the local backend implemented.
 
-Future backends could shard embedding generation across workers, then submit scoring
+Distributed backends can shard embedding generation across workers, then submit scoring
 jobs over saved embedding and label artifacts. New extractors should keep deterministic
 row order, avoid hidden global state, and include all model/preprocessing settings in
 `recipe()`.
@@ -37,8 +37,9 @@ manifest = materialize_and_merge_embeddings(
 
 For HPC schedulers, each array task can run one `EmbeddingShardJob` using
 `materialize_embedding_shard(...)`; the final collection task runs
-`merge_embedding_shards(...)`. Ray and Dask adapters should submit the same job
-objects and use the same shard manifests.
+`merge_embedding_shards(...)`. Scoring jobs consume the merged embedding artifact and
+the label artifact through `score_embedding_artifact(...)`. Ray and Dask adapters
+should submit the same job objects and use the same manifests.
 
 The same flow is available from the CLI. First serialize a dataset and extractor with
 `pickle`, then plan, run shards, and merge:
@@ -61,6 +62,14 @@ vertebrae embed-shard \
   --batch-size 128
 
 vertebrae merge-embeddings \
+  --cache-dir .vertebrae_cache \
+  --plan-json plan.json
+
+vertebrae write-labels \
+  --dataset-pickle dataset.pkl \
+  --cache-dir .vertebrae_cache
+
+vertebrae score \
   --cache-dir .vertebrae_cache \
   --plan-json plan.json
 ```

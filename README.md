@@ -94,7 +94,12 @@ print(result.to_dataframe())
 - JSON and Markdown reports,
 - repeated-run stability analysis,
 - lightweight probe classifier checks,
-- local embedding caching and reproducible artifacts.
+- local embedding caching and reproducible artifacts,
+- artifact-backed distributed embedding and scoring through the `vertebrae` CLI.
+
+Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
+`vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae score`, and
+`vertebrae slurm-array`.
 
 ## Reports and Results
 

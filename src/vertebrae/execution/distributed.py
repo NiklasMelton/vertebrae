@@ -9,7 +9,8 @@ import numpy as np
 from vertebrae import __version__
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.execution.jobs import EmbeddingMergeJob, EmbeddingShardJob, ShardSpec
+from vertebrae.execution.jobs import EmbeddingMergeJob, EmbeddingShardJob, ScoringJob, ShardSpec
+from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
@@ -41,6 +42,34 @@ def embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
     """
 
     return f"{base_key}/shards/{shard.shard_index:05d}-of-{shard.total_shards:05d}"
+
+
+def labels_artifact_key(dataset: Any) -> str:
+    """Build the canonical label artifact key.
+
+    Args:
+        dataset: Dataset object with a `fingerprint()` method.
+
+    Returns:
+        Artifact key for labels.
+    """
+
+    return f"labels/{dataset.fingerprint()}"
+
+
+def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
+    """Build a scoring artifact key.
+
+    Args:
+        embedding_key: Complete embedding artifact key.
+        seed: Optional scoring seed.
+
+    Returns:
+        Artifact key for scoring output.
+    """
+
+    suffix = "default" if seed is None else f"seed-{seed}"
+    return f"{embedding_key}/scores/{suffix}"
 
 
 def plan_embedding_shard_jobs(
@@ -132,6 +161,96 @@ def materialize_and_merge_embeddings(
         ),
         store=store,
     )
+
+
+def materialize_label_artifact(
+    dataset: Any,
+    store: LocalArtifactStore,
+    key: Any = None,
+) -> dict[str, Any]:
+    """Materialize dataset labels as an artifact.
+
+    Args:
+        dataset: Dataset with labels.
+        store: Artifact store receiving labels.
+        key: Optional artifact key. Defaults to `labels_artifact_key(dataset)`.
+
+    Returns:
+        JSON-compatible label manifest.
+    """
+
+    output_key = key or labels_artifact_key(dataset)
+    artifact_path = store.put_labels(output_key, dataset.y)
+    manifest = {
+        "artifact_type": "labels",
+        "vertebrae_version": __version__,
+        "output_key": output_key,
+        "artifact_path": artifact_path,
+        "dataset_fingerprint": dataset.fingerprint(),
+        "n_samples": int(len(dataset.y)),
+        "dtype": str(np.asarray(dataset.y).dtype),
+        "class_counts": make_json_safe(dataset.class_counts()),
+    }
+    store.put_json(output_key, manifest)
+    return manifest
+
+
+def score_embedding_artifact(
+    job: ScoringJob,
+    store: LocalArtifactStore,
+) -> dict[str, Any]:
+    """Score a persisted embedding artifact against persisted labels.
+
+    Args:
+        job: Scoring job.
+        store: Artifact store containing inputs and receiving the score.
+
+    Returns:
+        JSON-compatible scoring artifact.
+    """
+
+    embeddings = store.get_array(job.embedding_key)
+    labels = store.get_labels(job.labels_key)
+    from vertebrae.config import OverlapScoringConfig
+    from vertebrae.scoring.overlap import OverlapIndexScorer
+
+    config = job.scoring_config or OverlapScoringConfig()
+    score = OverlapIndexScorer(config).score(embeddings, labels, seed=job.seed)
+    embedding_metadata = store.get_json(job.embedding_key)
+    label_metadata = store.get_json(job.labels_key)
+    artifact = {
+        "artifact_type": "overlap_score",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "embedding_key": job.embedding_key,
+        "labels_key": job.labels_key,
+        "seed": job.seed,
+        "score": score.to_dict(),
+        "embedding_metadata": embedding_metadata,
+        "label_metadata": label_metadata,
+        "resources": asdict(job.resources),
+    }
+    store.put_json(job.output_key, artifact)
+    return artifact
+
+
+def score_embedding_artifacts(
+    jobs: Iterable[ScoringJob],
+    store: LocalArtifactStore,
+    execution: Any,
+) -> list[dict[str, Any]]:
+    """Score persisted embeddings with an execution backend.
+
+    Args:
+        jobs: Scoring jobs.
+        store: Artifact store containing inputs and receiving outputs.
+        execution: Backend with a `map()` method.
+
+    Returns:
+        Scoring artifacts in job order.
+    """
+
+    return execution.map(partial(score_embedding_artifact, store=store), jobs)
 
 
 def materialize_embedding_shard(
