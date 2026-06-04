@@ -1,6 +1,8 @@
 """Execution backends."""
 
 from vertebrae.execution.distributed import (
+    benchmark_result_from_artifacts,
+    collect_score_artifacts,
     embedding_artifact_key,
     embedding_shard_key,
     labels_artifact_key,
@@ -10,9 +12,11 @@ from vertebrae.execution.distributed import (
     materialize_label_artifact,
     merge_embedding_shards,
     plan_embedding_shard_jobs,
+    plan_scoring_jobs,
     score_embedding_artifact,
     score_embedding_artifacts,
     scoring_artifact_key,
+    validate_embedding_label_artifacts,
 )
 from vertebrae.execution.jobs import (
     EmbeddingJob,
@@ -37,6 +41,8 @@ __all__ = [
     "ShardSpec",
     "embedding_artifact_key",
     "embedding_shard_key",
+    "benchmark_result_from_artifacts",
+    "collect_score_artifacts",
     "labels_artifact_key",
     "materialize_and_merge_embeddings",
     "materialize_embedding_shard",
@@ -44,7 +50,9 @@ __all__ = [
     "materialize_label_artifact",
     "merge_embedding_shards",
     "plan_embedding_shard_jobs",
+    "plan_scoring_jobs",
     "score_embedding_artifact",
     "score_embedding_artifacts",
     "scoring_artifact_key",
+    "validate_embedding_label_artifacts",
 ]

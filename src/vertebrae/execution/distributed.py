@@ -2,7 +2,7 @@
 
 from dataclasses import asdict
 from functools import partial
-from typing import Any, Iterable, Iterator, Tuple
+from typing import Any, Iterable, Iterator, Optional, Tuple
 
 import numpy as np
 
@@ -209,6 +209,11 @@ def score_embedding_artifact(
         JSON-compatible scoring artifact.
     """
 
+    embedding_metadata, label_metadata = validate_embedding_label_artifacts(
+        store,
+        embedding_key=job.embedding_key,
+        labels_key=job.labels_key,
+    )
     embeddings = store.get_array(job.embedding_key)
     labels = store.get_labels(job.labels_key)
     from vertebrae.config import OverlapScoringConfig
@@ -216,8 +221,6 @@ def score_embedding_artifact(
 
     config = job.scoring_config or OverlapScoringConfig()
     score = OverlapIndexScorer(config).score(embeddings, labels, seed=job.seed)
-    embedding_metadata = store.get_json(job.embedding_key)
-    label_metadata = store.get_json(job.labels_key)
     artifact = {
         "artifact_type": "overlap_score",
         "vertebrae_version": __version__,
@@ -251,6 +254,229 @@ def score_embedding_artifacts(
     """
 
     return execution.map(partial(score_embedding_artifact, store=store), jobs)
+
+
+def validate_embedding_label_artifacts(
+    store: LocalArtifactStore,
+    embedding_key: str,
+    labels_key: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate that embedding and label artifacts can be scored together.
+
+    Args:
+        store: Artifact store containing the artifacts.
+        embedding_key: Complete embedding artifact key.
+        labels_key: Label artifact key.
+
+    Returns:
+        Embedding and label manifests.
+
+    Raises:
+        ValueError: If metadata is incompatible.
+    """
+
+    embedding_metadata = store.get_json(embedding_key)
+    label_metadata = store.get_json(labels_key)
+    embedding_rows = int(embedding_metadata.get("n_samples", -1))
+    label_rows = int(label_metadata.get("n_samples", -2))
+    if embedding_rows != label_rows:
+        raise ValueError(
+            "Embedding and label artifacts have different row counts; "
+            f"got {embedding_rows} and {label_rows}."
+        )
+    embedding_fingerprint = embedding_metadata.get("dataset_fingerprint")
+    label_fingerprint = label_metadata.get("dataset_fingerprint")
+    if embedding_fingerprint and label_fingerprint and embedding_fingerprint != label_fingerprint:
+        raise ValueError("Embedding and label artifacts have different dataset fingerprints.")
+    return embedding_metadata, label_metadata
+
+
+def plan_scoring_jobs(
+    embedding_key: str,
+    labels_key: str,
+    seeds: Iterable[Optional[int]],
+    scoring_config: Any = None,
+) -> list[ScoringJob]:
+    """Create scoring jobs for one embedding and label artifact pair.
+
+    Args:
+        embedding_key: Complete embedding artifact key.
+        labels_key: Label artifact key.
+        seeds: Seeds for scoring jobs. Use `None` for the default single score.
+        scoring_config: Optional scoring configuration shared by all jobs.
+
+    Returns:
+        Scoring jobs with canonical output keys.
+    """
+
+    return [
+        ScoringJob(
+            embedding_key=embedding_key,
+            labels_key=labels_key,
+            output_key=scoring_artifact_key(embedding_key, seed=seed),
+            scoring_config=scoring_config,
+            seed=seed,
+        )
+        for seed in seeds
+    ]
+
+
+def collect_score_artifacts(
+    score_keys: Iterable[str],
+    store: LocalArtifactStore,
+    output_key: str,
+    interval_level: float = 0.95,
+) -> dict[str, Any]:
+    """Collect scoring artifacts into a stability-style summary.
+
+    Args:
+        score_keys: Score artifact keys to aggregate.
+        store: Artifact store containing score artifacts.
+        output_key: Artifact key for the collection summary.
+        interval_level: Percentile interval level for summary statistics.
+
+    Returns:
+        JSON-compatible score collection artifact.
+    """
+
+    artifacts = [store.get_json(key) for key in score_keys]
+    if not artifacts:
+        raise ValueError("At least one score artifact is required.")
+    scores = [float(artifact["score"]["macro_score"]) for artifact in artifacts]
+    warnings = sorted(
+        {
+            warning
+            for artifact in artifacts
+            for warning in artifact.get("score", {}).get("warnings", [])
+        }
+    )
+    seeds = [artifact.get("seed") for artifact in artifacts]
+    collection = {
+        "artifact_type": "score_collection",
+        "vertebrae_version": __version__,
+        "output_key": output_key,
+        "score_keys": list(score_keys),
+        "scores": scores,
+        "seeds": seeds,
+        "summary": _score_summary(scores, interval_level),
+        "interval_level": interval_level,
+        "warnings": warnings,
+        "embedding_key": artifacts[0].get("embedding_key"),
+        "labels_key": artifacts[0].get("labels_key"),
+    }
+    store.put_json(output_key, collection)
+    return collection
+
+
+def benchmark_result_from_artifacts(
+    score_key: str,
+    store: LocalArtifactStore,
+    output_key: Optional[str] = None,
+    stability_key: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build and optionally persist a benchmark-style result from artifacts.
+
+    Args:
+        score_key: Score artifact key.
+        store: Artifact store containing score and source artifacts.
+        output_key: Optional result artifact key.
+        stability_key: Optional score collection key to use as stability metadata.
+
+    Returns:
+        JSON-compatible benchmark result.
+    """
+
+    from vertebrae.reports.recommendations import (
+        recommendation_for_extractor,
+        recommendations_for_benchmark,
+    )
+    from vertebrae.results import BenchmarkResult, ExtractorResult
+    from vertebrae.scoring.overlap import OverlapScoreResult
+
+    score_artifact = store.get_json(score_key)
+    score_data = score_artifact["score"]
+    embedding_metadata = score_artifact.get("embedding_metadata", {})
+    label_metadata = score_artifact.get("label_metadata", {})
+    stability = store.get_json(stability_key) if stability_key else None
+    weakest_class, weakest_score = _weakest_class(score_data.get("per_class_scores", {}))
+    overlap = OverlapScoreResult(
+        macro_score=float(score_data["macro_score"]),
+        per_class_scores=score_data.get("per_class_scores", {}),
+        pairwise_scores=score_data.get("pairwise_scores", {}),
+        sparse_adjacency=score_data.get("sparse_adjacency"),
+        class_counts=score_data.get("class_counts", {}),
+        k_per_class=score_data.get("k_per_class", {}),
+        warnings=score_data.get("warnings", []),
+        metadata=score_data.get("metadata", {}),
+    )
+    recommendation = recommendation_for_extractor(overlap.macro_score, stability, weakest_score)
+    extractor_result = ExtractorResult(
+        name=embedding_metadata.get("extractor_recipe", {}).get(
+            "name",
+            embedding_metadata.get("extractor_name", "artifact"),
+        ),
+        extractor_type=embedding_metadata.get("extractor_recipe", {}).get(
+            "extractor_type",
+            embedding_metadata.get("extractor_type", "artifact"),
+        ),
+        overlap=overlap,
+        stability=stability,
+        probes=None,
+        embedding_metadata=embedding_metadata,
+        runtime={},
+        warnings=sorted(set(score_data.get("warnings", []))),
+        weakest_class=weakest_class,
+        weakest_class_score=weakest_score,
+        recommendation=recommendation,
+    )
+    result = BenchmarkResult(
+        dataset_summary={
+            "n_samples": label_metadata.get("n_samples", embedding_metadata.get("n_samples")),
+            "n_classes": len(label_metadata.get("class_counts", {})),
+            "class_counts": label_metadata.get("class_counts", {}),
+            "modality": embedding_metadata.get("modality", "artifact"),
+        },
+        extractor_results=[extractor_result],
+        recommendations=recommendations_for_benchmark([extractor_result]),
+        metadata={
+            "vertebrae_version": __version__,
+            "source_score_key": score_key,
+            "source_stability_key": stability_key,
+            "distributed_artifacts": True,
+        },
+    )
+    payload = result.to_dict()
+    if output_key:
+        store.put_json(output_key, payload)
+    return payload
+
+
+def _score_summary(scores: list[float], interval_level: float) -> dict[str, float]:
+    arr = np.asarray(scores, dtype=float)
+    alpha = 1.0 - interval_level
+    lower_q = 100.0 * alpha / 2.0
+    upper_q = 100.0 * (1.0 - alpha / 2.0)
+    return {
+        "mean": float(np.mean(arr)),
+        "std": float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0,
+        "min": float(np.min(arr)),
+        "max": float(np.max(arr)),
+        "lower": float(np.percentile(arr, lower_q)),
+        "upper": float(np.percentile(arr, upper_q)),
+        "width": float(np.percentile(arr, upper_q) - np.percentile(arr, lower_q)),
+    }
+
+
+def _weakest_class(per_class_scores: dict[str, Any]) -> tuple[Optional[str], Optional[float]]:
+    numeric = {
+        str(label): float(score)
+        for label, score in per_class_scores.items()
+        if isinstance(score, (int, float, np.number))
+    }
+    if not numeric:
+        return None, None
+    label, score = min(numeric.items(), key=lambda item: item[1])
+    return label, score
 
 
 def materialize_embedding_shard(

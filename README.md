@@ -99,7 +99,8 @@ print(result.to_dataframe())
 
 Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
 `vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae score`, and
-`vertebrae slurm-array`.
+`vertebrae score-repeats`, `vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
+`vertebrae slurm-array`, and `vertebrae slurm-score-array`.
 
 ## Reports and Results
 

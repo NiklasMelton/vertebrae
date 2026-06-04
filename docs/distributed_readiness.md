@@ -72,6 +72,24 @@ vertebrae write-labels \
 vertebrae score \
   --cache-dir .vertebrae_cache \
   --plan-json plan.json
+
+vertebrae score-repeats \
+  --cache-dir .vertebrae_cache \
+  --plan-json plan.json \
+  --repeats 20 \
+  --output-json score_repeats.json
+
+vertebrae collect-scores \
+  --cache-dir .vertebrae_cache \
+  --score-plan-json score_repeats.json \
+  --output-key "$(jq -r .output_key plan.json)/scores/stability"
+
+vertebrae benchmark-from-artifacts \
+  --cache-dir .vertebrae_cache \
+  --score-key "$(jq -r .score_key plan.json)" \
+  --stability-key "$(jq -r .output_key plan.json)/scores/stability" \
+  --json-output result.json \
+  --markdown-output report.md
 ```
 
 For SLURM, generate an array script:
@@ -90,8 +108,9 @@ vertebrae slurm-array \
   --cpus-per-task 4
 ```
 
-Submit the script with `sbatch vertebrae_embed.sbatch`, then run the merge command
-shown in the generated script after the array completes.
+Submit the script with `sbatch vertebrae_embed.sbatch`, then run the merge, label,
+score, and optional score-array commands shown in the generated script after the
+array completes.
 
 `ShardSpec` partitions samples by index modulo the total shard count. This gives
 future distributed workers disjoint sample sets and prevents duplicate embedding work
