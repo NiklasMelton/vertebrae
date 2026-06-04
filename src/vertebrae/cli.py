@@ -14,6 +14,7 @@ from vertebrae.execution import (
     ShardSpec,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
+    create_execution_backend,
     embedding_artifact_key,
     embedding_shard_key,
     labels_artifact_key,
@@ -62,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(plan)
     plan.add_argument("--total-shards", type=int, required=True)
     plan.add_argument("--batch-size", type=int, default=128)
+    _add_backend_args(plan, include_local_parallel=True)
     plan.add_argument("--output-json")
     plan.set_defaults(func=_cmd_plan)
 
@@ -111,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     repeats.add_argument("--repeats", type=int)
     repeats.add_argument("--random-state", type=int, default=42)
     repeats.add_argument("--scoring-config-pickle")
+    _add_backend_args(repeats, include_local_parallel=True)
     repeats.add_argument("--output-json")
     repeats.set_defaults(func=_cmd_score_repeats)
 
@@ -171,6 +174,18 @@ def build_parser() -> argparse.ArgumentParser:
     slurm_score.add_argument("--output-json")
     slurm_score.set_defaults(func=_cmd_slurm_score_array)
 
+    run_embed = subparsers.add_parser(
+        "run-embedding-shards",
+        help="Run embedding shards with the selected execution backend.",
+    )
+    _add_object_args(run_embed)
+    _add_cache_arg(run_embed)
+    run_embed.add_argument("--total-shards", type=int, required=True)
+    run_embed.add_argument("--batch-size", type=int, default=128)
+    _add_backend_args(run_embed, include_local_parallel=True)
+    run_embed.add_argument("--output-json")
+    run_embed.set_defaults(func=_cmd_run_embedding_shards)
+
     return parser
 
 
@@ -195,6 +210,7 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "n_samples": int(len(dataset.y)),
         "total_shards": args.total_shards,
         "batch_size": args.batch_size,
+        "backend": args.backend,
         "shard_jobs": [
             {
                 "total_shards": job.shard.total_shards,
@@ -290,11 +306,11 @@ def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
         seeds=seeds,
         scoring_config=scoring_config,
     )
-    from vertebrae.execution import LocalBackend
-
-    artifacts = score_embedding_artifacts(jobs, LocalArtifactStore(args.cache_dir), LocalBackend())
+    backend = _create_backend_from_args(args)
+    artifacts = score_embedding_artifacts(jobs, LocalArtifactStore(args.cache_dir), backend)
     return {
         "artifact_type": "score_plan",
+        "backend": args.backend,
         "embedding_key": embedding_key,
         "labels_key": labels_key,
         "score_keys": [artifact["output_key"] for artifact in artifacts],
@@ -362,6 +378,31 @@ def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
         "n_samples": int(len(dataset.y)),
         "total_shards": args.total_shards,
         "batch_size": args.batch_size,
+    }
+
+
+def _cmd_run_embedding_shards(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    jobs = plan_embedding_shard_jobs(
+        dataset=dataset,
+        extractor=extractor,
+        total_shards=args.total_shards,
+        batch_size=args.batch_size,
+    )
+    backend = _create_backend_from_args(args)
+    from vertebrae.execution import materialize_embedding_shards
+
+    manifests = materialize_embedding_shards(
+        jobs=jobs,
+        store=LocalArtifactStore(args.cache_dir),
+        execution=backend,
+    )
+    return {
+        "artifact_type": "embedding_shard_plan",
+        "backend": args.backend,
+        "shard_keys": [manifest["output_key"] for manifest in manifests],
+        "n_shards": len(manifests),
     }
 
 
@@ -492,6 +533,18 @@ def _add_cache_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cache-dir", default=".vertebrae_cache")
 
 
+def _add_backend_args(
+    parser: argparse.ArgumentParser,
+    include_local_parallel: bool = False,
+) -> None:
+    parser.add_argument("--backend", choices=["local", "ray", "dask"], default="local")
+    parser.add_argument("--ray-address")
+    parser.add_argument("--dask-address")
+    if include_local_parallel:
+        parser.add_argument("--n-jobs", type=int, default=1)
+        parser.add_argument("--joblib-backend", default="loky")
+
+
 def _load_pickle(path: str) -> Any:
     with Path(path).open("rb") as f:
         return pickle.load(f)
@@ -500,6 +553,16 @@ def _load_pickle(path: str) -> Any:
 def _load_json(path: str) -> dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _create_backend_from_args(args: argparse.Namespace) -> Any:
+    return create_execution_backend(
+        args.backend,
+        n_jobs=getattr(args, "n_jobs", 1),
+        joblib_backend=getattr(args, "joblib_backend", "loky"),
+        ray_address=getattr(args, "ray_address", None),
+        dask_address=getattr(args, "dask_address", None),
+    )
 
 
 def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]:

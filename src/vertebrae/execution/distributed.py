@@ -121,7 +121,10 @@ def materialize_embedding_shards(
         Shard manifests in job order.
     """
 
-    return execution.map(partial(materialize_embedding_shard, store=store), jobs)
+    return execution.map(
+        partial(_materialize_embedding_shard_job, cache_dir=str(store.root)),
+        jobs,
+    )
 
 
 def materialize_and_merge_embeddings(
@@ -253,7 +256,10 @@ def score_embedding_artifacts(
         Scoring artifacts in job order.
     """
 
-    return execution.map(partial(score_embedding_artifact, store=store), jobs)
+    return execution.map(
+        partial(_score_embedding_artifact_job, cache_dir=str(store.root)),
+        jobs,
+    )
 
 
 def validate_embedding_label_artifacts(
@@ -477,6 +483,14 @@ def _weakest_class(per_class_scores: dict[str, Any]) -> tuple[Optional[str], Opt
         return None, None
     label, score = min(numeric.items(), key=lambda item: item[1])
     return label, score
+
+
+def _materialize_embedding_shard_job(job: EmbeddingShardJob, cache_dir: str) -> dict[str, Any]:
+    return materialize_embedding_shard(job, LocalArtifactStore(cache_dir))
+
+
+def _score_embedding_artifact_job(job: ScoringJob, cache_dir: str) -> dict[str, Any]:
+    return score_embedding_artifact(job, LocalArtifactStore(cache_dir))
 
 
 def materialize_embedding_shard(

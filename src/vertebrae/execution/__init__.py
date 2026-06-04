@@ -1,5 +1,6 @@
 """Execution backends."""
 
+from vertebrae.execution.dask_backend import DaskBackend, DaskJobHandle
 from vertebrae.execution.distributed import (
     benchmark_result_from_artifacts,
     collect_score_artifacts,
@@ -18,6 +19,7 @@ from vertebrae.execution.distributed import (
     scoring_artifact_key,
     validate_embedding_label_artifacts,
 )
+from vertebrae.execution.factory import create_execution_backend
 from vertebrae.execution.jobs import (
     EmbeddingJob,
     EmbeddingMergeJob,
@@ -28,13 +30,18 @@ from vertebrae.execution.jobs import (
     ShardSpec,
 )
 from vertebrae.execution.local import LocalBackend, LocalJobHandle
+from vertebrae.execution.ray_backend import RayBackend, RayJobHandle
 
 __all__ = [
+    "DaskBackend",
+    "DaskJobHandle",
     "EmbeddingJob",
     "EmbeddingMergeJob",
     "EmbeddingShardJob",
     "LocalBackend",
     "LocalJobHandle",
+    "RayBackend",
+    "RayJobHandle",
     "ResourceSpec",
     "SampleBatch",
     "ScoringJob",
@@ -55,4 +62,5 @@ __all__ = [
     "score_embedding_artifacts",
     "scoring_artifact_key",
     "validate_embedding_label_artifacts",
+    "create_execution_backend",
 ]

@@ -14,16 +14,19 @@ from vertebrae.config import (
 from vertebrae.datasets import BenchmarkDataset
 from vertebrae.evaluator import Evaluator
 from vertebrae.execution import (
+    DaskBackend,
     EmbeddingJob,
     EmbeddingMergeJob,
     EmbeddingShardJob,
     LocalBackend,
+    RayBackend,
     ResourceSpec,
     SampleBatch,
     ScoringJob,
     ShardSpec,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
+    create_execution_backend,
     embedding_artifact_key,
     embedding_shard_key,
     labels_artifact_key,
@@ -46,6 +49,7 @@ __all__ = [
     "BenchmarkDataset",
     "BenchmarkResult",
     "CacheConfig",
+    "DaskBackend",
     "EmbeddingConfig",
     "EmbeddingJob",
     "EmbeddingMergeJob",
@@ -56,6 +60,7 @@ __all__ = [
     "MemoryConfig",
     "OverlapScoringConfig",
     "ProbeConfig",
+    "RayBackend",
     "ResourceSpec",
     "SampleBatch",
     "ScoringJob",
@@ -77,4 +82,5 @@ __all__ = [
     "score_embedding_artifacts",
     "scoring_artifact_key",
     "validate_embedding_label_artifacts",
+    "create_execution_backend",
 ]

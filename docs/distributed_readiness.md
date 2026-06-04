@@ -38,8 +38,11 @@ manifest = materialize_and_merge_embeddings(
 For HPC schedulers, each array task can run one `EmbeddingShardJob` using
 `materialize_embedding_shard(...)`; the final collection task runs
 `merge_embedding_shards(...)`. Scoring jobs consume the merged embedding artifact and
-the label artifact through `score_embedding_artifact(...)`. Ray and Dask adapters
-should submit the same job objects and use the same manifests.
+the label artifact through `score_embedding_artifact(...)`. Ray and Dask backends
+submit the same job objects and use the same manifests.
+
+For Ray or Dask clusters, `cache_dir` must be on a shared filesystem visible to every
+worker. This implementation does not add S3/GCS object stores yet.
 
 The same flow is available from the CLI. First serialize a dataset and extractor with
 `pickle`, then plan, run shards, and merge:
@@ -77,6 +80,7 @@ vertebrae score-repeats \
   --cache-dir .vertebrae_cache \
   --plan-json plan.json \
   --repeats 20 \
+  --backend local \
   --output-json score_repeats.json
 
 vertebrae collect-scores \
@@ -90,6 +94,25 @@ vertebrae benchmark-from-artifacts \
   --stability-key "$(jq -r .output_key plan.json)/scores/stability" \
   --json-output result.json \
   --markdown-output report.md
+
+To execute shards or score repeats through Ray or Dask instead of the local backend:
+
+```bash
+vertebrae run-embedding-shards \
+  --dataset-pickle dataset.pkl \
+  --extractor-pickle extractor.pkl \
+  --cache-dir /shared/vertebrae_cache \
+  --total-shards 8 \
+  --backend ray \
+  --ray-address auto
+
+vertebrae score-repeats \
+  --cache-dir /shared/vertebrae_cache \
+  --plan-json plan.json \
+  --repeats 20 \
+  --backend dask \
+  --dask-address tcp://scheduler:8786
+```
 ```
 
 For SLURM, generate an array script:

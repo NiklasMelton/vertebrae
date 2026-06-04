@@ -22,6 +22,14 @@ Optional Hugging Face and sentence-transformers support:
 pip install "vertebrae[hf]"
 ```
 
+Optional distributed execution backends:
+
+```bash
+pip install "vertebrae[ray]"
+pip install "vertebrae[dask]"
+pip install "vertebrae[distributed]"
+```
+
 ## Quick Start
 
 ### Precomputed embeddings
@@ -96,11 +104,15 @@ print(result.to_dataframe())
 - lightweight probe classifier checks,
 - local embedding caching and reproducible artifacts,
 - artifact-backed distributed embedding and scoring through the `vertebrae` CLI.
+- optional Ray and Dask backends for shared-filesystem distributed execution.
 
 Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
 `vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae score`, and
 `vertebrae score-repeats`, `vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
-`vertebrae slurm-array`, and `vertebrae slurm-score-array`.
+`vertebrae slurm-array`, `vertebrae slurm-score-array`, and `vertebrae run-embedding-shards`.
+
+For Ray or Dask cluster runs, the configured `cache_dir` must be visible to every
+worker because artifacts are exchanged through the shared filesystem in this pass.
 
 ## Reports and Results
 
@@ -135,7 +147,10 @@ These workflows rely on optional dependencies and lazy imports, so the core pack
 
 ## Command Line Interface
 
-`vertebrae` includes a CLI for deterministic embedding shard planning and artifact merging in local or batch-style workflows. Run `vertebrae --help` to see the available commands.
+`vertebrae` includes a CLI for deterministic embedding shard planning and artifact
+merging in local or batch-style workflows. Distributed orchestration commands accept
+`--backend local|ray|dask`, with `--ray-address` and `--dask-address` available for
+cluster connections. Run `vertebrae --help` to see the available commands.
 
 ## Notes
 

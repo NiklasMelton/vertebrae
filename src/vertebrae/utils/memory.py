@@ -88,7 +88,15 @@ def resolve_memory_budget(config: MemoryConfig) -> MemoryBudget:
     if config.max_memory_bytes is not None:
         limit = int(config.max_memory_bytes)
     else:
-        limit = int(min(available * config.max_fraction, max(1, available - reserve)))
+        headroom = available - reserve
+        if headroom > 0:
+            limit = int(min(available * config.max_fraction, headroom))
+        else:
+            # Some constrained or containerized environments report very low
+            # currently available memory relative to total system reserve.
+            # Fall back to a fraction of available memory instead of collapsing
+            # the budget to a single byte.
+            limit = int(max(1, available * config.max_fraction))
     return MemoryBudget(
         total_bytes=total,
         available_bytes=available,
