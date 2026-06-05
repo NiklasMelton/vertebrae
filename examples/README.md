@@ -34,9 +34,9 @@ Each script writes reports to `examples/output/`.
   on repeated runs.
 - `hf_text_extractor.py`: Hugging Face text backbone API example. Requires optional
   dependencies and a local or downloadable model.
-- `hf_vision_digits.py`: compare real scikit-learn handwritten digit images with
-  small real Hugging Face vision backbones. Requires optional dependencies and
-  local or downloadable models.
+- `hf_vision_kmnist.py`: compare KMNIST handwritten character images with small
+  real Hugging Face vision backbones. Requires optional dependencies and local or
+  downloadable data/models.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
 
@@ -47,5 +47,5 @@ Run the Hugging Face vision example after installing optional dependencies:
 
 ```bash
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E hf
-POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_digits.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_kmnist.py
 ```

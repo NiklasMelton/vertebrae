@@ -1,8 +1,8 @@
-"""Compare Hugging Face vision backbones on real handwritten digit images.
+"""Compare Hugging Face vision backbones on KMNIST character images.
 
-The digit images come from ``sklearn.datasets.load_digits`` so the data itself is
-available offline. The models are small real Hugging Face vision backbones; they
-must be present in the local Hugging Face cache or downloadable on first run.
+The images come from Kuzushiji-MNIST, a 28x28 grayscale handwritten Japanese
+character dataset. The dataset and models must be present in local Hugging Face
+caches or downloadable on first run.
 
 Install optional dependencies with:
 
@@ -11,22 +11,24 @@ Install optional dependencies with:
 
 import numpy as np
 from _common import CACHE_DIR, ensure_output_dir, print_ranking
-from sklearn.datasets import load_digits
 
 from vertebrae import Benchmark, BenchmarkDataset
 from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
 from vertebrae.extractors import HFVisionExtractor
 
+DATASET_ID = "tanganke/kmnist"
 MODEL_SPECS = (
     {
         "name": "deit_tiny_imagenet_cls",
         "model_id": "facebook/deit-tiny-patch16-224",
         "pooling": "cls",
+        "image_mode": "rgb",
     },
     {
-        "name": "resnet18_imagenet_pooler",
-        "model_id": "microsoft/resnet-18",
+        "name": "mnist_resnet_grayscale_pooler",
+        "model_id": "fxmarty/resnet-tiny-mnist",
         "pooling": "pooler",
+        "image_mode": "grayscale",
     },
 )
 
@@ -35,10 +37,14 @@ def main() -> None:
     output_dir = ensure_output_dir()
 
     try:
-        images, labels = _load_digit_images(digits=(0, 1, 2, 3), samples_per_digit=32)
+        images, labels = _load_kmnist_images(classes=(0, 1, 2, 3), samples_per_class=32)
     except ImportError as exc:
         print(exc)
         print("Install optional dependencies with: poetry install -E hf")
+        return
+    except OSError as exc:
+        print(f"Could not load KMNIST dataset '{DATASET_ID}': {exc}")
+        print("Use a local Hugging Face cache or run with network access for the first download.")
         return
 
     dataset = BenchmarkDataset.from_arrays(
@@ -46,8 +52,8 @@ def main() -> None:
         labels,
         modality="image",
         metadata={
-            "example": "hf_vision_digits",
-            "source": "sklearn.datasets.load_digits",
+            "example": "hf_vision_kmnist",
+            "source": DATASET_ID,
             "model_ids": [spec["model_id"] for spec in MODEL_SPECS],
         },
     )
@@ -66,6 +72,7 @@ def main() -> None:
                     name=spec["name"],
                     model_id=spec["model_id"],
                     pooling=spec["pooling"],
+                    image_mode=spec["image_mode"],
                     batch_size=8,
                 )
             )
@@ -79,38 +86,52 @@ def main() -> None:
         print("Use local model paths or run with network access for the first download.")
         return
 
-    result.save_json(str(output_dir / "hf_vision_digits.json"))
-    result.save_markdown(str(output_dir / "hf_vision_digits.md"))
+    result.save_json(str(output_dir / "hf_vision_kmnist.json"))
+    result.save_markdown(str(output_dir / "hf_vision_kmnist.md"))
     print_ranking(result)
     print(f"\nReports written to {output_dir}")
 
 
-def _load_digit_images(
-    digits: tuple[int, ...],
-    samples_per_digit: int,
+def _load_kmnist_images(
+    classes: tuple[int, ...],
+    samples_per_class: int,
 ) -> tuple[list[object], np.ndarray]:
     try:
-        from PIL import Image
+        from datasets import load_dataset
     except ImportError as exc:
         raise ImportError(
-            "hf_vision_digits.py requires Pillow, which is included in the hf extra."
+            "hf_vision_kmnist.py requires Hugging Face datasets, which is included "
+            "in the hf extra."
         ) from exc
 
-    data = load_digits()
+    data = load_dataset(DATASET_ID, split="train", streaming=True)
     images = []
     labels = []
-    for digit in digits:
-        digit_indices = np.flatnonzero(data.target == digit)[:samples_per_digit]
-        for index in digit_indices:
-            images.append(_digit_to_rgb_image(data.images[index], Image))
-            labels.append(str(digit))
+    counts = {label: 0 for label in classes}
+    for row in data:
+        label = int(row["label"])
+        if label not in counts or counts[label] >= samples_per_class:
+            continue
+        images.append(_image_to_uint8(row["image"]))
+        labels.append(f"class_{label}")
+        counts[label] += 1
+        if all(count >= samples_per_class for count in counts.values()):
+            break
+    missing = {
+        label: samples_per_class - count
+        for label, count in counts.items()
+        if count < samples_per_class
+    }
+    if missing:
+        raise ValueError(f"KMNIST split did not contain enough samples for classes: {missing}.")
     return images, np.asarray(labels)
 
 
-def _digit_to_rgb_image(image: np.ndarray, image_module: object) -> object:
-    scaled = np.clip((image / 16.0) * 255.0, 0, 255).astype(np.uint8)
-    pil_image = image_module.fromarray(scaled, mode="L")
-    return pil_image.resize((224, 224), resample=image_module.Resampling.BICUBIC).convert("RGB")
+def _image_to_uint8(image: object) -> np.ndarray:
+    array = np.asarray(image)
+    if array.ndim == 3 and array.shape[2] == 1:
+        array = array[:, :, 0]
+    return array.astype(np.uint8, copy=False)
 
 
 if __name__ == "__main__":
