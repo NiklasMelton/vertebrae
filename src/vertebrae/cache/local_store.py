@@ -6,6 +6,7 @@ from typing import Any, Iterable, Tuple
 
 import numpy as np
 
+from vertebrae.cache.artifact_store import ArtifactStoreConfig
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import is_sparse_matrix
 
@@ -19,6 +20,11 @@ class LocalArtifactStore:
 
     def __init__(self, root: str = ".vertebrae_cache") -> None:
         self.root = Path(root)
+
+    def config(self) -> ArtifactStoreConfig:
+        """Return a serializable config for reconstructing this store."""
+
+        return ArtifactStoreConfig(uri=str(self.root))
 
     def exists(self, key: str) -> bool:
         """Return whether an embedding artifact exists for `key`.

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from vertebrae.cache.local_store import LocalArtifactStore
+from vertebrae.cache import create_artifact_store
 from vertebrae.execution import (
     EmbeddingMergeJob,
     ScoringJob,
@@ -203,6 +203,7 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "dataset_pickle": str(Path(args.dataset_pickle)),
         "extractor_pickle": str(Path(args.extractor_pickle)),
         "cache_dir": args.cache_dir,
+        "storage_options": _artifact_store_options_from_args(args),
         "base_key": base_key,
         "output_key": base_key,
         "labels_key": labels_artifact_key(dataset),
@@ -237,7 +238,7 @@ def _cmd_embed_shard(args: argparse.Namespace) -> dict[str, Any]:
         output_key=output_key,
         batch_size=args.batch_size,
     )
-    return materialize_embedding_shard(job, LocalArtifactStore(args.cache_dir))
+    return materialize_embedding_shard(job, _store_from_args(args))
 
 
 def _cmd_merge_embeddings(args: argparse.Namespace) -> dict[str, Any]:
@@ -257,7 +258,7 @@ def _cmd_merge_embeddings(args: argparse.Namespace) -> dict[str, Any]:
             output_key=output_key,
             n_samples=int(n_samples),
         ),
-        LocalArtifactStore(args.cache_dir),
+        _store_from_args(args),
     )
 
 
@@ -265,7 +266,7 @@ def _cmd_write_labels(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     return materialize_label_artifact(
         dataset,
-        LocalArtifactStore(args.cache_dir),
+        _store_from_args(args),
         key=args.output_key,
     )
 
@@ -290,7 +291,7 @@ def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
             scoring_config=scoring_config,
             seed=args.seed,
         ),
-        LocalArtifactStore(args.cache_dir),
+        _store_from_args(args),
     )
 
 
@@ -307,10 +308,12 @@ def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
         scoring_config=scoring_config,
     )
     backend = _create_backend_from_args(args)
-    artifacts = score_embedding_artifacts(jobs, LocalArtifactStore(args.cache_dir), backend)
+    artifacts = score_embedding_artifacts(jobs, _store_from_args(args), backend)
     return {
         "artifact_type": "score_plan",
         "backend": args.backend,
+        "cache_dir": args.cache_dir,
+        "storage_options": _artifact_store_options_from_args(args),
         "embedding_key": embedding_key,
         "labels_key": labels_key,
         "score_keys": [artifact["output_key"] for artifact in artifacts],
@@ -325,7 +328,7 @@ def _cmd_collect_scores(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("collect-scores requires --score-key or --score-plan-json.")
     return collect_score_artifacts(
         score_keys=score_keys,
-        store=LocalArtifactStore(args.cache_dir),
+        store=_store_from_args(args),
         output_key=args.output_key,
         interval_level=args.interval_level,
     )
@@ -334,7 +337,7 @@ def _cmd_collect_scores(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
     result = benchmark_result_from_artifacts(
         score_key=args.score_key,
-        store=LocalArtifactStore(args.cache_dir),
+        store=_store_from_args(args),
         output_key=args.output_key,
         stability_key=args.stability_key,
     )
@@ -395,7 +398,7 @@ def _cmd_run_embedding_shards(args: argparse.Namespace) -> dict[str, Any]:
 
     manifests = materialize_embedding_shards(
         jobs=jobs,
-        store=LocalArtifactStore(args.cache_dir),
+        store=_store_from_args(args),
         execution=backend,
     )
     return {
@@ -446,6 +449,7 @@ def _render_slurm_array_script(
             f"  --dataset-pickle {args.dataset_pickle} \\",
             f"  --extractor-pickle {args.extractor_pickle} \\",
             f"  --cache-dir {args.cache_dir} \\",
+            *_cache_flag_lines(args),
             f"  --total-shards {args.total_shards} \\",
             "  --shard-index ${SLURM_ARRAY_TASK_ID} \\",
             f"  --batch-size {args.batch_size}",
@@ -453,6 +457,7 @@ def _render_slurm_array_script(
             "# After the array completes, merge the shards with:",
             f"# {args.python_executable} -m vertebrae.cli merge-embeddings \\",
             f"#   --cache-dir {args.cache_dir} \\",
+            *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
             f"#   --output-key {output_key} \\",
             f"#   --n-samples {n_samples} \\",
         ]
@@ -467,15 +472,18 @@ def _render_slurm_array_script(
             "# Then materialize labels and score:",
             f"# {args.python_executable} -m vertebrae.cli write-labels \\",
             f"#   --dataset-pickle {args.dataset_pickle} \\",
-            f"#   --cache-dir {args.cache_dir}",
+            f"#   --cache-dir {args.cache_dir} \\",
+            *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
             f"# {args.python_executable} -m vertebrae.cli score \\",
             f"#   --cache-dir {args.cache_dir} \\",
+            *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
             f"#   --embedding-key {output_key} \\",
             f"#   --labels-key {labels_key}",
             "#",
             "# For distributed stability scoring, generate a scoring array with:",
             f"# {args.python_executable} -m vertebrae.cli slurm-score-array \\",
             f"#   --cache-dir {args.cache_dir} \\",
+            *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
             f"#   --embedding-key {output_key} \\",
             f"#   --labels-key {labels_key} \\",
             "#   --repeats 20 \\",
@@ -507,6 +515,7 @@ def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int])
             "",
             f"{args.python_executable} -m vertebrae.cli score \\",
             f"  --cache-dir {args.cache_dir} \\",
+            *_cache_flag_lines(args),
             f"  --embedding-key {embedding_key} \\",
             f"  --labels-key {labels_key} \\",
             "  --seed ${SEED}",
@@ -514,6 +523,7 @@ def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int])
             "# After the array completes, collect scores with:",
             f"# {args.python_executable} -m vertebrae.cli collect-scores \\",
             f"#   --cache-dir {args.cache_dir} \\",
+            *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
             f"#   --output-key {embedding_key}/scores/stability \\",
         ]
     )
@@ -531,6 +541,10 @@ def _add_object_args(parser: argparse.ArgumentParser) -> None:
 
 def _add_cache_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cache-dir", default=".vertebrae_cache")
+    parser.add_argument("--s3-endpoint-url")
+    parser.add_argument("--s3-profile")
+    parser.add_argument("--s3-region")
+    parser.add_argument("--gcs-project")
 
 
 def _add_backend_args(
@@ -563,6 +577,40 @@ def _create_backend_from_args(args: argparse.Namespace) -> Any:
         ray_address=getattr(args, "ray_address", None),
         dask_address=getattr(args, "dask_address", None),
     )
+
+
+def _artifact_store_options_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    options = {}
+    for plan_path_attr in ("plan_json", "score_plan_json"):
+        plan_path = getattr(args, plan_path_attr, None)
+        if plan_path:
+            options.update(_load_json(plan_path).get("storage_options", {}))
+    options = {
+        **options,
+        "endpoint_url": getattr(args, "s3_endpoint_url", None),
+        "profile_name": getattr(args, "s3_profile", None),
+        "region_name": getattr(args, "s3_region", None),
+        "project": getattr(args, "gcs_project", None),
+    }
+    return {key: value for key, value in options.items() if value is not None}
+
+
+def _store_from_args(args: argparse.Namespace) -> Any:
+    return create_artifact_store(args.cache_dir, **_artifact_store_options_from_args(args))
+
+
+def _cache_flag_lines(args: argparse.Namespace, indent: bool = True) -> list[str]:
+    prefix = "  " if indent else ""
+    flags = []
+    if getattr(args, "s3_endpoint_url", None):
+        flags.append(f"{prefix}--s3-endpoint-url {args.s3_endpoint_url} \\")
+    if getattr(args, "s3_profile", None):
+        flags.append(f"{prefix}--s3-profile {args.s3_profile} \\")
+    if getattr(args, "s3_region", None):
+        flags.append(f"{prefix}--s3-region {args.s3_region} \\")
+    if getattr(args, "gcs_project", None):
+        flags.append(f"{prefix}--gcs-project {args.gcs_project} \\")
+    return flags
 
 
 def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]:
