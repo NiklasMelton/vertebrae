@@ -8,8 +8,8 @@ from typing import Any, Iterable, Iterator, List, Optional, Tuple
 import numpy as np
 
 from vertebrae import __version__
+from vertebrae.cache import ArtifactStore, create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
-from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
@@ -300,7 +300,10 @@ class Benchmark:
         dataset_key = dataset.fingerprint()
         extractor_key = fingerprint_extractor_recipe(recipe)
         cache_key = f"embeddings/{dataset_key}/{extractor_key}"
-        store = LocalArtifactStore(self.cache_config.cache_dir)
+        store = create_artifact_store(
+            self.cache_config.cache_dir,
+            **self.cache_config.storage_options,
+        )
 
         if (
             self.cache_config.enabled
@@ -365,7 +368,7 @@ class Benchmark:
         self,
         extractor: Any,
         dataset: Any,
-        store: LocalArtifactStore,
+        store: ArtifactStore,
         cache_key: str,
         recipe: dict,
         probe_plan: Optional[Tuple[SampleBatch, Any, EmbeddingMemoryEstimate]] = None,

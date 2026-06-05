@@ -108,18 +108,20 @@ class ProbeConfig:
 
 @dataclass
 class CacheConfig:
-    """Local embedding cache settings.
+    """Artifact cache settings.
 
     Attributes:
         enabled: Whether embedding artifacts should be cached.
-        cache_dir: Local directory for cached artifacts.
+        cache_dir: Local cache directory or artifact-store URI.
         force_recompute: Whether to ignore cache hits and recompute embeddings.
+        storage_options: Provider-specific store options such as S3 endpoint URLs.
         metadata: Additional user metadata to preserve with cache settings.
     """
 
     enabled: bool = True
     cache_dir: str = ".vertebrae_cache"
     force_recompute: bool = False
+    storage_options: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

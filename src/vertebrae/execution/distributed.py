@@ -7,8 +7,8 @@ from typing import Any, Iterable, Iterator, Optional, Tuple
 import numpy as np
 
 from vertebrae import __version__
+from vertebrae.cache import ArtifactStore, ArtifactStoreConfig, create_artifact_store_from_config
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
-from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.execution.jobs import EmbeddingMergeJob, EmbeddingShardJob, ScoringJob, ShardSpec
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
@@ -107,7 +107,7 @@ def plan_embedding_shard_jobs(
 
 def materialize_embedding_shards(
     jobs: Iterable[EmbeddingShardJob],
-    store: LocalArtifactStore,
+    store: ArtifactStore,
     execution: Any,
 ) -> list[dict[str, Any]]:
     """Materialize embedding shards with an execution backend.
@@ -122,7 +122,7 @@ def materialize_embedding_shards(
     """
 
     return execution.map(
-        partial(_materialize_embedding_shard_job, cache_dir=str(store.root)),
+        partial(_materialize_embedding_shard_job, store_config=store.config()),
         jobs,
     )
 
@@ -130,7 +130,7 @@ def materialize_embedding_shards(
 def materialize_and_merge_embeddings(
     dataset: Any,
     extractor: Any,
-    store: LocalArtifactStore,
+    store: ArtifactStore,
     execution: Any,
     total_shards: int,
     batch_size: int = 128,
@@ -168,7 +168,7 @@ def materialize_and_merge_embeddings(
 
 def materialize_label_artifact(
     dataset: Any,
-    store: LocalArtifactStore,
+    store: ArtifactStore,
     key: Any = None,
 ) -> dict[str, Any]:
     """Materialize dataset labels as an artifact.
@@ -200,7 +200,7 @@ def materialize_label_artifact(
 
 def score_embedding_artifact(
     job: ScoringJob,
-    store: LocalArtifactStore,
+    store: ArtifactStore,
 ) -> dict[str, Any]:
     """Score a persisted embedding artifact against persisted labels.
 
@@ -242,7 +242,7 @@ def score_embedding_artifact(
 
 def score_embedding_artifacts(
     jobs: Iterable[ScoringJob],
-    store: LocalArtifactStore,
+    store: ArtifactStore,
     execution: Any,
 ) -> list[dict[str, Any]]:
     """Score persisted embeddings with an execution backend.
@@ -257,13 +257,13 @@ def score_embedding_artifacts(
     """
 
     return execution.map(
-        partial(_score_embedding_artifact_job, cache_dir=str(store.root)),
+        partial(_score_embedding_artifact_job, store_config=store.config()),
         jobs,
     )
 
 
 def validate_embedding_label_artifacts(
-    store: LocalArtifactStore,
+    store: ArtifactStore,
     embedding_key: str,
     labels_key: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -329,7 +329,7 @@ def plan_scoring_jobs(
 
 def collect_score_artifacts(
     score_keys: Iterable[str],
-    store: LocalArtifactStore,
+    store: ArtifactStore,
     output_key: str,
     interval_level: float = 0.95,
 ) -> dict[str, Any]:
@@ -376,7 +376,7 @@ def collect_score_artifacts(
 
 def benchmark_result_from_artifacts(
     score_key: str,
-    store: LocalArtifactStore,
+    store: ArtifactStore,
     output_key: Optional[str] = None,
     stability_key: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -485,17 +485,23 @@ def _weakest_class(per_class_scores: dict[str, Any]) -> tuple[Optional[str], Opt
     return label, score
 
 
-def _materialize_embedding_shard_job(job: EmbeddingShardJob, cache_dir: str) -> dict[str, Any]:
-    return materialize_embedding_shard(job, LocalArtifactStore(cache_dir))
+def _materialize_embedding_shard_job(
+    job: EmbeddingShardJob,
+    store_config: ArtifactStoreConfig,
+) -> dict[str, Any]:
+    return materialize_embedding_shard(job, create_artifact_store_from_config(store_config))
 
 
-def _score_embedding_artifact_job(job: ScoringJob, cache_dir: str) -> dict[str, Any]:
-    return score_embedding_artifact(job, LocalArtifactStore(cache_dir))
+def _score_embedding_artifact_job(
+    job: ScoringJob,
+    store_config: ArtifactStoreConfig,
+) -> dict[str, Any]:
+    return score_embedding_artifact(job, create_artifact_store_from_config(store_config))
 
 
 def materialize_embedding_shard(
     job: EmbeddingShardJob,
-    store: LocalArtifactStore,
+    store: ArtifactStore,
 ) -> dict[str, Any]:
     """Materialize one embedding shard artifact.
 
@@ -554,7 +560,7 @@ def materialize_embedding_shard(
 
 def merge_embedding_shards(
     job: EmbeddingMergeJob,
-    store: LocalArtifactStore,
+    store: ArtifactStore,
 ) -> dict[str, Any]:
     """Merge embedding shard artifacts into a complete embedding artifact.
 

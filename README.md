@@ -30,6 +30,14 @@ pip install "vertebrae[dask]"
 pip install "vertebrae[distributed]"
 ```
 
+Optional cloud artifact stores:
+
+```bash
+pip install "vertebrae[s3]"
+pip install "vertebrae[gcs]"
+pip install "vertebrae[cloud]"
+```
+
 ## Quick Start
 
 ### Precomputed embeddings
@@ -104,15 +112,17 @@ print(result.to_dataframe())
 - lightweight probe classifier checks,
 - local embedding caching and reproducible artifacts,
 - artifact-backed distributed embedding and scoring through the `vertebrae` CLI.
-- optional Ray and Dask backends for shared-filesystem distributed execution.
+- optional Ray and Dask backends for distributed execution,
+- local paths, `s3://...`, and `gs://...` artifact stores.
 
 Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
 `vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae score`, and
 `vertebrae score-repeats`, `vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
 `vertebrae slurm-array`, `vertebrae slurm-score-array`, and `vertebrae run-embedding-shards`.
 
-For Ray or Dask cluster runs, the configured `cache_dir` must be visible to every
-worker because artifacts are exchanged through the shared filesystem in this pass.
+For Ray or Dask cluster runs, the configured `cache_dir` can be either a shared local
+path or a cloud object-store URI such as `s3://team-bucket/vertebrae/run-001` or
+`gs://team-bucket/vertebrae/run-001`. Workers need credentials for the selected store.
 
 ## Reports and Results
 
@@ -150,7 +160,9 @@ These workflows rely on optional dependencies and lazy imports, so the core pack
 `vertebrae` includes a CLI for deterministic embedding shard planning and artifact
 merging in local or batch-style workflows. Distributed orchestration commands accept
 `--backend local|ray|dask`, with `--ray-address` and `--dask-address` available for
-cluster connections. Run `vertebrae --help` to see the available commands.
+cluster connections. Cloud artifact stores use the same `--cache-dir` flag, plus
+provider options such as `--s3-endpoint-url`, `--s3-profile`, `--s3-region`, and
+`--gcs-project`. Run `vertebrae --help` to see the available commands.
 
 ## Notes
 

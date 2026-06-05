@@ -3,6 +3,13 @@
 __version__ = "0.1.0"
 
 from vertebrae.benchmark import Benchmark
+from vertebrae.cache import (
+    ArtifactStoreConfig,
+    GCSArtifactStore,
+    LocalArtifactStore,
+    S3ArtifactStore,
+    create_artifact_store,
+)
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
@@ -56,18 +63,23 @@ __all__ = [
     "EmbeddingShardJob",
     "Evaluator",
     "ExtractorResult",
+    "GCSArtifactStore",
+    "LocalArtifactStore",
     "LocalBackend",
     "MemoryConfig",
     "OverlapScoringConfig",
     "ProbeConfig",
     "RayBackend",
+    "S3ArtifactStore",
     "ResourceSpec",
     "SampleBatch",
     "ScoringJob",
     "ShardSpec",
+    "ArtifactStoreConfig",
     "benchmark_result_from_artifacts",
     "collect_score_artifacts",
     "StabilityConfig",
+    "create_artifact_store",
     "embedding_artifact_key",
     "embedding_shard_key",
     "labels_artifact_key",
