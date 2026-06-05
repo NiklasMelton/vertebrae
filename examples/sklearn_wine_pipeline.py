@@ -1,18 +1,19 @@
-"""Evaluate a real scikit-learn pipeline on the bundled Wine dataset.
+"""Compare real scikit-learn pipelines on the bundled Wine dataset.
 
 This example stays network-free while using real UCI data distributed with
-scikit-learn. The pipeline is intentionally modest so it runs quickly on a
-laptop, but it still exercises the same extractor, scoring, stability, probe,
-cache, JSON, and Markdown reporting path used for larger projects.
+scikit-learn. The pipelines are intentionally modest so they run quickly on a
+laptop, but they still exercise the same extractor comparison, scoring,
+stability, probe, cache, JSON, and Markdown reporting path used for larger
+projects.
 """
 
 from _common import CACHE_DIR, ensure_output_dir, print_ranking
 from sklearn.datasets import load_wine
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import Benchmark, BenchmarkDataset
 from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
 from vertebrae.extractors import SklearnExtractor
 
@@ -34,21 +35,65 @@ def main() -> None:
         },
     )
 
-    pipeline = Pipeline(
-        [
-            ("scale", StandardScaler()),
-            ("pca", PCA(n_components=6, random_state=42)),
-        ]
-    )
-
-    result = Evaluator(
+    benchmark = Benchmark(
         dataset=dataset,
-        extractor=SklearnExtractor(name="wine_standard_scaler_pca", pipeline=pipeline),
         scoring_config=OverlapScoringConfig(k=4, min_samples_per_cluster=8),
         stability_config=StabilityConfig(repeats=5, random_state=23),
         probe_config=ProbeConfig(methods=("nearest_centroid", "logistic_regression")),
         cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
-    ).run()
+    )
+    benchmark.add_extractor(
+        SklearnExtractor(
+            name="wine_standard_scaler_pca_6",
+            pipeline=Pipeline(
+                [
+                    ("scale", StandardScaler()),
+                    ("pca", PCA(n_components=6, random_state=42)),
+                ]
+            ),
+        )
+    )
+    benchmark.add_extractor(
+        SklearnExtractor(
+            name="wine_standard_scaler_all_features",
+            pipeline=Pipeline(
+                [
+                    ("scale", StandardScaler()),
+                ]
+            ),
+        )
+    )
+    benchmark.add_extractor(
+        SklearnExtractor(
+            name="wine_minmax_pca_2",
+            pipeline=Pipeline(
+                [
+                    ("scale", MinMaxScaler()),
+                    ("pca", PCA(n_components=2, random_state=42)),
+                ]
+            ),
+        )
+    )
+    benchmark.add_extractor(
+        SklearnExtractor(
+            name="wine_quantile_pca_1",
+            pipeline=Pipeline(
+                [
+                    (
+                        "quantile",
+                        QuantileTransformer(
+                            n_quantiles=64,
+                            output_distribution="normal",
+                            random_state=42,
+                        ),
+                    ),
+                    ("pca", PCA(n_components=1, random_state=42)),
+                ]
+            ),
+        )
+    )
+
+    result = benchmark.run()
 
     result.save_json(str(output_dir / "sklearn_wine_pipeline.json"))
     result.save_markdown(str(output_dir / "sklearn_wine_pipeline.md"))

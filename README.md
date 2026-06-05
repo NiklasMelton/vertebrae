@@ -154,10 +154,10 @@ Optional integrations are available through the `hf` extra:
 - `HFVisionExtractor`
 
 These workflows rely on optional dependencies and lazy imports, so the core package stays lightweight.
-See `examples/hf_vision_digits.py` for a laptop-friendly example that runs real
-handwritten digit data through a small Hugging Face vision backbone, and
+See `examples/hf_vision_digits.py` for a laptop-friendly comparison that runs
+real handwritten digit data through small Hugging Face vision backbones, and
 `examples/sklearn_wine_pipeline.py` for a network-free real-data scikit-learn
-pipeline example.
+pipeline comparison.
 
 ## Command Line Interface
 

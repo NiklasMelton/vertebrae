@@ -26,17 +26,17 @@ Each script writes reports to `examples/output/`.
   scikit-learn pipeline.
 - `sklearn_tabular_pipeline.py`: build embeddings from mixed numeric/categorical
   dataframe columns with a `ColumnTransformer`.
-- `sklearn_wine_pipeline.py`: evaluate a real scikit-learn `StandardScaler` +
-  `PCA` pipeline on the bundled UCI Wine dataset.
+- `sklearn_wine_pipeline.py`: compare real scikit-learn scaling/projection
+  pipelines on the bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare several extractors on the same labeled
   numeric dataset.
 - `cache_reuse.py`: show how embedding caching avoids recomputing extractor output
   on repeated runs.
 - `hf_text_extractor.py`: Hugging Face text backbone API example. Requires optional
   dependencies and a local or downloadable model.
-- `hf_vision_digits.py`: evaluate real scikit-learn handwritten digit images with
-  a small real Hugging Face DeiT vision backbone. Requires optional dependencies
-  and a local or downloadable model.
+- `hf_vision_digits.py`: compare real scikit-learn handwritten digit images with
+  small real Hugging Face vision backbones. Requires optional dependencies and
+  local or downloadable models.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
 

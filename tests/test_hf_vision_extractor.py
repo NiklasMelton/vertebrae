@@ -32,6 +32,11 @@ class FakeTensor:
     def mean(self, dim=None):
         return FakeTensor(np.mean(self.data, axis=dim))
 
+    def flatten(self, start_dim=0):
+        leading = self.data.shape[:start_dim]
+        flattened = int(np.prod(self.data.shape[start_dim:]))
+        return FakeTensor(self.data.reshape(*leading, flattened))
+
     def __getitem__(self, key):
         return FakeTensor(self.data[key])
 
@@ -76,6 +81,16 @@ class FakeVisionModel:
         )
 
 
+class FakeSpatialPoolerVisionModel(FakeVisionModel):
+    def __call__(self, **encoded):
+        batch = encoded["pixel_values"].shape[0]
+        hidden = np.arange(batch * 5 * 6, dtype=float).reshape(batch, 5, 6)
+        return types.SimpleNamespace(
+            last_hidden_state=FakeTensor(hidden),
+            pooler_output=FakeTensor(np.ones((batch, 6, 1, 1))),
+        )
+
+
 class FakeAutoImageProcessor:
     @classmethod
     def from_pretrained(cls, model_id, **kwargs):
@@ -86,6 +101,12 @@ class FakeAutoModel:
     @classmethod
     def from_pretrained(cls, model_id, **kwargs):
         return FakeVisionModel()
+
+
+class FakeSpatialPoolerAutoModel:
+    @classmethod
+    def from_pretrained(cls, model_id, **kwargs):
+        return FakeSpatialPoolerVisionModel()
 
 
 class FakeImageModule:
@@ -120,6 +141,23 @@ def test_hf_vision_pooling_modes(fake_vision_modules, pooling):
     assert output.shape == (3, 6)
     assert output.dtype == np.float32
     assert extractor.recipe()["modality"] == "image"
+
+
+def test_hf_vision_flattens_spatial_pooler_output(fake_vision_modules, monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(
+            AutoImageProcessor=FakeAutoImageProcessor,
+            AutoModel=FakeSpatialPoolerAutoModel,
+        ),
+    )
+    extractor = HFVisionExtractor("resnet", "fake-resnet", pooling="pooler", batch_size=2)
+
+    output = extractor.transform([np.zeros((4, 4, 3), dtype=np.uint8)] * 3)
+
+    assert output.shape == (3, 6)
+    assert output.dtype == np.float32
 
 
 def test_hf_vision_missing_optional_dependency(monkeypatch):

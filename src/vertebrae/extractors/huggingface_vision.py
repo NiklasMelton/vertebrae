@@ -89,6 +89,8 @@ class HFVisionExtractor:
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
                 model_output = model(**encoded)
                 pooled = self._pool(model_output)
+                if len(pooled.shape) > 2:
+                    pooled = pooled.flatten(start_dim=1)
                 outputs.append(pooled.detach().cpu().numpy().astype(np.float32, copy=False))
         return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
 

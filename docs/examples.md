@@ -5,13 +5,13 @@ Runnable examples live in `examples/`:
 - `precomputed_embeddings.py`: score synthetic precomputed embeddings.
 - `sklearn_text_pipeline.py`: evaluate a TF-IDF + SVD text pipeline.
 - `sklearn_tabular_pipeline.py`: evaluate mixed numeric/categorical tabular features.
-- `sklearn_wine_pipeline.py`: evaluate a real scaler + PCA pipeline on the bundled
-  UCI Wine dataset.
+- `sklearn_wine_pipeline.py`: compare real scaling/projection pipelines on the
+  bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare multiple local extractors.
 - `cache_reuse.py`: demonstrate embedding cache reuse.
 - `hf_text_extractor.py`: demonstrate the Hugging Face text API.
-- `hf_vision_digits.py`: evaluate real handwritten digit images with a small
-  Hugging Face DeiT vision backbone.
+- `hf_vision_digits.py`: compare real handwritten digit images with small
+  Hugging Face vision backbones.
 - `sentence_transformer_extractor.py`: demonstrate the sentence-transformers API.
 
 Run local examples from the repository root:

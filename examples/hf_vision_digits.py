@@ -1,8 +1,8 @@
-"""Evaluate a Hugging Face vision backbone on real handwritten digit images.
+"""Compare Hugging Face vision backbones on real handwritten digit images.
 
 The digit images come from ``sklearn.datasets.load_digits`` so the data itself is
-available offline. The model is a small real Hugging Face DeiT backbone; it must
-be present in the local Hugging Face cache or downloadable on first run.
+available offline. The models are small real Hugging Face vision backbones; they
+must be present in the local Hugging Face cache or downloadable on first run.
 
 Install optional dependencies with:
 
@@ -13,11 +13,22 @@ import numpy as np
 from _common import CACHE_DIR, ensure_output_dir, print_ranking
 from sklearn.datasets import load_digits
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import Benchmark, BenchmarkDataset
 from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
 from vertebrae.extractors import HFVisionExtractor
 
-MODEL_ID = "facebook/deit-tiny-patch16-224"
+MODEL_SPECS = (
+    {
+        "name": "deit_tiny_imagenet_cls",
+        "model_id": "facebook/deit-tiny-patch16-224",
+        "pooling": "cls",
+    },
+    {
+        "name": "resnet18_imagenet_pooler",
+        "model_id": "microsoft/resnet-18",
+        "pooling": "pooler",
+    },
+)
 
 
 def main() -> None:
@@ -37,33 +48,35 @@ def main() -> None:
         metadata={
             "example": "hf_vision_digits",
             "source": "sklearn.datasets.load_digits",
-            "model_id": MODEL_ID,
+            "model_ids": [spec["model_id"] for spec in MODEL_SPECS],
         },
     )
 
-    extractor = HFVisionExtractor(
-        name="deit_tiny_digits_cls",
-        model_id=MODEL_ID,
-        pooling="cls",
-        batch_size=8,
-    )
-
     try:
-        result = Evaluator(
+        benchmark = Benchmark(
             dataset=dataset,
-            extractor=extractor,
             scoring_config=OverlapScoringConfig(k=2, min_samples_per_cluster=6),
             stability_config=StabilityConfig(repeats=3, random_state=29),
             probe_config=ProbeConfig(methods=("nearest_centroid", "knn")),
             cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
-        ).run()
+        )
+        for spec in MODEL_SPECS:
+            benchmark.add_extractor(
+                HFVisionExtractor(
+                    name=spec["name"],
+                    model_id=spec["model_id"],
+                    pooling=spec["pooling"],
+                    batch_size=8,
+                )
+            )
+        result = benchmark.run()
     except ImportError as exc:
         print(exc)
         print("Install optional dependencies with: poetry install -E hf")
         return
     except OSError as exc:
-        print(f"Could not load Hugging Face model '{MODEL_ID}': {exc}")
-        print("Use a local model path or run with network access for the first download.")
+        print(f"Could not load one of the Hugging Face models: {exc}")
+        print("Use local model paths or run with network access for the first download.")
         return
 
     result.save_json(str(output_dir / "hf_vision_digits.json"))
