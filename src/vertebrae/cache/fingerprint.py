@@ -71,9 +71,7 @@ def _fingerprintable(value: Any) -> Any:
             "dtype": str(value.dtype),
             "nnz": int(value.nnz),
             "data_sample": _array_sample(value.data),
-            "indices_sample": _array_sample(value.indices)
-            if hasattr(value, "indices")
-            else None,
+            "indices_sample": _array_sample(value.indices) if hasattr(value, "indices") else None,
         }
     if hasattr(value, "to_numpy"):
         return _fingerprintable(value.to_numpy())

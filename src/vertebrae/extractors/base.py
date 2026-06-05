@@ -13,6 +13,7 @@ class FeatureExtractor(Protocol):
         modality: Input modality handled by the extractor.
         extractor_type: Extractor family metadata.
     """
+
     name: str
     modality: str
     extractor_type: str
