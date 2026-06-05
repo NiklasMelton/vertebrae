@@ -41,8 +41,9 @@ For HPC schedulers, each array task can run one `EmbeddingShardJob` using
 the label artifact through `score_embedding_artifact(...)`. Ray and Dask backends
 submit the same job objects and use the same manifests.
 
-For Ray or Dask clusters, `cache_dir` must be on a shared filesystem visible to every
-worker. This implementation does not add S3/GCS object stores yet.
+For Ray or Dask clusters, `cache_dir` may point either to a shared filesystem path or
+to a cloud object-store URI such as `s3://bucket/prefix` or `gs://bucket/prefix`.
+Workers must be able to authenticate to the selected object store.
 
 The same flow is available from the CLI. First serialize a dataset and extractor with
 `pickle`, then plan, run shards, and merge:
@@ -94,6 +95,7 @@ vertebrae benchmark-from-artifacts \
   --stability-key "$(jq -r .output_key plan.json)/scores/stability" \
   --json-output result.json \
   --markdown-output report.md
+```
 
 To execute shards or score repeats through Ray or Dask instead of the local backend:
 
@@ -108,6 +110,27 @@ vertebrae run-embedding-shards \
 
 vertebrae score-repeats \
   --cache-dir /shared/vertebrae_cache \
+  --plan-json plan.json \
+  --repeats 20 \
+  --backend dask \
+  --dask-address tcp://scheduler:8786
+```
+
+To use cloud artifact stores instead of a shared filesystem:
+
+```bash
+vertebrae run-embedding-shards \
+  --dataset-pickle dataset.pkl \
+  --extractor-pickle extractor.pkl \
+  --cache-dir s3://team-bucket/vertebrae/run-001 \
+  --s3-region us-east-1 \
+  --backend ray \
+  --ray-address auto \
+  --total-shards 8
+
+vertebrae score-repeats \
+  --cache-dir gs://team-bucket/vertebrae/run-001 \
+  --gcs-project my-gcp-project \
   --plan-json plan.json \
   --repeats 20 \
   --backend dask \
