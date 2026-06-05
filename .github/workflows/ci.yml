@@ -28,11 +28,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: poetry
-          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
-        run: python -m pip install poetry
+        run: python -m pip install --upgrade pip poetry
 
       - name: Install dependencies
         run: poetry install --no-interaction --with dev
@@ -52,11 +50,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: poetry
-          cache-dependency-path: poetry.lock
 
       - name: Install Poetry
-        run: python -m pip install poetry
+        run: python -m pip install --upgrade pip poetry
 
       - name: Install dependencies
         run: poetry install --no-interaction --with dev
