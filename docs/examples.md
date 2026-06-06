@@ -10,8 +10,9 @@ Runnable examples live in `examples/`:
 - `multi_extractor_comparison.py`: compare multiple local extractors.
 - `cache_reuse.py`: demonstrate embedding cache reuse.
 - `hf_text_extractor.py`: demonstrate the Hugging Face text API.
-- `hf_vision_kmnist.py`: compare KMNIST handwritten character images with small
-  Hugging Face vision backbones.
+- `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
+  final-layer, and mid-layer Hugging Face vision embeddings plus a scikit-learn
+  image pipeline.
 - `sentence_transformer_extractor.py`: demonstrate the sentence-transformers API.
 
 Run local examples from the repository root:
@@ -25,5 +26,5 @@ a local cache or from Hugging Face:
 
 ```bash
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E hf
-POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_kmnist.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_mnist.py
 ```

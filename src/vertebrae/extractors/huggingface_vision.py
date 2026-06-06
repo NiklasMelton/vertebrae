@@ -12,7 +12,11 @@ class HFVisionExtractor:
     Args:
         name: User-facing extractor name.
         model_id: Hugging Face model identifier or local path.
+        processor_id: Optional Hugging Face processor identifier or local path.
+            Defaults to `model_id`.
         pooling: Pooling mode: `"cls"`, `"mean"`, or `"pooler"`.
+        hidden_layer: Optional hidden-state layer index to pool from. Defaults to
+            the model's final output.
         batch_size: Number of images encoded per batch.
         image_mode: Image representation to pass to the processor:
             `"auto"`, `"rgb"`, `"grayscale"`, or `"preserve"`.
@@ -29,7 +33,9 @@ class HFVisionExtractor:
         self,
         name: str,
         model_id: str,
+        processor_id: Optional[str] = None,
         pooling: str = "cls",
+        hidden_layer: Optional[int] = None,
         batch_size: int = 16,
         image_mode: str = "auto",
         alpha_mode: str = "drop",
@@ -47,7 +53,9 @@ class HFVisionExtractor:
             raise ValueError(f"alpha_mode must be one of: {', '.join(sorted(_ALPHA_MODES))}.")
         self.name = name
         self.model_id = model_id
+        self.processor_id = processor_id or model_id
         self.pooling = pooling
+        self.hidden_layer = hidden_layer
         self.batch_size = batch_size
         self.image_mode = image_mode
         self.alpha_mode = alpha_mode
@@ -102,7 +110,10 @@ class HFVisionExtractor:
                 ]
                 encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
-                model_output = model(**encoded)
+                model_output = model(
+                    **encoded,
+                    output_hidden_states=self.hidden_layer is not None,
+                )
                 pooled = self._pool(model_output)
                 if len(pooled.shape) > 2:
                     pooled = pooled.flatten(start_dim=1)
@@ -134,7 +145,9 @@ class HFVisionExtractor:
             "extractor_type": self.extractor_type,
             "modality": self.modality,
             "model_id": self.model_id,
+            "processor_id": self.processor_id,
             "pooling": self.pooling,
+            "hidden_layer": self.hidden_layer,
             "batch_size": self.batch_size,
             "image_mode": self.image_mode,
             "alpha_mode": self.alpha_mode,
@@ -166,7 +179,7 @@ class HFVisionExtractor:
                 key: value for key, value in common_kwargs.items() if value is not None
             }
             self._processor = AutoImageProcessor.from_pretrained(
-                self.model_id,
+                self.processor_id,
                 **common_kwargs,
                 **self.processor_kwargs,
             )
@@ -187,6 +200,13 @@ class HFVisionExtractor:
         return "cuda" if torch.cuda.is_available() else "cpu"
 
     def _pool(self, output: Any) -> Any:
+        if self.hidden_layer is not None:
+            if self.pooling == "pooler":
+                raise ValueError("pooler pooling cannot be used with hidden_layer.")
+            hidden = self._select_hidden_state(output)
+            if self.pooling == "cls":
+                return hidden[:, 0, :]
+            return hidden.mean(dim=1)
         if self.pooling == "pooler":
             pooler_output = getattr(output, "pooler_output", None)
             if pooler_output is None:
@@ -196,6 +216,21 @@ class HFVisionExtractor:
         if self.pooling == "cls":
             return hidden[:, 0, :]
         return hidden.mean(dim=1)
+
+    def _select_hidden_state(self, output: Any) -> Any:
+        hidden_states = getattr(output, "hidden_states", None)
+        if hidden_states is None:
+            raise ValueError(
+                "hidden_layer was requested, but model output has no hidden_states. "
+                "This model may not support output_hidden_states."
+            )
+        try:
+            return hidden_states[self.hidden_layer]
+        except IndexError as exc:
+            raise ValueError(
+                f"hidden_layer index {self.hidden_layer} is out of range for "
+                f"{len(hidden_states)} hidden states."
+            ) from exc
 
 
 def _as_iterable(value: Any) -> Any:

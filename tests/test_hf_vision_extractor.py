@@ -67,6 +67,8 @@ class FakeProcessor:
 
 
 class FakeVisionModel:
+    last_call_kwargs = None
+
     def to(self, device):
         return self
 
@@ -74,11 +76,14 @@ class FakeVisionModel:
         return self
 
     def __call__(self, **encoded):
+        self.__class__.last_call_kwargs = encoded
         batch = encoded["pixel_values"].shape[0]
         hidden = np.arange(batch * 5 * 6, dtype=float).reshape(batch, 5, 6)
+        hidden_states = tuple(FakeTensor(hidden + layer * 100) for layer in range(4))
         return types.SimpleNamespace(
             last_hidden_state=FakeTensor(hidden),
             pooler_output=FakeTensor(np.ones((batch, 6))),
+            hidden_states=hidden_states if encoded.get("output_hidden_states") else None,
         )
 
 
@@ -129,7 +134,10 @@ def fake_vision_modules(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "transformers",
-        types.SimpleNamespace(AutoImageProcessor=FakeAutoImageProcessor, AutoModel=FakeAutoModel),
+        types.SimpleNamespace(
+            AutoImageProcessor=FakeAutoImageProcessor,
+            AutoModel=FakeAutoModel,
+        ),
     )
 
 
@@ -148,12 +156,16 @@ def test_hf_vision_recipe_includes_image_conversion_options():
     extractor = HFVisionExtractor(
         "vit",
         "fake-vision",
+        processor_id="fake-processor",
+        hidden_layer=2,
         image_mode="grayscale",
         alpha_mode="white_background",
     )
 
     recipe = extractor.recipe()
 
+    assert recipe["processor_id"] == "fake-processor"
+    assert recipe["hidden_layer"] == 2
     assert recipe["image_mode"] == "grayscale"
     assert recipe["alpha_mode"] == "white_background"
 
@@ -173,6 +185,48 @@ def test_hf_vision_flattens_spatial_pooler_output(fake_vision_modules, monkeypat
 
     assert output.shape == (3, 6)
     assert output.dtype == np.float32
+
+
+def test_hf_vision_selects_hidden_layer(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        pooling="cls",
+        hidden_layer=2,
+        batch_size=2,
+    )
+
+    output = extractor.transform([np.zeros((4, 4, 3), dtype=np.uint8)] * 2)
+
+    assert output.tolist() == [
+        [200.0, 201.0, 202.0, 203.0, 204.0, 205.0],
+        [230.0, 231.0, 232.0, 233.0, 234.0, 235.0],
+    ]
+    assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
+
+
+def test_hf_vision_rejects_pooler_with_hidden_layer(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        pooling="pooler",
+        hidden_layer=1,
+    )
+
+    with pytest.raises(ValueError, match="pooler"):
+        extractor.transform([np.zeros((4, 4, 3), dtype=np.uint8)])
+
+
+def test_hf_vision_rejects_out_of_range_hidden_layer(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        pooling="mean",
+        hidden_layer=99,
+    )
+
+    with pytest.raises(ValueError, match="out of range"):
+        extractor.transform([np.zeros((4, 4, 3), dtype=np.uint8)])
 
 
 def test_hf_vision_rgb_mode_converts_supported_numpy_shapes():
