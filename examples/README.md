@@ -15,6 +15,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_wine_pipel
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/multi_extractor_comparison.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/cache_reuse.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 ```
 
@@ -36,6 +37,8 @@ Each script writes reports to `examples/output/`.
   on repeated runs.
 - `torch_local_model.py`: demonstrate `TorchExtractor` with a locally loaded
   PyTorch checkpoint and user-supplied `collate_fn` / `output_fn`.
+- `keras_local_model.py`: demonstrate `KerasExtractor` with a locally saved
+  Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export
   you provide via `VERTABRAE_ONNX_MODEL_PATH`.
 - `hf_text_extractor.py`: Hugging Face text backbone API example. Requires optional
