@@ -109,7 +109,7 @@ class ONNXExtractor:
             except ImportError as exc:
                 raise ImportError(
                     "ONNXExtractor requires optional ONNX Runtime support. "
-                    "Install with `poetry install -E onnx` or `pip install \"vertebrae[onnx]\"`."
+                    'Install with `poetry install -E onnx` or `pip install "vertebrae[onnx]"`.'
                 ) from exc
             session_kwargs: Dict[str, Any] = {}
             if self.providers is not None:
