@@ -6,6 +6,7 @@ from vertebrae.extractors.huggingface_vision import HFVisionExtractor
 from vertebrae.extractors.precomputed import PrecomputedExtractor
 from vertebrae.extractors.sentence_transformers import SentenceTransformerExtractor
 from vertebrae.extractors.sklearn import SklearnExtractor
+from vertebrae.extractors.torch import TorchExtractor
 
 __all__ = [
     "CallableExtractor",
@@ -14,4 +15,5 @@ __all__ = [
     "PrecomputedExtractor",
     "SentenceTransformerExtractor",
     "SklearnExtractor",
+    "TorchExtractor",
 ]

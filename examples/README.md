@@ -14,6 +14,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_tabular_pi
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_wine_pipeline.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/multi_extractor_comparison.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/cache_reuse.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 ```
 
 Each script writes reports to `examples/output/`.
@@ -32,6 +33,8 @@ Each script writes reports to `examples/output/`.
   numeric dataset.
 - `cache_reuse.py`: show how embedding caching avoids recomputing extractor output
   on repeated runs.
+- `torch_local_model.py`: demonstrate `TorchExtractor` with a locally loaded
+  PyTorch checkpoint and user-supplied `collate_fn` / `output_fn`.
 - `hf_text_extractor.py`: Hugging Face text backbone API example. Requires optional
   dependencies and a local or downloadable model.
 - `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
