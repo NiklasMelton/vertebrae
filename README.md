@@ -1,6 +1,6 @@
 # Vertebrae
 
-[![Vertebrae logo](https://github.com/NiklasMelton/vertebrae/blob/main/img/vertebrae_logo.png?raw=true)](https://github.com/NiklasMelton/vertebrae)
+[![Vertebrae logo](https://github.com/NiklasMelton/vertebrae/blob/develop/img/vertebrae_logo.png?raw=true)](https://github.com/NiklasMelton/vertebrae)
 
 `vertebrae` is a Python package for evaluating feature extractors and transfer-learning backbones on labeled datasets. It supports precomputed embeddings, scikit-learn pipelines, custom callable extractors, and optional Hugging Face and sentence-transformers workflows.
 
