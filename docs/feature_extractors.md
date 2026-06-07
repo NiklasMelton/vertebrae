@@ -1,10 +1,11 @@
-# v2 feature extractors
+# feature extractors
 
-`vertebrae` v2 supports these extractor families:
+`vertebrae` supports these extractor families:
 
 - `PrecomputedExtractor`: uses embeddings supplied by the user.
 - `SklearnExtractor`: fits or applies scikit-learn transformers and pipelines.
 - `CallableExtractor`: wraps custom Python feature functions.
+- `TorchExtractor`: wraps a locally loaded `torch.nn.Module` with user-supplied batch and output adapters.
 - `SentenceTransformerExtractor`: lazy-loads sentence-transformers models.
 - `HFTextExtractor`: lazy-loads Hugging Face text backbones with explicit pooling.
 - `HFVisionExtractor`: lazy-loads Hugging Face vision backbones when optional
@@ -28,8 +29,14 @@ boundary, with `OverlapScoringConfig.max_dense_bytes` guarding memory use.
 Optional model extractors require:
 
 ```bash
+poetry install -E torch
 poetry install -E hf
 ```
+
+`TorchExtractor` is intended for users who already have a trained local PyTorch model
+loaded in memory. They provide a `collate_fn` that converts raw inputs into model
+inputs, and an `output_fn` when the model output needs to be projected to an
+embedding matrix.
 
 Text extractors validate that inputs are sequences of strings. Vision extractors accept
 PIL images, NumPy image arrays, or image paths.
