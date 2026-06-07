@@ -288,7 +288,7 @@ provider options such as `--s3-endpoint-url`, `--s3-profile`, `--s3-region`, and
 
 ## Notes
 
-- The package targets Python `>=3.9,<3.13`.
+- The package targets Python `>=3.9,<=3.14`.
 - `overlapindex>=0.1.1` is required.
 - The public API is centered on `BenchmarkDataset`, `Evaluator`, `Benchmark`, extractor wrappers, and structured result objects.
 
