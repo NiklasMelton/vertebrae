@@ -1,10 +1,24 @@
 # Vertebrae
 
-[![Vertebrae logo](https://github.com/NiklasMelton/vertebrae/blob/develop/img/vertebrae_logo.png?raw=true)](https://github.com/NiklasMelton/vertebrae)
+<table>
+  <tr>
+    <td width="100" valign="top">
+      <a href="https://github.com/NiklasMelton/vertebrae">
+        <img
+          src="https://github.com/NiklasMelton/vertebrae/blob/develop/img/vertebrae_logo.png?raw=true"
+          alt="Vertebrae logo"
+          width="140"
+        />
+      </a>
+    </td>
+    <td valign="top">
 
 `vertebrae` is a Python package for evaluating feature extractors and transfer-learning backbones on labeled datasets. It supports precomputed embeddings, scikit-learn pipelines, custom callable extractors, and optional Hugging Face and sentence-transformers workflows.
+  </tr>
+</table>
 
 The package uses the `overlapindex` library as its separation metric and wraps the full evaluation flow around practical dataset handling, caching, stability analysis, probe classifiers, and report generation.
+
 
 ## Installation
 
