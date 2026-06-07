@@ -8,11 +8,20 @@ from vertebrae.execution import (
     EmbeddingMergeJob,
     LocalBackend,
     ResourceSpec,
+    ScoringJob,
+    benchmark_result_from_artifacts,
+    collect_score_artifacts,
     embedding_artifact_key,
+    labels_artifact_key,
     materialize_and_merge_embeddings,
     materialize_embedding_shard,
+    materialize_label_artifact,
     merge_embedding_shards,
     plan_embedding_shard_jobs,
+    plan_scoring_jobs,
+    score_embedding_artifact,
+    score_embedding_artifacts,
+    scoring_artifact_key,
 )
 from vertebrae.extractors import CallableExtractor
 
@@ -145,3 +154,87 @@ def test_merge_embedding_shards_rejects_duplicate_sample_indices(tmp_path):
             ),
             store,
         )
+
+
+def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
+    tmp_path,
+    fake_overlapindex,
+):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+    )
+    extractor = CallableExtractor(
+        "score_artifact",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            output_key=f'{embedding_manifest["output_key"]}/scores/default',
+        ),
+        store,
+    )
+
+    assert score["artifact_type"] == "overlap_score"
+    assert score["score"]["macro_score"] == 0.8
+    assert score["embedding_key"] == embedding_manifest["output_key"]
+    assert score["labels_key"] == labels_artifact_key(dataset)
+    assert store.get_json(score["output_key"])["score"]["metadata"]["backend"] == "MiniBatchKMeans"
+
+
+def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overlapindex):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+    )
+    extractor = CallableExtractor(
+        "repeat_score_artifact",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+    jobs = plan_scoring_jobs(
+        embedding_key=embedding_manifest["output_key"],
+        labels_key=label_manifest["output_key"],
+        seeds=[3, 5, 7],
+    )
+
+    scores = score_embedding_artifacts(jobs, store, LocalBackend())
+    collection = collect_score_artifacts(
+        [score["output_key"] for score in scores],
+        store,
+        output_key=f'{embedding_manifest["output_key"]}/scores/stability',
+    )
+    result = benchmark_result_from_artifacts(
+        score_key=scoring_artifact_key(embedding_manifest["output_key"], seed=3),
+        store=store,
+        stability_key=collection["output_key"],
+    )
+
+    assert collection["artifact_type"] == "score_collection"
+    assert collection["seeds"] == [3, 5, 7]
+    assert result["metadata"]["distributed_artifacts"] is True
+    assert result["extractor_results"][0]["stability"]["summary"]["mean"] > 0.0

@@ -14,6 +14,21 @@ def test_memory_config_resolves_explicit_budget():
     assert budget.available_bytes > 0
 
 
+def test_memory_config_falls_back_to_available_fraction_when_reserve_exceeds_available(
+    monkeypatch,
+):
+    class _Memory:
+        total = 16_000
+        available = 400
+
+    monkeypatch.setattr("vertebrae.utils.memory.psutil.virtual_memory", lambda: _Memory())
+
+    budget = resolve_memory_budget(MemoryConfig(max_fraction=0.5))
+
+    assert budget.reserve_system_bytes > budget.available_bytes
+    assert budget.max_memory_bytes == 200
+
+
 def test_streaming_embedding_fails_after_probe_when_auto_subsampling_disabled(
     fake_overlapindex,
 ):

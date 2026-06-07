@@ -12,6 +12,8 @@ class HFTextExtractor:
         name: User-facing extractor name.
         model_id: Hugging Face model identifier or local path.
         pooling: Pooling mode: `"mean"`, `"cls"`, or `"last_token"`.
+        hidden_layer: Optional hidden-state layer index to pool from. Defaults to
+            the model's final output.
         batch_size: Number of texts encoded per batch.
         max_length: Tokenizer truncation length.
         device: Optional device string.
@@ -26,6 +28,7 @@ class HFTextExtractor:
         name: str,
         model_id: str,
         pooling: str = "mean",
+        hidden_layer: Optional[int] = None,
         batch_size: int = 32,
         max_length: int = 512,
         device: Optional[str] = None,
@@ -39,6 +42,7 @@ class HFTextExtractor:
         self.name = name
         self.model_id = model_id
         self.pooling = pooling
+        self.hidden_layer = hidden_layer
         self.batch_size = batch_size
         self.max_length = max_length
         self.device = device
@@ -96,7 +100,11 @@ class HFTextExtractor:
                     **self.tokenizer_kwargs,
                 )
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
-                hidden = model(**encoded).last_hidden_state
+                model_output = model(
+                    **encoded,
+                    output_hidden_states=self.hidden_layer is not None,
+                )
+                hidden = self._select_hidden_state(model_output)
                 pooled = self._pool(hidden, encoded["attention_mask"], torch)
                 outputs.append(pooled.detach().cpu().numpy().astype(np.float32, copy=False))
         return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
@@ -127,6 +135,7 @@ class HFTextExtractor:
             "modality": self.modality,
             "model_id": self.model_id,
             "pooling": self.pooling,
+            "hidden_layer": self.hidden_layer,
             "batch_size": self.batch_size,
             "max_length": self.max_length,
             "device": self.device,
@@ -173,6 +182,23 @@ class HFTextExtractor:
         if self.device is not None:
             return self.device
         return "cuda" if torch.cuda.is_available() else "cpu"
+
+    def _select_hidden_state(self, output: Any) -> Any:
+        if self.hidden_layer is None:
+            return output.last_hidden_state
+        hidden_states = getattr(output, "hidden_states", None)
+        if hidden_states is None:
+            raise ValueError(
+                "hidden_layer was requested, but model output has no hidden_states. "
+                "This model may not support output_hidden_states."
+            )
+        try:
+            return hidden_states[self.hidden_layer]
+        except IndexError as exc:
+            raise ValueError(
+                f"hidden_layer index {self.hidden_layer} is out of range for "
+                f"{len(hidden_states)} hidden states."
+            ) from exc
 
     def _pool(self, hidden: Any, mask: Any, torch: Any) -> Any:
         if self.pooling == "cls":

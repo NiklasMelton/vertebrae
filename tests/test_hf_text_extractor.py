@@ -114,6 +114,8 @@ class FakeTokenizer:
 
 
 class FakeModel:
+    last_call_kwargs = None
+
     def to(self, device):
         self.device = device
         return self
@@ -123,9 +125,14 @@ class FakeModel:
         return self
 
     def __call__(self, **encoded):
+        self.__class__.last_call_kwargs = encoded
         batch, seq_len = encoded["input_ids"].shape
         hidden = np.arange(batch * seq_len * 3, dtype=float).reshape(batch, seq_len, 3)
-        return types.SimpleNamespace(last_hidden_state=FakeTensor(hidden))
+        hidden_states = tuple(FakeTensor(hidden + layer * 100) for layer in range(4))
+        return types.SimpleNamespace(
+            last_hidden_state=FakeTensor(hidden),
+            hidden_states=hidden_states if encoded.get("output_hidden_states") else None,
+        )
 
 
 class FakeAutoTokenizer:
@@ -181,6 +188,34 @@ def test_hf_text_rejects_non_string_input(fake_hf_modules):
 
     with pytest.raises(ValueError, match="string"):
         extractor.transform(["ok", 123])
+
+
+def test_hf_text_selects_hidden_layer(fake_hf_modules):
+    extractor = HFTextExtractor(
+        name="hf_layer",
+        model_id="fake-model",
+        pooling="cls",
+        hidden_layer=2,
+        batch_size=2,
+    )
+
+    output = extractor.transform(["one", "two"])
+
+    assert output.tolist() == [[200.0, 201.0, 202.0], [212.0, 213.0, 214.0]]
+    assert FakeModel.last_call_kwargs["output_hidden_states"] is True
+    assert extractor.recipe()["hidden_layer"] == 2
+
+
+def test_hf_text_rejects_out_of_range_hidden_layer(fake_hf_modules):
+    extractor = HFTextExtractor(
+        name="hf_layer",
+        model_id="fake-model",
+        pooling="mean",
+        hidden_layer=99,
+    )
+
+    with pytest.raises(ValueError, match="out of range"):
+        extractor.transform(["one"])
 
 
 def test_hf_text_missing_optional_dependencies(monkeypatch):
