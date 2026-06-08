@@ -1,3 +1,7 @@
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
 [tool.poetry]
 name = "vertebrae"
 version = "0.1.0"
@@ -8,7 +12,7 @@ packages = [{ include = "vertebrae", from = "src" }]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.13"
+python = ">=3.9,<3.15"
 numpy = ">=2.0,<3.0"
 scipy = ">=1.13,<2.0"
 scikit-learn = "^1.5"
@@ -50,6 +54,13 @@ vertebrae = "vertebrae.cli:main"
 pytest = "^8.0"
 ruff = "^0.6"
 mypy = "^1.0"
+
+[tool.poetry.group.docs.dependencies]
+sphinx = { version = "^8.2", python = ">=3.14" }
+sphinx-rtd-theme = { version = "^3.0", python = ">=3.14" }
+myst-parser = { version = "^4.0", python = ">=3.14" }
+sphinx-autoapi = { version = "^3.6", python = ">=3.14" }
+sphinx-copybutton = { version = "^0.5", python = ">=3.14" }
 
 [tool.ruff]
 line-length = 100
