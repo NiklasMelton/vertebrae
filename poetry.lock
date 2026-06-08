@@ -384,25 +384,31 @@ files = [
 
 [[package]]
 name = "artlib"
-version = "0.1.8"
+version = "0.1.9"
 description = "A Python library for Adaptive Resonance Theory (ART) algorithms."
 optional = false
-python-versions = ">=3.9"
+python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "artlib-0.1.8-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:66f6edcbbf8498f790ec8a3c226aeab1df72364bb2290c8887a397f1da69cd90"},
-    {file = "artlib-0.1.8-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:985325ea095019f69adec24f15ed3ea5201f31236c1945dc72178eae67f576af"},
-    {file = "artlib-0.1.8-cp310-cp310-win_amd64.whl", hash = "sha256:663bcb00e10f4af77aa88eed79f8617ec5d36a3f060834f88a14cf298df25a56"},
-    {file = "artlib-0.1.8-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:116e2ef4f28b63d66a94e6df0ae47829459d1a875654d5bf4a8bcbc47a050171"},
-    {file = "artlib-0.1.8-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:220d3b2d3413b911161707549572128e4e647219c3c80a513b5e681664b053d6"},
-    {file = "artlib-0.1.8-cp311-cp311-win_amd64.whl", hash = "sha256:7f112e1651fc1a56ae05ece5c85846a98f513a30eaac6f25cdf908deea247459"},
-    {file = "artlib-0.1.8-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:e44cf3851d901f259f0ef35ce8a2ca3325721b3abab6f81c49c4578119096fad"},
-    {file = "artlib-0.1.8-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d763af6c308de46d62258624ca66ac7e4461df3c9c719e5de18c0ca8dd5fc4e5"},
-    {file = "artlib-0.1.8-cp312-cp312-win_amd64.whl", hash = "sha256:a5bed11fe33de214620214f98ebc2ce4c7d0d7ab8f407b8a8f972ba60b747a39"},
-    {file = "artlib-0.1.8-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:942e69e4e8db181e34948ba96a008cf0f8b14c502dbb7b91be1973ac67473c60"},
-    {file = "artlib-0.1.8-cp39-cp39-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f0211418eaacdcd2184c542257bcc986d16d6eadd637281b568201cad94057b4"},
-    {file = "artlib-0.1.8-cp39-cp39-win_amd64.whl", hash = "sha256:cd24bb652bc6e4d201cb8d700309386e420e85b5880d6c6af88b1c0a3e6010a7"},
-    {file = "artlib-0.1.8.tar.gz", hash = "sha256:c51b7f09fed2cc79118c29913d6f7dc622fe08b6b80569d7e6ed9b58eff14a61"},
+    {file = "artlib-0.1.9-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:0810c56e29fb815011bd48e03b4a1dc27d82d1c303e4129ddcf2e8ddc41b38ea"},
+    {file = "artlib-0.1.9-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a1db7684cc94523e2d4ae9b2f7ca1d29728d49f420105cc9c418d431b52a5242"},
+    {file = "artlib-0.1.9-cp310-cp310-win_amd64.whl", hash = "sha256:b9e19be1f945fad581e769b1c721d9bf17a2844ca0bb711a3c5a8776b4179ae2"},
+    {file = "artlib-0.1.9-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:82e2f58f1735c11ed57fa80f9a2558e6b2c928106dfe99fa0a48d4f08b47ae03"},
+    {file = "artlib-0.1.9-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:97b434ba64b9e9d295f6fbd1ff15ea67bb0946538062936e7925596b8a9aa913"},
+    {file = "artlib-0.1.9-cp311-cp311-win_amd64.whl", hash = "sha256:1d564442721ad6e357104f3b38ce1dd76d58e552cb61bb8e7b3b1254be362fde"},
+    {file = "artlib-0.1.9-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:8df1166e09858426101d9d892fb81d17311b34bccdb6d5baa5f35dd69994ac95"},
+    {file = "artlib-0.1.9-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c9edbfc088c1b173bd8b36376840aa44ebb127dbc36c6e39d06e7f586f813ec4"},
+    {file = "artlib-0.1.9-cp312-cp312-win_amd64.whl", hash = "sha256:15daf028a4c2328e617f98d050dd925ad7495b19fb8f94c5370b080d39695936"},
+    {file = "artlib-0.1.9-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:7a410b6760f83528d6e00292bed04ae8c5bff50eb64b108f3c61228e84b8f1c8"},
+    {file = "artlib-0.1.9-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2c5e894c606b5b64515559477bd7293ffacbfb205798b87be080b4f6adf6c16b"},
+    {file = "artlib-0.1.9-cp313-cp313-win_amd64.whl", hash = "sha256:eab2a9ab8d3a19b0ca73c10ee5b69c579e060f875e82d1202a9444b7f6ff7d6d"},
+    {file = "artlib-0.1.9-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:7a3ecdd92ff1f44939c062b5219eccbb3ce3a454851ce8bf07774302bddd5358"},
+    {file = "artlib-0.1.9-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:ecf4bda3590833e58669d0892c7d35bff12b6b7561974868af4ade8f5a1f8340"},
+    {file = "artlib-0.1.9-cp314-cp314-win_amd64.whl", hash = "sha256:feb68233178f9003ba1697f4a51ee1fe63f4ed4ecdbe3fa98d5422c5bd725a48"},
+    {file = "artlib-0.1.9-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:932fc2d1358eb550e9cb6cbc7983dc400c856e69e97ad310c42e32bac06094ca"},
+    {file = "artlib-0.1.9-cp39-cp39-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:10aa5681ac0359daf5ef98f2764bd95c1ccc0766a6fd8e990b51d0f367b39845"},
+    {file = "artlib-0.1.9-cp39-cp39-win_amd64.whl", hash = "sha256:2c310e3fcf5313122845e3a64ac23235a376cef207b99c93f7d425828e4a7ab2"},
+    {file = "artlib-0.1.9.tar.gz", hash = "sha256:65f45d70734612f855533ebc1588b69246d04c09abb37eff590ee75a77a3869b"},
 ]
 
 [package.dependencies]
@@ -413,7 +419,7 @@ scikit-learn = ">=1.0"
 scipy = ">=1.5.4"
 
 [package.extras]
-torch = ["torch (>=1.10)"]
+torch = ["torch (>=1.10) ; python_version < \"3.14\"", "torch (>=2.10) ; python_version == \"3.14\""]
 
 [[package]]
 name = "astroid"
@@ -9259,4 +9265,4 @@ torch = ["torch"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-content-hash = "4644c590f2e29f43fb846f39d3feeb081416d9cd91bb9c9e396cc6fe706d891b"
+content-hash = "385f0b428293027f9cd540c8d2f5f579edef37961b9267eed438710f8ab02fb4"
