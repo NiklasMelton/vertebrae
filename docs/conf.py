@@ -5,24 +5,26 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 local docs builds
+    import tomli as tomllib
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 project = "vertebrae"
 copyright = "2026, Niklas Melton"
 author = "Niklas Melton"
 
-try:
-    from vertebrae import __version__
-except Exception:  # pragma: no cover - import-time docs fallback
-    __version__ = "0.1.0"
+with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as pyproject_file:
+    pyproject = tomllib.load(pyproject_file)
 
-release = __version__
-version = __version__
+release = pyproject["tool"]["poetry"]["version"]
+version = release
 
 extensions = [
     "myst_parser",
     "sphinx.ext.autodoc",
-    "sphinx.ext.intersphinx",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "autoapi.extension",
@@ -30,6 +32,7 @@ extensions = [
 
 templates_path = []
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+suppress_warnings = ["autoapi.python_import_resolution", "ref.python"]
 
 html_theme = "sphinx_rtd_theme"
 html_static_path = []
@@ -42,7 +45,6 @@ source_suffix = {
 myst_enable_extensions = [
     "colon_fence",
     "deflist",
-    "linkify",
     "replacements",
     "smartquotes",
 ]
@@ -60,22 +62,15 @@ napoleon_use_rtype = True
 autoapi_type = "python"
 autoapi_dirs = [str(Path(__file__).resolve().parents[1] / "src" / "vertebrae")]
 autoapi_root = "api"
-autoapi_keep_files = True
+autoapi_keep_files = False
 autoapi_generate_api_docs = True
 autoapi_add_toctree_entry = False
-autoapi_python_class_content = "both"
+autoapi_python_class_content = "class"
 autoapi_member_order = "bysource"
 autoapi_options = [
     "members",
-    "undoc-members",
     "show-inheritance",
     "show-module-summary",
-    "imported-members",
 ]
-
-intersphinx_mapping = {
-    "python": ("https://docs.python.org/3", {}),
-    "sphinx": ("https://www.sphinx-doc.org/en/master/", {}),
-}
 
 html_title = "vertebrae"

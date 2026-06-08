@@ -11,5 +11,5 @@ overview
 feature_extractors
 examples
 distributed_readiness
-api/index
+api/vertebrae/index
 ```
