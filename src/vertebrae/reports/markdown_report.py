@@ -47,18 +47,22 @@ def render_markdown_report(result: Any) -> str:
     lines.extend(["", "## Ranking", ""])
     lines.append(
         "| rank | extractor | extractor_type | overlap_macro | stability_interval | "
-        "weakest_class | probe_accuracy | embedding_dim | recommendation |"
+        "weakest_class | probe_accuracy | embedding_dim | compression | "
+        "compressed_dim | recommendation |"
     )
-    lines.append("| --- | --- | --- | ---: | --- | --- | ---: | ---: | --- |")
+    lines.append("| --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | --- |")
     for rank, item in enumerate(result.ranked_results(), start=1):
         interval = _format_interval(item.stability)
         weakest = item.weakest_class if item.weakest_class is not None else ""
         probe_accuracy = _best_probe_accuracy(item.probes)
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
+        compression_method = item.compression_metadata.get("method", "none")
+        compressed_dim = item.compression_metadata.get("compressed_dim", embedding_dim)
         lines.append(
             f"| {rank} | {item.name} | {item.extractor_type} | "
             f"{item.overlap.macro_score:.4f} | {interval} | {weakest} | "
-            f"{probe_accuracy} | {embedding_dim} | {item.recommendation} |"
+            f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
+            f"{compressed_dim} | {item.recommendation} |"
         )
 
     lines.extend(["", "## Per-extractor details", ""])
@@ -71,6 +75,9 @@ def render_markdown_report(result: Any) -> str:
                 f"- Extractor family: {_extractor_family(item.extractor_type)}",
                 f"- Modality: {item.embedding_metadata.get('modality', '')}",
                 f"- Embedding dimension: {item.embedding_metadata.get('embedding_dim', '')}",
+                f"- Compression method: {item.compression_metadata.get('method', 'none')}",
+                f"- Compression precision: {item.compression_metadata.get('precision', '')}",
+                f"- Compressed dimension: {item.compression_metadata.get('compressed_dim', '')}",
                 f"- Overlap macro: {item.overlap.macro_score:.4f}",
                 f"- Weakest class: {item.weakest_class or ''}",
                 f"- Recommendation: {item.recommendation}",
@@ -91,6 +98,21 @@ def render_markdown_report(result: Any) -> str:
                     lines.append(f"- {key}: {value}")
         else:
             lines.append("No extractor recipe was captured.")
+        lines.append("")
+        lines.extend(["#### Compression", ""])
+        compression_metadata = item.compression_metadata or {}
+        for key in (
+            "method",
+            "precision",
+            "applied",
+            "original_dim",
+            "compressed_dim",
+            "explained_variance_total",
+        ):
+            if key in compression_metadata:
+                lines.append(f"- {key}: {compression_metadata[key]}")
+        for warning in compression_metadata.get("warnings", []):
+            lines.append(f"- warning: {warning}")
         lines.extend(
             [
                 "",
