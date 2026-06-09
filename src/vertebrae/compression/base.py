@@ -130,9 +130,7 @@ class _QuantizeCompressor(EmbeddingCompressor):
         matrix = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
         precision = self.config.precision
         if precision in {"int8", "uint8"} and is_sparse_matrix(matrix):
-            raise ValueError(
-                f"Compression precision '{precision}' requires dense embeddings."
-            )
+            raise ValueError(f"Compression precision '{precision}' requires dense embeddings.")
         if precision == "int8":
             dense = np.asarray(matrix, dtype=np.float32)
             scale = np.max(np.abs(dense), axis=0)
@@ -180,9 +178,7 @@ class _QuantizeCompressor(EmbeddingCompressor):
             return (encoded.astype(np.float32) * scale) / 127.0
         min_values = self._calibration["min_values"]
         ranges = self._calibration["ranges"]
-        encoded = np.clip(np.rint(((dense - min_values) / ranges) * 255.0), 0, 255).astype(
-            np.uint8
-        )
+        encoded = np.clip(np.rint(((dense - min_values) / ranges) * 255.0), 0, 255).astype(np.uint8)
         return (encoded.astype(np.float32) * ranges / 255.0) + min_values
 
     def recipe(self) -> Dict[str, Any]:
@@ -400,9 +396,7 @@ def _estimated_quantized_bytes(value: Any, precision: Optional[str]) -> Optional
         sparse = value
         if precision == "float16":
             return int(
-                sparse.data.astype(np.float16).nbytes
-                + sparse.indices.nbytes
-                + sparse.indptr.nbytes
+                sparse.data.astype(np.float16).nbytes + sparse.indices.nbytes + sparse.indptr.nbytes
             )
         return None
     dense = np.asarray(value)

@@ -230,9 +230,7 @@ class EmbeddingCompressionConfig:
         if self.method != "quantize" and self.precision is not None:
             raise ValueError("precision is only supported for method='quantize'.")
         if self.method != "prefix_truncate" and self.assume_matryoshka:
-            raise ValueError(
-                "assume_matryoshka is only supported for method='prefix_truncate'."
-            )
+            raise ValueError("assume_matryoshka is only supported for method='prefix_truncate'.")
         if self.method not in {"pca", "incremental_pca"} and self.whiten:
             raise ValueError("whiten is only supported for PCA-based methods.")
         if self.precision is not None and self.precision not in {"float16", "int8", "uint8"}:
