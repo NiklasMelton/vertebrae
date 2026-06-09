@@ -309,7 +309,7 @@ MNIST handwritten digit data through final and mid-layer Hugging Face vision
 embeddings, and
 `examples/sklearn_wine_pipeline.py` for a network-free real-data scikit-learn
 pipeline comparison.
-See the [compression guide](docs/compression.md) for compression options and guidance.
+See the compression guide in `docs/compression.md` for compression options and guidance.
 
 ## Command Line Interface
 
