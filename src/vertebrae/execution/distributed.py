@@ -9,7 +9,14 @@ import numpy as np
 from vertebrae import __version__
 from vertebrae.cache import ArtifactStore, ArtifactStoreConfig, create_artifact_store_from_config
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
-from vertebrae.execution.jobs import EmbeddingMergeJob, EmbeddingShardJob, ScoringJob, ShardSpec
+from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
+from vertebrae.execution.jobs import (
+    CompressionJob,
+    EmbeddingMergeJob,
+    EmbeddingShardJob,
+    ScoringJob,
+    ShardSpec,
+)
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -240,6 +247,48 @@ def score_embedding_artifact(
     return artifact
 
 
+def compress_embedding_artifact(
+    job: CompressionJob,
+    store: ArtifactStore,
+) -> dict[str, Any]:
+    """Compress a persisted embedding artifact."""
+
+    embedding_metadata = store.get_json(job.embedding_key)
+    embeddings = store.get_array(job.embedding_key)
+    compression_result = compress_embeddings(embeddings, config=job.compression_config)
+    store.put_array(job.output_key, compression_result.embeddings)
+    compressed_metadata = dict(embedding_metadata)
+    compressed_metadata["cache_key"] = job.output_key
+    compressed_metadata["embedding_dim"] = compression_result.metadata.get(
+        "compressed_dim",
+        embedding_metadata.get("embedding_dim"),
+    )
+    compressed_metadata["shape"] = [
+        embedding_metadata.get("n_samples"),
+        compressed_metadata["embedding_dim"],
+    ]
+    compressed_metadata["sparse"] = compression_result.metadata.get(
+        "output_sparse",
+        embedding_metadata.get("sparse"),
+    )
+    compressed_metadata["storage_format"] = (
+        compression_result.embeddings.getformat()
+        if is_sparse_matrix(compression_result.embeddings)
+        else "dense"
+    )
+    compressed_metadata["compression"] = compression_result.metadata
+    store.put_json(job.output_key, compressed_metadata)
+    return {
+        "artifact_type": "compressed_embedding",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "source_embedding_key": job.embedding_key,
+        "embedding_metadata": compressed_metadata,
+        "compression_metadata": compression_result.metadata,
+        "resources": asdict(job.resources),
+    }
+
+
 def score_embedding_artifacts(
     jobs: Iterable[ScoringJob],
     store: ArtifactStore,
@@ -259,6 +308,19 @@ def score_embedding_artifacts(
     return execution.map(
         partial(_score_embedding_artifact_job, store_config=store.config()),
         jobs,
+    )
+
+
+def plan_compression_job(
+    embedding_key: str,
+    compression_config: Any,
+) -> CompressionJob:
+    """Create a compression job for a persisted embedding artifact."""
+
+    return CompressionJob(
+        embedding_key=embedding_key,
+        output_key=compress_embedding_artifact_key(embedding_key, compression_config),
+        compression_config=compression_config,
     )
 
 
@@ -416,11 +478,13 @@ def benchmark_result_from_artifacts(
         metadata=score_data.get("metadata", {}),
     )
     recommendation = recommendation_for_extractor(overlap.macro_score, stability, weakest_score)
+    compression_metadata = embedding_metadata.get("compression", {"method": "none"})
+    base_name = embedding_metadata.get("extractor_recipe", {}).get(
+        "name",
+        embedding_metadata.get("extractor_name", "artifact"),
+    )
     extractor_result = ExtractorResult(
-        name=embedding_metadata.get("extractor_recipe", {}).get(
-            "name",
-            embedding_metadata.get("extractor_name", "artifact"),
-        ),
+        name=_variant_extractor_name(base_name, compression_metadata),
         extractor_type=embedding_metadata.get("extractor_recipe", {}).get(
             "extractor_type",
             embedding_metadata.get("extractor_type", "artifact"),
@@ -429,6 +493,7 @@ def benchmark_result_from_artifacts(
         stability=stability,
         probes=None,
         embedding_metadata=embedding_metadata,
+        compression_metadata=compression_metadata,
         runtime={},
         warnings=sorted(set(score_data.get("warnings", []))),
         weakest_class=weakest_class,
@@ -485,6 +550,19 @@ def _weakest_class(per_class_scores: dict[str, Any]) -> tuple[Optional[str], Opt
     return label, score
 
 
+def _variant_extractor_name(name: str, compression_metadata: dict[str, Any]) -> str:
+    method = compression_metadata.get("method", "none")
+    if method == "none":
+        return name
+    precision = compression_metadata.get("precision")
+    if precision:
+        return f"{name}[{method}_{precision}]"
+    compressed_dim = compression_metadata.get("compressed_dim")
+    if compressed_dim is None:
+        return f"{name}[{method}]"
+    return f"{name}[{method}_{compressed_dim}]"
+
+
 def _materialize_embedding_shard_job(
     job: EmbeddingShardJob,
     store_config: ArtifactStoreConfig,
@@ -497,6 +575,13 @@ def _score_embedding_artifact_job(
     store_config: ArtifactStoreConfig,
 ) -> dict[str, Any]:
     return score_embedding_artifact(job, create_artifact_store_from_config(store_config))
+
+
+def _compress_embedding_artifact_job(
+    job: CompressionJob,
+    store_config: ArtifactStoreConfig,
+) -> dict[str, Any]:
+    return compress_embedding_artifact(job, create_artifact_store_from_config(store_config))
 
 
 def materialize_embedding_shard(

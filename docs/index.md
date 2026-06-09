@@ -9,6 +9,7 @@ from the repository README, existing Markdown guides, and generated API referenc
 
 overview
 feature_extractors
+compression
 examples
 distributed_readiness
 api/vertebrae/index
