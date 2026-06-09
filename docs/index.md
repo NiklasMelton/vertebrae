@@ -10,6 +10,7 @@ from the repository README, existing Markdown guides, and generated API referenc
 overview
 datasets
 feature_extractors
+compression
 scoring
 results_and_reports
 examples

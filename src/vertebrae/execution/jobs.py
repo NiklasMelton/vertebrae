@@ -193,6 +193,16 @@ class EmbeddingMergeJob:
 
 
 @dataclass(frozen=True)
+class CompressionJob:
+    """Description of a compression job over persisted embeddings."""
+
+    embedding_key: str
+    output_key: str
+    compression_config: Any
+    resources: ResourceSpec = ResourceSpec()
+
+
+@dataclass(frozen=True)
 class ScoringJob:
     """Description of a scoring job over persisted embeddings.
 

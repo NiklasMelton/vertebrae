@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from vertebrae.cache import create_artifact_store
+from vertebrae.config import EmbeddingCompressionConfig
 from vertebrae.execution import (
     EmbeddingMergeJob,
     ScoringJob,
     ShardSpec,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
+    compress_embedding_artifact,
     create_execution_backend,
     embedding_artifact_key,
     embedding_shard_key,
@@ -21,6 +23,7 @@ from vertebrae.execution import (
     materialize_embedding_shard,
     materialize_label_artifact,
     merge_embedding_shards,
+    plan_compression_job,
     plan_embedding_shard_jobs,
     plan_scoring_jobs,
     score_embedding_artifact,
@@ -103,6 +106,34 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--seed", type=int)
     score.add_argument("--output-json")
     score.set_defaults(func=_cmd_score)
+
+    compress = subparsers.add_parser("compress", help="Compress a persisted embedding artifact.")
+    _add_cache_arg(compress)
+    compress.add_argument("--embedding-key", required=True)
+    compress.add_argument(
+        "--method",
+        choices=[
+            "none",
+            "pca",
+            "incremental_pca",
+            "truncated_svd",
+            "gaussian_random_projection",
+            "sparse_random_projection",
+            "prefix_truncate",
+            "quantize",
+        ],
+        required=True,
+    )
+    compress.add_argument("--n-components", type=int)
+    compress.add_argument("--preserve-variance", type=float)
+    compress.add_argument("--precision")
+    compress.add_argument("--assume-matryoshka", action="store_true")
+    compress.add_argument("--random-state", type=int, default=42)
+    compress.add_argument("--whiten", action="store_true")
+    compress.add_argument("--dtype")
+    compress.add_argument("--output-key")
+    compress.add_argument("--output-json")
+    compress.set_defaults(func=_cmd_compress)
 
     repeats = subparsers.add_parser("score-repeats", help="Run repeated scoring jobs.")
     _add_cache_arg(repeats)
@@ -293,6 +324,26 @@ def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
         ),
         _store_from_args(args),
     )
+
+
+def _cmd_compress(args: argparse.Namespace) -> dict[str, Any]:
+    compression_config = EmbeddingCompressionConfig(
+        enabled=args.method != "none",
+        method=args.method,
+        n_components=args.n_components,
+        preserve_variance=args.preserve_variance,
+        precision=args.precision,
+        assume_matryoshka=args.assume_matryoshka,
+        random_state=args.random_state,
+        whiten=args.whiten,
+        dtype=args.dtype,
+    )
+    job = plan_compression_job(args.embedding_key, compression_config)
+    if args.output_key:
+        from dataclasses import replace
+
+        job = replace(job, output_key=args.output_key)
+    return compress_embedding_artifact(job, _store_from_args(args))
 
 
 def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
@@ -656,6 +707,7 @@ def _benchmark_result_from_dict(
                 stability=item.get("stability"),
                 probes=item.get("probes"),
                 embedding_metadata=item.get("embedding_metadata", {}),
+                compression_metadata=item.get("compression_metadata", {"method": "none"}),
                 runtime=item.get("runtime", {}),
                 warnings=item.get("warnings", []),
                 recommendation=item.get("recommendation", ""),

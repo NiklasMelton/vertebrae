@@ -3,8 +3,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple, Union
 
-from vertebrae.execution.jobs import ShardSpec
-
 
 @dataclass
 class OverlapScoringConfig:
@@ -140,11 +138,113 @@ class EmbeddingConfig:
 
     batch_size: int = 128
     streaming_enabled: bool = True
-    shard: Optional[ShardSpec] = None
+    shard: Optional[Any] = None
 
     def __post_init__(self) -> None:
         if self.batch_size < 1:
             raise ValueError("EmbeddingConfig.batch_size must be >= 1.")
+
+
+@dataclass
+class EmbeddingCompressionConfig:
+    """Configuration for optional embedding compression.
+
+    Attributes:
+        enabled: Whether compression should run.
+        method: Compression method name.
+        n_components: Target dimension for projection-based compressors.
+        preserve_variance: PCA variance target in `(0, 1]`.
+        precision: Quantization precision such as `"float16"` or `"int8"`.
+        assume_matryoshka: Whether prefix truncation should be treated as a
+            matryoshka-style dimension shortening workflow.
+        random_state: Seed for stochastic compressors.
+        whiten: Whether PCA outputs should be whitened.
+        dtype: Optional output dtype such as `"float32"`.
+        algorithm_kwargs: Extra method-specific keyword arguments.
+    """
+
+    enabled: bool = False
+    method: str = "none"
+    n_components: Optional[int] = None
+    preserve_variance: Optional[float] = None
+    precision: Optional[str] = None
+    assume_matryoshka: bool = False
+    random_state: int = 42
+    whiten: bool = False
+    dtype: Optional[str] = None
+    algorithm_kwargs: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        allowed_methods = {
+            "none",
+            "pca",
+            "incremental_pca",
+            "truncated_svd",
+            "gaussian_random_projection",
+            "sparse_random_projection",
+            "prefix_truncate",
+            "quantize",
+        }
+        if self.method not in allowed_methods:
+            raise ValueError(
+                f"EmbeddingCompressionConfig.method must be one of {sorted(allowed_methods)}."
+            )
+        if self.n_components is not None and self.n_components < 1:
+            raise ValueError("EmbeddingCompressionConfig.n_components must be >= 1.")
+        if self.preserve_variance is not None and not 0.0 < self.preserve_variance <= 1.0:
+            raise ValueError("EmbeddingCompressionConfig.preserve_variance must be in (0, 1].")
+        if self.method == "none":
+            if self.enabled and (
+                self.n_components is not None
+                or self.preserve_variance is not None
+                or self.precision is not None
+                or self.assume_matryoshka
+                or self.whiten
+                or self.algorithm_kwargs
+            ):
+                raise ValueError(
+                    "EmbeddingCompressionConfig.method='none' does not accept compression "
+                    "parameters."
+                )
+        projection_methods = {
+            "truncated_svd",
+            "gaussian_random_projection",
+            "sparse_random_projection",
+            "incremental_pca",
+            "prefix_truncate",
+        }
+        if self.method in projection_methods and self.enabled and self.n_components is None:
+            raise ValueError(
+                f"EmbeddingCompressionConfig.method='{self.method}' requires n_components."
+            )
+        if self.method == "pca" and self.enabled:
+            if self.n_components is None and self.preserve_variance is None:
+                raise ValueError(
+                    "EmbeddingCompressionConfig.method='pca' requires n_components or "
+                    "preserve_variance."
+                )
+        if self.method != "pca" and self.preserve_variance is not None:
+            raise ValueError("preserve_variance is only supported for method='pca'.")
+        if self.method == "quantize" and self.enabled and self.precision is None:
+            raise ValueError("EmbeddingCompressionConfig.method='quantize' requires precision.")
+        if self.method != "quantize" and self.precision is not None:
+            raise ValueError("precision is only supported for method='quantize'.")
+        if self.method != "prefix_truncate" and self.assume_matryoshka:
+            raise ValueError("assume_matryoshka is only supported for method='prefix_truncate'.")
+        if self.method not in {"pca", "incremental_pca"} and self.whiten:
+            raise ValueError("whiten is only supported for PCA-based methods.")
+        if self.precision is not None and self.precision not in {"float16", "int8", "uint8"}:
+            raise ValueError(
+                "EmbeddingCompressionConfig.precision must be one of "
+                "['float16', 'int8', 'uint8']."
+            )
+        if self.dtype is not None:
+            try:
+                import numpy as np
+
+                np.dtype(self.dtype)
+            except TypeError as exc:
+                raise ValueError(f"Unsupported compression dtype: {self.dtype!r}.") from exc
 
 
 @dataclass
