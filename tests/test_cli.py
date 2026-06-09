@@ -222,6 +222,87 @@ def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
     assert "merge-embeddings" in script
 
 
+def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+
+    assert (
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--shard-index",
+                "0",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    merged_manifest = json.loads(capsys.readouterr().out)
+
+    assert (
+        main(
+            [
+                "compress",
+                "--cache-dir",
+                str(cache_dir),
+                "--embedding-key",
+                merged_manifest["output_key"],
+                "--method",
+                "prefix_truncate",
+                "--n-components",
+                "2",
+                "--assume-matryoshka",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["artifact_type"] == "compressed_embedding"
+    assert payload["compression_metadata"]["method"] == "prefix_truncate"
+    assert payload["compression_metadata"]["compressed_dim"] == 2
+
+
 def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     plan_path = tmp_path / "plan.json"
