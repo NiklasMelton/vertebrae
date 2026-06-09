@@ -1,0 +1,39 @@
+vertebrae.cli
+=============
+
+.. py:module:: vertebrae.cli
+
+.. autoapi-nested-parse::
+
+   Command line interface for distributed vertebrae workflows.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.cli.main
+   vertebrae.cli.build_parser
+
+
+Module Contents
+---------------
+
+.. py:function:: main(argv = None)
+
+   Run the vertebrae CLI.
+
+   :param argv: Optional argument vector. Uses `sys.argv` when omitted.
+
+   :returns: Process exit code.
+
+
+.. py:function:: build_parser()
+
+   Build the CLI argument parser.
+
+   :returns: Configured argument parser.
+
+

@@ -1,0 +1,240 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="./">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>datasets &mdash; vertebrae</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="_static/graphviz.css?v=fd3f3429" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="_static/documentation_options.js?v=01f34227"></script>
+      <script src="_static/doctools.js?v=9a2dae69"></script>
+      <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="feature extractors" href="feature_extractors.html" />
+    <link rel="prev" title="Vertebrae" href="overview.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            vertebrae
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="overview.html">Vertebrae</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">datasets</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#supported-constructors">Supported constructors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#validation-rules">Validation rules</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#modalities-and-preserved-metadata">Modalities and preserved metadata</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#batching-and-sharding">Batching and sharding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#working-with-precomputed-embeddings">Working with precomputed embeddings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#practical-guidance">Practical guidance</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="feature_extractors.html">feature extractors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="scoring.html">scoring</a></li>
+<li class="toctree-l1"><a class="reference internal" href="results_and_reports.html">results and reports</a></li>
+<li class="toctree-l1"><a class="reference internal" href="examples.html">examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="distributed_readiness.html">distributed readiness</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api/vertebrae/index.html">vertebrae</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">vertebrae</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">datasets</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/datasets.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="datasets">
+<h1>datasets<a class="headerlink" href="#datasets" title="Link to this heading"></a></h1>
+<p><code class="docutils literal notranslate"><span class="pre">vertebrae</span></code> centers the benchmark workflow on a single labeled dataset abstraction:
+<code class="docutils literal notranslate"><span class="pre">BenchmarkDataset</span></code>. The dataset object keeps raw inputs, labels, modality, and
+construction metadata together so extraction, caching, scoring, and reporting can
+share one validated input contract.</p>
+<section id="supported-constructors">
+<h2>Supported constructors<a class="headerlink" href="#supported-constructors" title="Link to this heading"></a></h2>
+<p>Use the constructor that matches the form of your source data:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">BenchmarkDataset.from_arrays(...)</span></code> for array-like samples and labels.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">BenchmarkDataset.from_dataframe(...)</span></code> for pandas DataFrames with explicit input
+and label columns.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">BenchmarkDataset.from_embeddings(...)</span></code> for dense or sparse precomputed
+embeddings.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">BenchmarkDataset.from_image_paths(...)</span></code> for image classification datasets stored
+as filesystem paths.</p></li>
+</ul>
+<p>Examples:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">vertebrae</span> <span class="kn">import</span> <span class="n">BenchmarkDataset</span>
+
+<span class="n">text_dataset</span> <span class="o">=</span> <span class="n">BenchmarkDataset</span><span class="o">.</span><span class="n">from_arrays</span><span class="p">(</span>
+    <span class="n">X</span><span class="o">=</span><span class="n">texts</span><span class="p">,</span>
+    <span class="n">y</span><span class="o">=</span><span class="n">labels</span><span class="p">,</span>
+    <span class="n">modality</span><span class="o">=</span><span class="s2">&quot;text&quot;</span><span class="p">,</span>
+    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;source&quot;</span><span class="p">:</span> <span class="s2">&quot;support_tickets&quot;</span><span class="p">},</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">vertebrae</span> <span class="kn">import</span> <span class="n">BenchmarkDataset</span>
+
+<span class="n">tabular_dataset</span> <span class="o">=</span> <span class="n">BenchmarkDataset</span><span class="o">.</span><span class="n">from_dataframe</span><span class="p">(</span>
+    <span class="n">df</span><span class="o">=</span><span class="n">dataframe</span><span class="p">,</span>
+    <span class="n">input_col</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;age&quot;</span><span class="p">,</span> <span class="s2">&quot;income&quot;</span><span class="p">,</span> <span class="s2">&quot;region&quot;</span><span class="p">],</span>
+    <span class="n">label_col</span><span class="o">=</span><span class="s2">&quot;segment&quot;</span><span class="p">,</span>
+    <span class="n">modality</span><span class="o">=</span><span class="s2">&quot;tabular&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">vertebrae</span> <span class="kn">import</span> <span class="n">BenchmarkDataset</span>
+
+<span class="n">embedding_dataset</span> <span class="o">=</span> <span class="n">BenchmarkDataset</span><span class="o">.</span><span class="n">from_embeddings</span><span class="p">(</span>
+    <span class="n">embeddings</span><span class="o">=</span><span class="n">Z</span><span class="p">,</span>
+    <span class="n">labels</span><span class="o">=</span><span class="n">y</span><span class="p">,</span>
+    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;backbone&quot;</span><span class="p">:</span> <span class="s2">&quot;resnet50&quot;</span><span class="p">},</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="validation-rules">
+<h2>Validation rules<a class="headerlink" href="#validation-rules" title="Link to this heading"></a></h2>
+<p>Every constructor validates the dataset immediately. Current validation checks
+include:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">X</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> must have the same number of samples.</p></li>
+<li><p>labels must be one-dimensional and non-missing.</p></li>
+<li><p>the dataset must contain at least one sample.</p></li>
+<li><p>the dataset must contain at least two classes.</p></li>
+<li><p>each class must contain at least two samples.</p></li>
+</ul>
+<p>These checks keep downstream scoring failures readable and early. If class counts
+are too small for the selected protocol, fix the dataset or rebalance it before
+starting a benchmark run.</p>
+</section>
+<section id="modalities-and-preserved-metadata">
+<h2>Modalities and preserved metadata<a class="headerlink" href="#modalities-and-preserved-metadata" title="Link to this heading"></a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">modality</span></code> field is a lightweight routing hint for extractors and reports.
+Common values are:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;text&quot;</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;tabular&quot;</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;image&quot;</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&quot;embeddings&quot;</span></code></p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">metadata</span></code> is preserved through benchmarking so reports can retain source context
+such as dataset name, split, backbone provenance, or collection notes.</p>
+<p>When using <code class="docutils literal notranslate"><span class="pre">from_dataframe(...)</span></code>, the dataset also records the original column names
+and chosen input columns. When using <code class="docutils literal notranslate"><span class="pre">from_embeddings(...)</span></code>, metadata is tagged with
+<code class="docutils literal notranslate"><span class="pre">precomputed_embeddings=True</span></code>.</p>
+</section>
+<section id="batching-and-sharding">
+<h2>Batching and sharding<a class="headerlink" href="#batching-and-sharding" title="Link to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">BenchmarkDataset.iter_batches(...)</span></code> yields deterministic sample batches. This is
+used by streaming-safe extractors and by the artifact-backed distributed embedding
+flow described in the distributed-readiness guide.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">dataset</span><span class="o">.</span><span class="n">iter_batches</span><span class="p">(</span><span class="n">batch_size</span><span class="o">=</span><span class="mi">128</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">indices</span><span class="p">,</span> <span class="n">batch</span><span class="o">.</span><span class="n">X</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The dataset object also exposes <code class="docutils literal notranslate"><span class="pre">stratified_subsample_indices(...)</span></code> for
+class-preserving sampling without replacement. That method is used by memory-aware
+and stability-related workflows when the full dataset should not be embedded or
+scored in one pass.</p>
+</section>
+<section id="working-with-precomputed-embeddings">
+<h2>Working with precomputed embeddings<a class="headerlink" href="#working-with-precomputed-embeddings" title="Link to this heading"></a></h2>
+<p>Precomputed embeddings are the simplest v1 path and the best starting point for new
+benchmarks. <code class="docutils literal notranslate"><span class="pre">BenchmarkDataset.from_embeddings(...)</span></code> accepts:</p>
+<ul class="simple">
+<li><p>dense NumPy-like matrices, or</p></li>
+<li><p>scipy sparse matrices.</p></li>
+</ul>
+<p>Sparse embeddings are preserved as sparse artifacts until the scoring boundary.
+Because the current metric backend is MiniBatchKMeans-backed OverlapIndex, sparse
+inputs are densified only inside the internal scorer, with a configurable memory
+guard.</p>
+</section>
+<section id="practical-guidance">
+<h2>Practical guidance<a class="headerlink" href="#practical-guidance" title="Link to this heading"></a></h2>
+<ul class="simple">
+<li><p>Start with <code class="docutils literal notranslate"><span class="pre">from_embeddings(...)</span></code> when you already trust your feature pipeline.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">from_dataframe(...)</span></code> when you want reports to preserve column provenance.</p></li>
+<li><p>Keep labels in their original semantic form when possible; <code class="docutils literal notranslate"><span class="pre">vertebrae</span></code> preserves
+them in class counts, per-class scores, and weakest-class summaries.</p></li>
+<li><p>Add meaningful <code class="docutils literal notranslate"><span class="pre">metadata</span></code> up front so JSON and Markdown reports stay useful later.</p></li>
+</ul>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="overview.html" class="btn btn-neutral float-left" title="Vertebrae" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="feature_extractors.html" class="btn btn-neutral float-right" title="feature extractors" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Niklas Melton.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

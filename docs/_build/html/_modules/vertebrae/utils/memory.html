@@ -1,0 +1,495 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vertebrae.utils.memory &mdash; vertebrae</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/graphviz.css?v=fd3f3429" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../../_static/doctools.js?v=9a2dae69"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            vertebrae
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../overview.html">Vertebrae</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../datasets.html">datasets</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../feature_extractors.html">feature extractors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../scoring.html">scoring</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../results_and_reports.html">results and reports</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../distributed_readiness.html">distributed readiness</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/vertebrae/index.html">vertebrae</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">vertebrae</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">vertebrae.utils.memory</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for vertebrae.utils.memory</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Memory estimation and admission helpers.&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">dataclass</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">psutil</span>
+
+<span class="kn">from</span> <span class="nn">vertebrae.config</span> <span class="kn">import</span> <span class="n">MemoryConfig</span>
+<span class="kn">from</span> <span class="nn">vertebrae.utils.validation</span> <span class="kn">import</span> <span class="n">estimate_dense_nbytes</span><span class="p">,</span> <span class="n">is_sparse_matrix</span>
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<div class="viewcode-block" id="MemoryBudget">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.MemoryBudget">[docs]</a>
+<span class="k">class</span> <span class="nc">MemoryBudget</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolved memory budget from a `MemoryConfig`.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        total_bytes: Total system memory.</span>
+<span class="sd">        available_bytes: Currently available system memory.</span>
+<span class="sd">        reserve_system_bytes: Bytes reserved for system use.</span>
+<span class="sd">        max_memory_bytes: Maximum bytes vertebrae should use for planned work.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="MemoryBudget.total_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.MemoryBudget.total_bytes">[docs]</a>
+    <span class="n">total_bytes</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="MemoryBudget.available_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.MemoryBudget.available_bytes">[docs]</a>
+    <span class="n">available_bytes</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="MemoryBudget.reserve_system_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.MemoryBudget.reserve_system_bytes">[docs]</a>
+    <span class="n">reserve_system_bytes</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="MemoryBudget.max_memory_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.MemoryBudget.max_memory_bytes">[docs]</a>
+    <span class="n">max_memory_bytes</span><span class="p">:</span> <span class="nb">int</span></div>
+</div>
+
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<div class="viewcode-block" id="EmbeddingMemoryEstimate">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate">[docs]</a>
+<span class="k">class</span> <span class="nc">EmbeddingMemoryEstimate</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimated memory footprint for an embedding artifact.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        n_samples: Number of embedding rows.</span>
+<span class="sd">        embedding_dim: Number of embedding columns.</span>
+<span class="sd">        dtype: Embedding dtype string.</span>
+<span class="sd">        resident_bytes: Estimated bytes to hold the embedding artifact in memory.</span>
+<span class="sd">        dense_scoring_bytes: Estimated dense bytes required by scoring.</span>
+<span class="sd">        batch_embedding_bytes: Estimated bytes for one embedding batch.</span>
+<span class="sd">        strategy: Planned strategy: `&quot;in_memory&quot;` or `&quot;stream_to_disk&quot;`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.n_samples">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.n_samples">[docs]</a>
+    <span class="n">n_samples</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.embedding_dim">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.embedding_dim">[docs]</a>
+    <span class="n">embedding_dim</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.dtype">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.dtype">[docs]</a>
+    <span class="n">dtype</span><span class="p">:</span> <span class="nb">str</span></div>
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.resident_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.resident_bytes">[docs]</a>
+    <span class="n">resident_bytes</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.dense_scoring_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.dense_scoring_bytes">[docs]</a>
+    <span class="n">dense_scoring_bytes</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.batch_embedding_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.batch_embedding_bytes">[docs]</a>
+    <span class="n">batch_embedding_bytes</span><span class="p">:</span> <span class="nb">int</span></div>
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.strategy">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.strategy">[docs]</a>
+    <span class="n">strategy</span><span class="p">:</span> <span class="nb">str</span></div>
+
+
+<div class="viewcode-block" id="EmbeddingMemoryEstimate.to_dict">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.EmbeddingMemoryEstimate.to_dict">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Serialize the estimate for result metadata.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            JSON-compatible memory estimate.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">&quot;n_samples&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span><span class="p">,</span>
+            <span class="s2">&quot;embedding_dim&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_dim</span><span class="p">,</span>
+            <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+            <span class="s2">&quot;resident_bytes&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">resident_bytes</span><span class="p">,</span>
+            <span class="s2">&quot;dense_scoring_bytes&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">dense_scoring_bytes</span><span class="p">,</span>
+            <span class="s2">&quot;batch_embedding_bytes&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_embedding_bytes</span><span class="p">,</span>
+            <span class="s2">&quot;strategy&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">strategy</span><span class="p">,</span>
+        <span class="p">}</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="resolve_memory_budget">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.resolve_memory_budget">[docs]</a>
+<span class="k">def</span> <span class="nf">resolve_memory_budget</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">MemoryConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MemoryBudget</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve an effective memory budget using psutil.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        config: Memory configuration.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Resolved memory budget.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">memory</span> <span class="o">=</span> <span class="n">psutil</span><span class="o">.</span><span class="n">virtual_memory</span><span class="p">()</span>
+    <span class="n">total</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">memory</span><span class="o">.</span><span class="n">total</span><span class="p">)</span>
+    <span class="n">available</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">memory</span><span class="o">.</span><span class="n">available</span><span class="p">)</span>
+    <span class="n">reserve</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">reserve_system_bytes</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">reserve_system_bytes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">_default_reserve_bytes</span><span class="p">(</span><span class="n">total</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">max_memory_bytes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">limit</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">max_memory_bytes</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">headroom</span> <span class="o">=</span> <span class="n">available</span> <span class="o">-</span> <span class="n">reserve</span>
+        <span class="k">if</span> <span class="n">headroom</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">limit</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">available</span> <span class="o">*</span> <span class="n">config</span><span class="o">.</span><span class="n">max_fraction</span><span class="p">,</span> <span class="n">headroom</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Some constrained or containerized environments report very low</span>
+            <span class="c1"># currently available memory relative to total system reserve.</span>
+            <span class="c1"># Fall back to a fraction of available memory instead of collapsing</span>
+            <span class="c1"># the budget to a single byte.</span>
+            <span class="n">limit</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">available</span> <span class="o">*</span> <span class="n">config</span><span class="o">.</span><span class="n">max_fraction</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">MemoryBudget</span><span class="p">(</span>
+        <span class="n">total_bytes</span><span class="o">=</span><span class="n">total</span><span class="p">,</span>
+        <span class="n">available_bytes</span><span class="o">=</span><span class="n">available</span><span class="p">,</span>
+        <span class="n">reserve_system_bytes</span><span class="o">=</span><span class="n">reserve</span><span class="p">,</span>
+        <span class="n">max_memory_bytes</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">limit</span><span class="p">),</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="estimate_embedding_from_probe">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.estimate_embedding_from_probe">[docs]</a>
+<span class="k">def</span> <span class="nf">estimate_embedding_from_probe</span><span class="p">(</span>
+    <span class="n">probe_embeddings</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="n">n_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">memory_config</span><span class="p">:</span> <span class="n">MemoryConfig</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate full embedding memory from a probe batch.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        probe_embeddings: Dense or sparse probe embedding batch.</span>
+<span class="sd">        n_samples: Full dataset sample count.</span>
+<span class="sd">        batch_size: Planned embedding batch size.</span>
+<span class="sd">        memory_config: Memory configuration.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Estimated embedding footprint and strategy.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">is_sparse_matrix</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="p">):</span>
+        <span class="n">dim</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">dtype</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="n">density</span> <span class="o">=</span> <span class="n">_safe_density</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="p">)</span>
+        <span class="n">resident</span> <span class="o">=</span> <span class="n">estimate_sparse_bytes</span><span class="p">(</span>
+            <span class="n">n_samples</span><span class="o">=</span><span class="n">n_samples</span><span class="p">,</span>
+            <span class="n">n_features</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="o">.</span><span class="n">dtype</span><span class="p">),</span>
+            <span class="n">density</span><span class="o">=</span><span class="n">density</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">dense_scoring</span> <span class="o">=</span> <span class="n">n_samples</span> <span class="o">*</span> <span class="n">dim</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">itemsize</span>
+        <span class="n">batch_bytes</span> <span class="o">=</span> <span class="n">estimate_sparse_bytes</span><span class="p">(</span>
+            <span class="n">n_samples</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
+            <span class="n">n_features</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="o">.</span><span class="n">dtype</span><span class="p">),</span>
+            <span class="n">density</span><span class="o">=</span><span class="n">density</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">probe_embeddings</span><span class="p">)</span>
+        <span class="n">dim</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">dtype</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="n">resident</span> <span class="o">=</span> <span class="n">n_samples</span> <span class="o">*</span> <span class="n">dim</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">itemsize</span>
+        <span class="n">dense_scoring</span> <span class="o">=</span> <span class="n">resident</span>
+        <span class="n">batch_bytes</span> <span class="o">=</span> <span class="n">batch_size</span> <span class="o">*</span> <span class="n">dim</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">arr</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">itemsize</span>
+    <span class="n">budget</span> <span class="o">=</span> <span class="n">resolve_memory_budget</span><span class="p">(</span><span class="n">memory_config</span><span class="p">)</span>
+    <span class="n">strategy</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="s2">&quot;stream_to_disk&quot;</span>
+        <span class="k">if</span> <span class="n">memory_config</span><span class="o">.</span><span class="n">allow_disk_spill</span> <span class="ow">and</span> <span class="n">resident</span> <span class="o">&gt;</span> <span class="n">budget</span><span class="o">.</span><span class="n">max_memory_bytes</span>
+        <span class="k">else</span> <span class="s2">&quot;in_memory&quot;</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">(</span>
+        <span class="n">n_samples</span><span class="o">=</span><span class="n">n_samples</span><span class="p">,</span>
+        <span class="n">embedding_dim</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span>
+        <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span>
+        <span class="n">resident_bytes</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">resident</span><span class="p">),</span>
+        <span class="n">dense_scoring_bytes</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">dense_scoring</span><span class="p">),</span>
+        <span class="n">batch_embedding_bytes</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">batch_bytes</span><span class="p">),</span>
+        <span class="n">strategy</span><span class="o">=</span><span class="n">strategy</span><span class="p">,</span>
+    <span class="p">)</span></div>
+
+
+
+<div class="viewcode-block" id="estimate_matrix_resident_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.estimate_matrix_resident_bytes">[docs]</a>
+<span class="k">def</span> <span class="nf">estimate_matrix_resident_bytes</span><span class="p">(</span><span class="n">matrix</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate memory required to hold a dense or sparse matrix.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        matrix: Dense or sparse matrix.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Estimated resident bytes.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">is_sparse_matrix</span><span class="p">(</span><span class="n">matrix</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">sparse_matrix_nbytes</span><span class="p">(</span><span class="n">matrix</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">estimate_dense_nbytes</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">matrix</span><span class="p">))</span></div>
+
+
+
+<div class="viewcode-block" id="estimate_metadata_resident_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.estimate_metadata_resident_bytes">[docs]</a>
+<span class="k">def</span> <span class="nf">estimate_metadata_resident_bytes</span><span class="p">(</span><span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate resident bytes from embedding metadata.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        metadata: Embedding metadata dictionary.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Estimated bytes, or `None` if metadata is incomplete.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">shape</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;shape&quot;</span><span class="p">)</span>
+    <span class="n">dtype</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dtype&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">shape</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">dtype</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;sparse&quot;</span><span class="p">):</span>
+        <span class="n">nnz</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;nnz&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">nnz</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="n">sparse_nbytes_from_nnz</span><span class="p">(</span>
+            <span class="n">nnz</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">nnz</span><span class="p">),</span>
+            <span class="n">n_rows</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">dtype</span><span class="p">),</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="nb">int</span><span class="p">(</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">itemsize</span></div>
+
+
+
+<div class="viewcode-block" id="estimate_metadata_dense_scoring_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.estimate_metadata_dense_scoring_bytes">[docs]</a>
+<span class="k">def</span> <span class="nf">estimate_metadata_dense_scoring_bytes</span><span class="p">(</span><span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate dense bytes needed for scoring from embedding metadata.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        metadata: Embedding metadata dictionary.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Estimated dense scoring bytes, or `None` if metadata is incomplete.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">shape</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;shape&quot;</span><span class="p">)</span>
+    <span class="n">dtype</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dtype&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">shape</span> <span class="ow">or</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">dtype</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="nb">int</span><span class="p">(</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">itemsize</span></div>
+
+
+
+<div class="viewcode-block" id="assert_within_memory">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.assert_within_memory">[docs]</a>
+<span class="k">def</span> <span class="nf">assert_within_memory</span><span class="p">(</span>
+    <span class="n">required_bytes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">memory_config</span><span class="p">:</span> <span class="n">MemoryConfig</span><span class="p">,</span>
+    <span class="n">purpose</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MemoryBudget</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Fail fast when a planned allocation exceeds the memory budget.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        required_bytes: Estimated required bytes.</span>
+<span class="sd">        memory_config: Memory configuration.</span>
+<span class="sd">        purpose: Human-readable description of the planned work.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Resolved memory budget.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If `required_bytes` exceeds the configured budget.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">budget</span> <span class="o">=</span> <span class="n">resolve_memory_budget</span><span class="p">(</span><span class="n">memory_config</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">memory_config</span><span class="o">.</span><span class="n">fail_fast</span> <span class="ow">and</span> <span class="n">required_bytes</span> <span class="o">&gt;</span> <span class="n">budget</span><span class="o">.</span><span class="n">max_memory_bytes</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">purpose</span><span class="si">}</span><span class="s2"> is estimated to require </span><span class="si">{</span><span class="n">required_bytes</span><span class="si">}</span><span class="s2"> bytes, exceeding &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;the memory budget of </span><span class="si">{</span><span class="n">budget</span><span class="o">.</span><span class="n">max_memory_bytes</span><span class="si">}</span><span class="s2"> bytes. Increase &quot;</span>
+            <span class="s2">&quot;MemoryConfig.max_memory_bytes, enable disk spill where applicable, &quot;</span>
+            <span class="s2">&quot;reduce batch size, or run fewer concurrent jobs.&quot;</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="n">budget</span></div>
+
+
+
+<div class="viewcode-block" id="largest_fitting_subsample_rate">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.largest_fitting_subsample_rate">[docs]</a>
+<span class="k">def</span> <span class="nf">largest_fitting_subsample_rate</span><span class="p">(</span>
+    <span class="n">required_bytes</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">memory_config</span><span class="p">:</span> <span class="n">MemoryConfig</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate the largest sample fraction that fits the memory budget.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        required_bytes: Estimated bytes for the full sample set.</span>
+<span class="sd">        memory_config: Memory configuration.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Fraction in `(0, 1]` that should fit the configured budget.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">required_bytes</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">1.0</span>
+    <span class="n">budget</span> <span class="o">=</span> <span class="n">resolve_memory_budget</span><span class="p">(</span><span class="n">memory_config</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">budget</span><span class="o">.</span><span class="n">max_memory_bytes</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">required_bytes</span><span class="p">)))</span></div>
+
+
+
+<div class="viewcode-block" id="sparse_matrix_nbytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.sparse_matrix_nbytes">[docs]</a>
+<span class="k">def</span> <span class="nf">sparse_matrix_nbytes</span><span class="p">(</span><span class="n">matrix</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate resident bytes for an existing scipy sparse matrix.&quot;&quot;&quot;</span>
+
+    <span class="n">total</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">attr</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;indices&quot;</span><span class="p">,</span> <span class="s2">&quot;indptr&quot;</span><span class="p">,</span> <span class="s2">&quot;row&quot;</span><span class="p">,</span> <span class="s2">&quot;col&quot;</span><span class="p">):</span>
+        <span class="n">values</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">matrix</span><span class="p">,</span> <span class="n">attr</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">values</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">total</span> <span class="o">+=</span> <span class="nb">int</span><span class="p">(</span><span class="n">values</span><span class="o">.</span><span class="n">nbytes</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">total</span></div>
+
+
+
+<div class="viewcode-block" id="sparse_nbytes_from_nnz">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.sparse_nbytes_from_nnz">[docs]</a>
+<span class="k">def</span> <span class="nf">sparse_nbytes_from_nnz</span><span class="p">(</span><span class="n">nnz</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">n_rows</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate CSR sparse bytes from non-zero count and row count.&quot;&quot;&quot;</span>
+
+    <span class="n">index_bytes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span><span class="o">.</span><span class="n">itemsize</span>
+    <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">nnz</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">itemsize</span> <span class="o">+</span> <span class="n">index_bytes</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">n_rows</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">index_bytes</span></div>
+
+
+
+<div class="viewcode-block" id="estimate_sparse_bytes">
+<a class="viewcode-back" href="../../../api/vertebrae/utils/memory/index.html#vertebrae.utils.memory.estimate_sparse_bytes">[docs]</a>
+<span class="k">def</span> <span class="nf">estimate_sparse_bytes</span><span class="p">(</span>
+    <span class="n">n_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">n_features</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+    <span class="n">density</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Estimate sparse matrix bytes from shape, dtype, and density.&quot;&quot;&quot;</span>
+
+    <span class="n">nnz</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">n_samples</span> <span class="o">*</span> <span class="n">n_features</span> <span class="o">*</span> <span class="n">density</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">sparse_nbytes_from_nnz</span><span class="p">(</span><span class="n">nnz</span><span class="o">=</span><span class="n">nnz</span><span class="p">,</span> <span class="n">n_rows</span><span class="o">=</span><span class="n">n_samples</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_default_reserve_bytes</span><span class="p">(</span><span class="n">total_bytes</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="n">gib</span> <span class="o">=</span> <span class="mi">1024</span><span class="o">**</span><span class="mi">3</span>
+    <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="mi">8</span> <span class="o">*</span> <span class="n">gib</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span> <span class="o">*</span> <span class="n">gib</span><span class="p">,</span> <span class="n">total_bytes</span> <span class="o">*</span> <span class="mf">0.2</span><span class="p">)))</span>
+
+
+<span class="k">def</span> <span class="nf">_safe_density</span><span class="p">(</span><span class="n">matrix</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="n">total</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">*</span> <span class="nb">int</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="k">if</span> <span class="n">total</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">0.0</span>
+    <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="n">matrix</span><span class="o">.</span><span class="n">nnz</span><span class="p">)</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">total</span><span class="p">)))</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Niklas Melton.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

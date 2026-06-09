@@ -1,0 +1,74 @@
+vertebrae.extractors.sklearn
+============================
+
+.. py:module:: vertebrae.extractors.sklearn
+
+.. autoapi-nested-parse::
+
+   Scikit-learn transformer and pipeline extractors.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.extractors.sklearn.SklearnExtractor
+
+
+Module Contents
+---------------
+
+.. py:class:: SklearnExtractor(name, pipeline, already_fitted = False, extractor_type = 'unsupervised_fitted', max_dense_bytes = 2000000000, allow_sparse = False)
+
+   Wrap a scikit-learn transformer or pipeline as an extractor.
+
+   :param name: User-facing extractor name.
+   :param pipeline: Object exposing `fit`, `transform`, or `fit_transform`.
+   :param already_fitted: Whether to skip fitting and call only `transform`.
+   :param extractor_type: Extractor family metadata.
+   :param max_dense_bytes: Maximum allowed sparse-to-dense conversion size.
+   :param allow_sparse: Whether sparse pipeline outputs should be preserved.
+
+
+   .. py:method:: fit(X, y = None)
+
+      Fit the wrapped scikit-learn object when needed.
+
+      :param X: Input samples.
+      :param y: Optional labels.
+
+      :returns: This extractor.
+
+
+
+   .. py:method:: transform(X)
+
+      Transform inputs with the wrapped scikit-learn object.
+
+      :param X: Input samples.
+
+      :returns: Dense or sparse numeric embedding matrix.
+
+
+
+   .. py:method:: fit_transform(X, y = None)
+
+      Fit the pipeline if needed and transform inputs.
+
+      :param X: Input samples.
+      :param y: Optional labels.
+
+      :returns: Dense or sparse numeric embedding matrix.
+
+
+
+   .. py:method:: recipe()
+
+      Return a serializable scikit-learn extractor recipe.
+
+      :returns: JSON-compatible recipe dictionary.
+
+
+

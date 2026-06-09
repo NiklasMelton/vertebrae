@@ -1,0 +1,329 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vertebrae.utils.validation &mdash; vertebrae</title>
+      <link rel="stylesheet" type="text/css" href="../../../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../../../_static/graphviz.css?v=fd3f3429" />
+
+  
+      <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../../../_static/doctools.js?v=9a2dae69"></script>
+      <script src="../../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+    <link rel="next" title="vertebrae.benchmark" href="../../benchmark/index.html" />
+    <link rel="prev" title="vertebrae.utils.serialization" href="../serialization/index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../../index.html" class="icon icon-home">
+            vertebrae
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../../overview.html">Vertebrae</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../datasets.html">datasets</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../feature_extractors.html">feature extractors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../scoring.html">scoring</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../results_and_reports.html">results and reports</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../examples.html">examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../distributed_readiness.html">distributed readiness</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../index.html">vertebrae</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="../../index.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../cache/index.html">vertebrae.cache</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../datasets/index.html">vertebrae.datasets</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../execution/index.html">vertebrae.execution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../extractors/index.html">vertebrae.extractors</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../reports/index.html">vertebrae.reports</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../scoring/index.html">vertebrae.scoring</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../index.html">vertebrae.utils</a><ul class="current">
+<li class="toctree-l4 current"><a class="reference internal" href="../index.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../../index.html#submodules">Submodules</a></li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">vertebrae</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">vertebrae</a></li>
+          <li class="breadcrumb-item"><a href="../index.html">vertebrae.utils</a></li>
+      <li class="breadcrumb-item active">vertebrae.utils.validation</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../../_sources/api/vertebrae/utils/validation/index.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="module-vertebrae.utils.validation">
+<span id="vertebrae-utils-validation"></span><h1>vertebrae.utils.validation<a class="headerlink" href="#module-vertebrae.utils.validation" title="Link to this heading"></a></h1>
+<p>Validation helpers for dense and sparse embeddings.</p>
+<section id="functions">
+<h2>Functions<a class="headerlink" href="#functions" title="Link to this heading"></a></h2>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="#vertebrae.utils.validation.ensure_2d_numeric_array" title="vertebrae.utils.validation.ensure_2d_numeric_array"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_2d_numeric_array</span></code></a>(value, name)</p></td>
+<td><p>Validate a dense 2D numeric array.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#vertebrae.utils.validation.ensure_dense_numeric_2d" title="vertebrae.utils.validation.ensure_dense_numeric_2d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_dense_numeric_2d</span></code></a>(value, name)</p></td>
+<td><p>Validate dense 2D numeric output from an extractor.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#vertebrae.utils.validation.ensure_numeric_matrix" title="vertebrae.utils.validation.ensure_numeric_matrix"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_numeric_matrix</span></code></a>(value, name[, allow_sparse])</p></td>
+<td><p>Validate dense or sparse numeric 2D embeddings.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#vertebrae.utils.validation.ensure_sparse_numeric_2d" title="vertebrae.utils.validation.ensure_sparse_numeric_2d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ensure_sparse_numeric_2d</span></code></a>(value, name)</p></td>
+<td><p>Validate a scipy sparse numeric matrix.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#vertebrae.utils.validation.sparse_to_dense" title="vertebrae.utils.validation.sparse_to_dense"><code class="xref py py-obj docutils literal notranslate"><span class="pre">sparse_to_dense</span></code></a>(value, name, max_dense_bytes)</p></td>
+<td><p>Convert a sparse matrix to dense after checking memory size.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#vertebrae.utils.validation.estimate_dense_nbytes" title="vertebrae.utils.validation.estimate_dense_nbytes"><code class="xref py py-obj docutils literal notranslate"><span class="pre">estimate_dense_nbytes</span></code></a>(value)</p></td>
+<td><p>Estimate bytes required to represent a matrix densely.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="#vertebrae.utils.validation.is_sparse_matrix" title="vertebrae.utils.validation.is_sparse_matrix"><code class="xref py py-obj docutils literal notranslate"><span class="pre">is_sparse_matrix</span></code></a>(value)</p></td>
+<td><p>Return whether <cite>value</cite> is a scipy sparse matrix.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="#vertebrae.utils.validation.l2_normalize_rows" title="vertebrae.utils.validation.l2_normalize_rows"><code class="xref py py-obj docutils literal notranslate"><span class="pre">l2_normalize_rows</span></code></a>(value)</p></td>
+<td><p>L2-normalize rows of a dense numeric array.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="module-contents">
+<h2>Module Contents<a class="headerlink" href="#module-contents" title="Link to this heading"></a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.ensure_2d_numeric_array">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">ensure_2d_numeric_array</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#ensure_2d_numeric_array"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.ensure_2d_numeric_array" title="Link to this definition"></a></dt>
+<dd><p>Validate a dense 2D numeric array.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>value</strong> (<em>Any</em>) – Array-like value to validate.</p></li>
+<li><p><strong>name</strong> (<em>str</em>) – Human-readable name used in error messages.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A NumPy array with numeric, finite values.</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – If <cite>value</cite> is sparse, non-2D, non-numeric, or non-finite.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>numpy.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.ensure_dense_numeric_2d">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">ensure_dense_numeric_2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#ensure_dense_numeric_2d"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.ensure_dense_numeric_2d" title="Link to this definition"></a></dt>
+<dd><p>Validate dense 2D numeric output from an extractor.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>value</strong> (<em>Any</em>) – Array-like value to validate.</p></li>
+<li><p><strong>name</strong> (<em>str</em>) – Human-readable name used in error messages.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dense numeric NumPy array.</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – If <cite>value</cite> is sparse or invalid.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>numpy.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.ensure_numeric_matrix">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">ensure_numeric_matrix</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">allow_sparse</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#ensure_numeric_matrix"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.ensure_numeric_matrix" title="Link to this definition"></a></dt>
+<dd><p>Validate dense or sparse numeric 2D embeddings.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>value</strong> (<em>Any</em>) – Dense array-like object or scipy sparse matrix.</p></li>
+<li><p><strong>name</strong> (<em>str</em>) – Human-readable name used in error messages.</p></li>
+<li><p><strong>allow_sparse</strong> (<em>bool</em>) – Whether sparse matrices are accepted.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A NumPy array for dense input, or the original sparse matrix for sparse input.</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – If the matrix is not 2D, numeric, finite, or sparse is disallowed.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>Any</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.ensure_sparse_numeric_2d">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">ensure_sparse_numeric_2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#ensure_sparse_numeric_2d"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.ensure_sparse_numeric_2d" title="Link to this definition"></a></dt>
+<dd><p>Validate a scipy sparse numeric matrix.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>value</strong> (<em>Any</em>) – Sparse matrix to validate.</p></li>
+<li><p><strong>name</strong> (<em>str</em>) – Human-readable name used in error messages.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The original sparse matrix.</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – If the sparse matrix is non-2D, non-numeric, or non-finite.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>Any</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.sparse_to_dense">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">sparse_to_dense</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_dense_bytes</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#sparse_to_dense"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.sparse_to_dense" title="Link to this definition"></a></dt>
+<dd><p>Convert a sparse matrix to dense after checking memory size.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>value</strong> (<em>Any</em>) – Sparse matrix to densify.</p></li>
+<li><p><strong>name</strong> (<em>str</em>) – Human-readable name used in error messages.</p></li>
+<li><p><strong>max_dense_bytes</strong> (<em>int</em>) – Maximum allowed dense allocation size.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dense numeric NumPy array.</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>ValueError</strong> – If the dense representation would exceed <cite>max_dense_bytes</cite>.</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>numpy.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.estimate_dense_nbytes">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">estimate_dense_nbytes</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#estimate_dense_nbytes"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.estimate_dense_nbytes" title="Link to this definition"></a></dt>
+<dd><p>Estimate bytes required to represent a matrix densely.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>value</strong> (<em>Any</em>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>int</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.is_sparse_matrix">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">is_sparse_matrix</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#is_sparse_matrix"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.is_sparse_matrix" title="Link to this definition"></a></dt>
+<dd><p>Return whether <cite>value</cite> is a scipy sparse matrix.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>value</strong> (<em>Any</em>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>bool</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="vertebrae.utils.validation.l2_normalize_rows">
+<span class="sig-prename descclassname"><span class="pre">vertebrae.utils.validation.</span></span><span class="sig-name descname"><span class="pre">l2_normalize_rows</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../../../../_modules/vertebrae/utils/validation.html#l2_normalize_rows"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#vertebrae.utils.validation.l2_normalize_rows" title="Link to this definition"></a></dt>
+<dd><p>L2-normalize rows of a dense numeric array.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>value</strong> (<em>numpy.ndarray</em>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>numpy.ndarray</p>
+</dd>
+</dl>
+</dd></dl>
+
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../serialization/index.html" class="btn btn-neutral float-left" title="vertebrae.utils.serialization" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../benchmark/index.html" class="btn btn-neutral float-right" title="vertebrae.benchmark" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Niklas Melton.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

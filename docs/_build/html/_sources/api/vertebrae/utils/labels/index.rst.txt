@@ -1,0 +1,41 @@
+vertebrae.utils.labels
+======================
+
+.. py:module:: vertebrae.utils.labels
+
+.. autoapi-nested-parse::
+
+   Label helpers.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.utils.labels.class_counts
+   vertebrae.utils.labels.display_label
+
+
+Module Contents
+---------------
+
+.. py:function:: class_counts(y)
+
+   Count labels while preserving scalar label values.
+
+   :param y: One-dimensional label array.
+
+   :returns: Mapping from label values to sample counts.
+
+
+.. py:function:: display_label(label)
+
+   Convert a label value to display text.
+
+   :param label: Label value.
+
+   :returns: Human-readable label string.
+
+

@@ -1,0 +1,405 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vertebrae.scoring.overlap &mdash; vertebrae</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/graphviz.css?v=fd3f3429" />
+
+  
+      <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../../_static/doctools.js?v=9a2dae69"></script>
+      <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            vertebrae
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../overview.html">Vertebrae</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../datasets.html">datasets</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../feature_extractors.html">feature extractors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../scoring.html">scoring</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../results_and_reports.html">results and reports</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples.html">examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../distributed_readiness.html">distributed readiness</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/vertebrae/index.html">vertebrae</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">vertebrae</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">vertebrae.scoring.overlap</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for vertebrae.scoring.overlap</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Internal OverlapIndex adapter.&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<span class="kn">from</span> <span class="nn">vertebrae.config</span> <span class="kn">import</span> <span class="n">OverlapScoringConfig</span>
+<span class="kn">from</span> <span class="nn">vertebrae.utils.labels</span> <span class="kn">import</span> <span class="n">class_counts</span><span class="p">,</span> <span class="n">display_label</span>
+<span class="kn">from</span> <span class="nn">vertebrae.utils.serialization</span> <span class="kn">import</span> <span class="n">make_json_safe</span>
+<span class="kn">from</span> <span class="nn">vertebrae.utils.validation</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">ensure_numeric_matrix</span><span class="p">,</span>
+    <span class="n">is_sparse_matrix</span><span class="p">,</span>
+    <span class="n">l2_normalize_rows</span><span class="p">,</span>
+    <span class="n">sparse_to_dense</span><span class="p">,</span>
+<span class="p">)</span>
+
+
+<span class="nd">@dataclass</span>
+<div class="viewcode-block" id="OverlapScoreResult">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult">[docs]</a>
+<span class="k">class</span> <span class="nc">OverlapScoreResult</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Structured result from OverlapIndex scoring.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        macro_score: Global overlap score.</span>
+<span class="sd">        per_class_scores: Per-class scores returned by OverlapIndex.</span>
+<span class="sd">        pairwise_scores: Pairwise class scores returned by OverlapIndex.</span>
+<span class="sd">        sparse_adjacency: Sparse adjacency diagnostics when available.</span>
+<span class="sd">        class_counts: Counts per class.</span>
+<span class="sd">        k_per_class: Resolved MiniBatchKMeans k per class.</span>
+<span class="sd">        warnings: Scoring warnings.</span>
+<span class="sd">        metadata: Scoring metadata and backend details.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="OverlapScoreResult.macro_score">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.macro_score">[docs]</a>
+    <span class="n">macro_score</span><span class="p">:</span> <span class="nb">float</span></div>
+
+<div class="viewcode-block" id="OverlapScoreResult.per_class_scores">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.per_class_scores">[docs]</a>
+    <span class="n">per_class_scores</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="OverlapScoreResult.pairwise_scores">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.pairwise_scores">[docs]</a>
+    <span class="n">pairwise_scores</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="OverlapScoreResult.sparse_adjacency">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.sparse_adjacency">[docs]</a>
+    <span class="n">sparse_adjacency</span><span class="p">:</span> <span class="n">Any</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="OverlapScoreResult.class_counts">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.class_counts">[docs]</a>
+    <span class="n">class_counts</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="OverlapScoreResult.k_per_class">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.k_per_class">[docs]</a>
+    <span class="n">k_per_class</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="OverlapScoreResult.warnings">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.warnings">[docs]</a>
+    <span class="n">warnings</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="OverlapScoreResult.metadata">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.metadata">[docs]</a>
+    <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="OverlapScoreResult.to_dict">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapScoreResult.to_dict">[docs]</a>
+    <span class="k">def</span> <span class="nf">to_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Serialize the score result to a JSON-safe dictionary.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            JSON-compatible score result.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="k">return</span> <span class="n">make_json_safe</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span></div>
+</div>
+
+
+
+<div class="viewcode-block" id="auto_k_for_class">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.auto_k_for_class">[docs]</a>
+<span class="k">def</span> <span class="nf">auto_k_for_class</span><span class="p">(</span>
+    <span class="n">n_class</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">min_k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span><span class="p">,</span>
+    <span class="n">max_k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">50</span><span class="p">,</span>
+    <span class="n">min_samples_per_cluster</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve automatic k for a single class.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        n_class: Number of samples in the class.</span>
+<span class="sd">        min_k: Lower target for automatic k resolution.</span>
+<span class="sd">        max_k: Maximum allowed k.</span>
+<span class="sd">        min_samples_per_cluster: Minimum samples expected per cluster.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Resolved k value.</span>
+
+<span class="sd">    Raises:</span>
+<span class="sd">        ValueError: If the class has fewer than two samples.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">n_class</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Each class must contain at least 2 samples.&quot;</span><span class="p">)</span>
+    <span class="n">upper</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_class</span> <span class="o">//</span> <span class="n">min_samples_per_cluster</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">max_k</span><span class="p">,</span> <span class="n">upper</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">min_k</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">n_class</span><span class="o">**</span><span class="mf">0.5</span><span class="p">))))</span></div>
+
+
+
+<div class="viewcode-block" id="resolve_kmeans_k">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.resolve_kmeans_k">[docs]</a>
+<span class="k">def</span> <span class="nf">resolve_kmeans_k</span><span class="p">(</span>
+    <span class="n">y</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">OverlapScoringConfig</span><span class="p">,</span>
+    <span class="n">return_warnings</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]]:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve MiniBatchKMeans k values per class.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        y: Class labels.</span>
+<span class="sd">        config: Overlap scoring configuration.</span>
+<span class="sd">        return_warnings: Whether to also return warning strings.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        Mapping from class labels to resolved k values. When `return_warnings`</span>
+<span class="sd">        is true, returns `(k_per_class, warnings)`.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">y_arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+    <span class="n">counts</span> <span class="o">=</span> <span class="n">class_counts</span><span class="p">(</span><span class="n">y_arr</span><span class="p">)</span>
+    <span class="n">warnings</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">k_per_class</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
+
+    <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">counts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">k</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="n">requested</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">k</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">k</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="n">requested</span> <span class="o">=</span> <span class="n">_lookup_class_k</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">k</span><span class="p">,</span> <span class="n">label</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">requested</span> <span class="o">=</span> <span class="n">auto_k_for_class</span><span class="p">(</span>
+                <span class="n">count</span><span class="p">,</span>
+                <span class="n">min_k</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">min_k</span><span class="p">,</span>
+                <span class="n">max_k</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">max_k</span><span class="p">,</span>
+                <span class="n">min_samples_per_cluster</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">min_samples_per_cluster</span><span class="p">,</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">requested</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;k for class </span><span class="si">{</span><span class="n">display_label</span><span class="p">(</span><span class="n">label</span><span class="p">)</span><span class="si">}</span><span class="s2"> must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="n">max_allowed</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">count</span> <span class="o">//</span> <span class="n">config</span><span class="o">.</span><span class="n">min_samples_per_cluster</span><span class="p">)</span>
+        <span class="n">resolved</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">requested</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">max_k</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">max_allowed</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">count</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">resolved</span> <span class="o">&lt;</span> <span class="n">requested</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="s2">&quot;Reduced k for class &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">display_label</span><span class="p">(</span><span class="n">label</span><span class="p">)</span><span class="si">}</span><span class="s2"> from </span><span class="si">{</span><span class="n">requested</span><span class="si">}</span><span class="s2"> to </span><span class="si">{</span><span class="n">resolved</span><span class="si">}</span><span class="s2"> &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;because the class has </span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> samples.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">k</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="n">config</span><span class="o">.</span><span class="n">k</span> <span class="o">==</span> <span class="s2">&quot;auto&quot;</span> <span class="ow">and</span> <span class="n">resolved</span> <span class="o">&lt;</span> <span class="n">config</span><span class="o">.</span><span class="n">min_k</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="s2">&quot;Auto k for class &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">display_label</span><span class="p">(</span><span class="n">label</span><span class="p">)</span><span class="si">}</span><span class="s2"> resolved below min_k (</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">min_k</span><span class="si">}</span><span class="s2">) &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;because the class has </span><span class="si">{</span><span class="n">count</span><span class="si">}</span><span class="s2"> samples.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">k_per_class</span><span class="p">[</span><span class="n">label</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">resolved</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">return_warnings</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">k_per_class</span><span class="p">,</span> <span class="n">warnings</span>
+    <span class="k">return</span> <span class="n">k_per_class</span></div>
+
+
+
+<div class="viewcode-block" id="OverlapIndexScorer">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapIndexScorer">[docs]</a>
+<span class="k">class</span> <span class="nc">OverlapIndexScorer</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Internal adapter for MiniBatchKMeans-backed OverlapIndex scoring.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        config: Optional scoring configuration.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">OverlapScoringConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">config</span> <span class="ow">or</span> <span class="n">OverlapScoringConfig</span><span class="p">()</span>
+
+<div class="viewcode-block" id="OverlapIndexScorer.score">
+<a class="viewcode-back" href="../../../api/vertebrae/scoring/overlap/index.html#vertebrae.scoring.overlap.OverlapIndexScorer.score">[docs]</a>
+    <span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">Z</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">y</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">seed</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">OverlapScoreResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Score dense or sparse embeddings with OverlapIndex.</span>
+
+<span class="sd">        Sparse embeddings are validated and densified at this boundary because</span>
+<span class="sd">        the configured OverlapIndex backend consumes dense arrays.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            Z: Dense or sparse embedding matrix.</span>
+<span class="sd">            y: Class labels.</span>
+<span class="sd">            seed: Optional random seed forwarded to MiniBatchKMeans.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Structured scoring result.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ImportError: If `overlapindex` is not installed.</span>
+<span class="sd">            ValueError: If embeddings are invalid or too large to densify.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="n">embeddings</span> <span class="o">=</span> <span class="n">ensure_numeric_matrix</span><span class="p">(</span><span class="n">Z</span><span class="p">,</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">,</span> <span class="n">allow_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">labels</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">labels</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;embeddings and labels must have the same length; &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;got </span><span class="si">{</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> and </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">labels</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">warnings</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">sparse_input</span> <span class="o">=</span> <span class="n">is_sparse_matrix</span><span class="p">(</span><span class="n">embeddings</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">sparse_input</span><span class="p">:</span>
+            <span class="n">embeddings</span> <span class="o">=</span> <span class="n">sparse_to_dense</span><span class="p">(</span>
+                <span class="n">embeddings</span><span class="p">,</span>
+                <span class="s2">&quot;embeddings&quot;</span><span class="p">,</span>
+                <span class="n">max_dense_bytes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">max_dense_bytes</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="s2">&quot;Sparse embeddings were densified for MiniBatchKMeans-backed &quot;</span>
+                <span class="s2">&quot;OverlapIndex scoring.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">normalize_embeddings</span><span class="p">:</span>
+            <span class="n">embeddings</span> <span class="o">=</span> <span class="n">l2_normalize_rows</span><span class="p">(</span><span class="n">embeddings</span><span class="p">)</span>
+
+        <span class="n">k_per_class</span><span class="p">,</span> <span class="n">k_warnings</span> <span class="o">=</span> <span class="n">resolve_kmeans_k</span><span class="p">(</span><span class="n">labels</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">,</span> <span class="n">return_warnings</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">k_warnings</span><span class="p">)</span>
+        <span class="n">kmeans_kwargs</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">kmeans_kwargs</span> <span class="ow">or</span> <span class="p">{})</span>
+        <span class="k">if</span> <span class="n">seed</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">kmeans_kwargs</span><span class="p">[</span><span class="s2">&quot;random_state&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">seed</span>
+
+        <span class="n">OverlapIndex</span> <span class="o">=</span> <span class="n">_load_overlap_index</span><span class="p">()</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">OverlapIndex</span><span class="p">(</span>
+            <span class="n">model_type</span><span class="o">=</span><span class="s2">&quot;MiniBatchKMeans&quot;</span><span class="p">,</span>
+            <span class="n">kmeans_k</span><span class="o">=</span><span class="n">k_per_class</span><span class="p">,</span>
+            <span class="n">kmeans_kwargs</span><span class="o">=</span><span class="n">kmeans_kwargs</span><span class="p">,</span>
+            <span class="n">offline_chunk_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">offline_chunk_size</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">raw_score</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">fit_offline</span><span class="p">(</span><span class="n">embeddings</span><span class="p">,</span> <span class="n">labels</span><span class="p">,</span> <span class="n">reset_state</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">macro_score</span> <span class="o">=</span> <span class="n">_extract_macro_score</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">raw_score</span><span class="p">)</span>
+
+        <span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;backend&quot;</span><span class="p">:</span> <span class="s2">&quot;MiniBatchKMeans&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;normalize_embeddings&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">normalize_embeddings</span><span class="p">,</span>
+            <span class="s2">&quot;offline_chunk_size&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">offline_chunk_size</span><span class="p">,</span>
+            <span class="s2">&quot;seed&quot;</span><span class="p">:</span> <span class="n">seed</span><span class="p">,</span>
+            <span class="s2">&quot;kmeans_kwargs&quot;</span><span class="p">:</span> <span class="n">kmeans_kwargs</span><span class="p">,</span>
+            <span class="s2">&quot;sparse_input&quot;</span><span class="p">:</span> <span class="n">sparse_input</span><span class="p">,</span>
+            <span class="s2">&quot;scoring_input_format&quot;</span><span class="p">:</span> <span class="s2">&quot;dense&quot;</span><span class="p">,</span>
+        <span class="p">}</span>
+        <span class="k">return</span> <span class="n">OverlapScoreResult</span><span class="p">(</span>
+            <span class="n">macro_score</span><span class="o">=</span><span class="n">macro_score</span><span class="p">,</span>
+            <span class="n">per_class_scores</span><span class="o">=</span><span class="n">make_json_safe</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="s2">&quot;singleton_index&quot;</span><span class="p">,</span> <span class="p">{})),</span>
+            <span class="n">pairwise_scores</span><span class="o">=</span><span class="n">make_json_safe</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="s2">&quot;pairwise_index&quot;</span><span class="p">,</span> <span class="p">{})),</span>
+            <span class="n">sparse_adjacency</span><span class="o">=</span><span class="n">make_json_safe</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="s2">&quot;sparse_adj&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)),</span>
+            <span class="n">class_counts</span><span class="o">=</span><span class="n">class_counts</span><span class="p">(</span><span class="n">labels</span><span class="p">),</span>
+            <span class="n">k_per_class</span><span class="o">=</span><span class="n">k_per_class</span><span class="p">,</span>
+            <span class="n">warnings</span><span class="o">=</span><span class="n">warnings</span><span class="p">,</span>
+            <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">,</span>
+        <span class="p">)</span></div>
+</div>
+
+
+
+<span class="k">def</span> <span class="nf">_lookup_class_k</span><span class="p">(</span><span class="n">configured</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="n">label</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">configured</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">configured</span><span class="p">[</span><span class="n">label</span><span class="p">])</span>
+    <span class="n">label_value</span> <span class="o">=</span> <span class="n">label</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="s2">&quot;item&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="n">label</span>
+    <span class="k">if</span> <span class="n">label_value</span> <span class="ow">in</span> <span class="n">configured</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">configured</span><span class="p">[</span><span class="n">label_value</span><span class="p">])</span>
+    <span class="n">label_str</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">label_value</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">label_str</span> <span class="ow">in</span> <span class="n">configured</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">configured</span><span class="p">[</span><span class="n">label_str</span><span class="p">])</span>
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Missing k value for class </span><span class="si">{</span><span class="n">display_label</span><span class="p">(</span><span class="n">label</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">_load_overlap_index</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">from</span> <span class="nn">overlapindex</span> <span class="kn">import</span> <span class="n">OverlapIndex</span>
+    <span class="k">except</span> <span class="ne">ImportError</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ImportError</span><span class="p">(</span>
+            <span class="s2">&quot;overlapindex&gt;=0.1.1 is required for scoring. Install dependencies with Poetry &quot;</span>
+            <span class="s2">&quot;or install overlapindex directly.&quot;</span>
+        <span class="p">)</span> <span class="kn">from</span> <span class="nn">exc</span>
+    <span class="k">return</span> <span class="n">OverlapIndex</span>
+
+
+<span class="k">def</span> <span class="nf">_extract_macro_score</span><span class="p">(</span><span class="n">index</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">raw_score</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="n">candidates</span> <span class="o">=</span> <span class="p">[</span><span class="nb">getattr</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="s2">&quot;index&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span> <span class="n">raw_score</span><span class="p">]</span>
+    <span class="k">for</span> <span class="n">candidate</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">candidate</span><span class="p">,</span> <span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">number</span><span class="p">)):</span>
+            <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">candidate</span><span class="p">)</span>
+    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;OverlapIndex did not return a numeric global score.&quot;</span><span class="p">)</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Niklas Melton.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

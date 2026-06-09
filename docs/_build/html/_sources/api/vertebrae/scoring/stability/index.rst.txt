@@ -1,0 +1,34 @@
+vertebrae.scoring.stability
+===========================
+
+.. py:module:: vertebrae.scoring.stability
+
+.. autoapi-nested-parse::
+
+   Prototype and subsample stability analysis.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.scoring.stability.run_stability_analysis
+
+
+Module Contents
+---------------
+
+.. py:function:: run_stability_analysis(Z, y, scoring_config, stability_config = None)
+
+   Run prototype or subsample stability analysis.
+
+   :param Z: Dense or sparse embedding matrix.
+   :param y: Class labels.
+   :param scoring_config: OverlapIndex scoring configuration.
+   :param stability_config: Stability-analysis configuration.
+
+   :returns: Stability summary dictionary, or `None` when disabled.
+
+

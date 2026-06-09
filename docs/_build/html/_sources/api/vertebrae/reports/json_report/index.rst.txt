@@ -1,0 +1,30 @@
+vertebrae.reports.json_report
+=============================
+
+.. py:module:: vertebrae.reports.json_report
+
+.. autoapi-nested-parse::
+
+   JSON report serialization.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.reports.json_report.save_json_report
+
+
+Module Contents
+---------------
+
+.. py:function:: save_json_report(result, path)
+
+   Save a benchmark result as a JSON report.
+
+   :param result: Result object exposing `to_dict()`.
+   :param path: Destination file path.
+
+

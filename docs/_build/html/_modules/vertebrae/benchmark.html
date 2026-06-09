@@ -1,0 +1,720 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vertebrae.benchmark &mdash; vertebrae</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../_static/graphviz.css?v=fd3f3429" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=9a2dae69"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            vertebrae
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../overview.html">Vertebrae</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../datasets.html">datasets</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../feature_extractors.html">feature extractors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scoring.html">scoring</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../results_and_reports.html">results and reports</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../distributed_readiness.html">distributed readiness</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/vertebrae/index.html">vertebrae</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">vertebrae</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">vertebrae.benchmark</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for vertebrae.benchmark</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Benchmark runner.&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">asdict</span>
+<span class="kn">from</span> <span class="nn">datetime</span> <span class="kn">import</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
+<span class="kn">from</span> <span class="nn">time</span> <span class="kn">import</span> <span class="n">perf_counter</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Iterable</span><span class="p">,</span> <span class="n">Iterator</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<span class="kn">from</span> <span class="nn">vertebrae</span> <span class="kn">import</span> <span class="n">__version__</span>
+<span class="kn">from</span> <span class="nn">vertebrae.cache</span> <span class="kn">import</span> <span class="n">ArtifactStore</span><span class="p">,</span> <span class="n">create_artifact_store</span>
+<span class="kn">from</span> <span class="nn">vertebrae.cache.fingerprint</span> <span class="kn">import</span> <span class="n">fingerprint_extractor_recipe</span>
+<span class="kn">from</span> <span class="nn">vertebrae.config</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">CacheConfig</span><span class="p">,</span>
+    <span class="n">EmbeddingConfig</span><span class="p">,</span>
+    <span class="n">MemoryConfig</span><span class="p">,</span>
+    <span class="n">OverlapScoringConfig</span><span class="p">,</span>
+    <span class="n">ProbeConfig</span><span class="p">,</span>
+    <span class="n">StabilityConfig</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">vertebrae.execution.jobs</span> <span class="kn">import</span> <span class="n">SampleBatch</span>
+<span class="kn">from</span> <span class="nn">vertebrae.execution.local</span> <span class="kn">import</span> <span class="n">LocalBackend</span>
+<span class="kn">from</span> <span class="nn">vertebrae.reports.recommendations</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">recommendation_for_extractor</span><span class="p">,</span>
+    <span class="n">recommendations_for_benchmark</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">vertebrae.results</span> <span class="kn">import</span> <span class="n">BenchmarkResult</span><span class="p">,</span> <span class="n">ExtractorResult</span>
+<span class="kn">from</span> <span class="nn">vertebrae.scoring.overlap</span> <span class="kn">import</span> <span class="n">OverlapIndexScorer</span>
+<span class="kn">from</span> <span class="nn">vertebrae.scoring.probes</span> <span class="kn">import</span> <span class="n">run_probes</span>
+<span class="kn">from</span> <span class="nn">vertebrae.scoring.stability</span> <span class="kn">import</span> <span class="n">run_stability_analysis</span>
+<span class="kn">from</span> <span class="nn">vertebrae.utils.memory</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">EmbeddingMemoryEstimate</span><span class="p">,</span>
+    <span class="n">assert_within_memory</span><span class="p">,</span>
+    <span class="n">estimate_embedding_from_probe</span><span class="p">,</span>
+    <span class="n">estimate_matrix_resident_bytes</span><span class="p">,</span>
+    <span class="n">estimate_metadata_dense_scoring_bytes</span><span class="p">,</span>
+    <span class="n">estimate_metadata_resident_bytes</span><span class="p">,</span>
+    <span class="n">largest_fitting_subsample_rate</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">vertebrae.utils.validation</span> <span class="kn">import</span> <span class="n">ensure_numeric_matrix</span><span class="p">,</span> <span class="n">is_sparse_matrix</span>
+
+
+<div class="viewcode-block" id="Benchmark">
+<a class="viewcode-back" href="../../api/vertebrae/benchmark/index.html#vertebrae.benchmark.Benchmark">[docs]</a>
+<span class="k">class</span> <span class="nc">Benchmark</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Run one or more extractors against a labeled dataset.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        dataset: Dataset object with inputs and labels.</span>
+<span class="sd">        extractors: Optional iterable of extractors to evaluate.</span>
+<span class="sd">        scoring_config: OverlapIndex scoring configuration.</span>
+<span class="sd">        stability_config: Stability-analysis configuration.</span>
+<span class="sd">        probe_config: Probe-classifier configuration.</span>
+<span class="sd">        cache_config: Embedding cache configuration.</span>
+<span class="sd">        embedding_config: Embedding batching and streaming configuration.</span>
+<span class="sd">        execution: Local execution backend.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">dataset</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">extractors</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Iterable</span><span class="p">[</span><span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">scoring_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">OverlapScoringConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">stability_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">StabilityConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">probe_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ProbeConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">cache_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">CacheConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">embedding_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">EmbeddingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">memory_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">MemoryConfig</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">execution</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dataset</span> <span class="o">=</span> <span class="n">dataset</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">extractors</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">extractors</span> <span class="ow">or</span> <span class="p">[])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">scoring_config</span> <span class="o">=</span> <span class="n">scoring_config</span> <span class="ow">or</span> <span class="n">OverlapScoringConfig</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stability_config</span> <span class="o">=</span> <span class="n">stability_config</span> <span class="ow">or</span> <span class="n">StabilityConfig</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">probe_config</span> <span class="o">=</span> <span class="n">probe_config</span> <span class="ow">or</span> <span class="n">ProbeConfig</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span> <span class="o">=</span> <span class="n">cache_config</span> <span class="ow">or</span> <span class="n">CacheConfig</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span> <span class="o">=</span> <span class="n">embedding_config</span> <span class="ow">or</span> <span class="n">EmbeddingConfig</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span> <span class="o">=</span> <span class="n">memory_config</span> <span class="ow">or</span> <span class="n">MemoryConfig</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">execution</span> <span class="o">=</span> <span class="n">execution</span> <span class="ow">or</span> <span class="n">LocalBackend</span><span class="p">()</span>
+
+<div class="viewcode-block" id="Benchmark.add_extractor">
+<a class="viewcode-back" href="../../api/vertebrae/benchmark/index.html#vertebrae.benchmark.Benchmark.add_extractor">[docs]</a>
+    <span class="k">def</span> <span class="nf">add_extractor</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">&quot;Benchmark&quot;</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Add an extractor to this benchmark.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            extractor: Feature extractor implementing the vertebrae protocol.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            This benchmark instance for fluent chaining.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">extractors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">extractor</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span></div>
+
+
+<div class="viewcode-block" id="Benchmark.run">
+<a class="viewcode-back" href="../../api/vertebrae/benchmark/index.html#vertebrae.benchmark.Benchmark.run">[docs]</a>
+    <span class="k">def</span> <span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BenchmarkResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Run feature extraction, scoring, optional probes, and reporting aggregation.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Aggregated benchmark result.</span>
+
+<span class="sd">        Raises:</span>
+<span class="sd">            ValueError: If no extractors are configured or dataset validation fails.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">extractors</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;At least one extractor must be provided.&quot;</span><span class="p">)</span>
+
+        <span class="n">extractor_results</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">_run_extractor</span><span class="p">(</span><span class="n">extractor</span><span class="p">)</span> <span class="k">for</span> <span class="n">extractor</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">extractors</span><span class="p">]</span>
+        <span class="n">recommendations</span> <span class="o">=</span> <span class="n">recommendations_for_benchmark</span><span class="p">(</span><span class="n">extractor_results</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">BenchmarkResult</span><span class="p">(</span>
+            <span class="n">dataset_summary</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">summary</span><span class="p">(),</span>
+            <span class="n">extractor_results</span><span class="o">=</span><span class="n">extractor_results</span><span class="p">,</span>
+            <span class="n">recommendations</span><span class="o">=</span><span class="n">recommendations</span><span class="p">,</span>
+            <span class="n">metadata</span><span class="o">=</span><span class="p">{</span>
+                <span class="s2">&quot;vertebrae_version&quot;</span><span class="p">:</span> <span class="n">__version__</span><span class="p">,</span>
+                <span class="s2">&quot;generated_at&quot;</span><span class="p">:</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">(</span><span class="n">timezone</span><span class="o">.</span><span class="n">utc</span><span class="p">)</span><span class="o">.</span><span class="n">isoformat</span><span class="p">(),</span>
+                <span class="s2">&quot;scoring_config&quot;</span><span class="p">:</span> <span class="n">asdict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scoring_config</span><span class="p">),</span>
+                <span class="s2">&quot;stability_config&quot;</span><span class="p">:</span> <span class="n">asdict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stability_config</span><span class="p">),</span>
+                <span class="s2">&quot;probe_config&quot;</span><span class="p">:</span> <span class="n">asdict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">probe_config</span><span class="p">),</span>
+                <span class="s2">&quot;cache_config&quot;</span><span class="p">:</span> <span class="n">asdict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="p">),</span>
+                <span class="s2">&quot;embedding_config&quot;</span><span class="p">:</span> <span class="n">asdict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="p">),</span>
+                <span class="s2">&quot;memory_config&quot;</span><span class="p">:</span> <span class="n">asdict</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">),</span>
+            <span class="p">},</span>
+        <span class="p">)</span></div>
+
+
+    <span class="k">def</span> <span class="nf">_run_extractor</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ExtractorResult</span><span class="p">:</span>
+        <span class="n">warnings</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">runtime</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">start</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span>
+        <span class="n">dataset</span><span class="p">,</span> <span class="n">subsampling_warnings</span><span class="p">,</span> <span class="n">subsampling_metadata</span><span class="p">,</span> <span class="n">probe_plan</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_prepare_dataset_for_extractor</span><span class="p">(</span><span class="n">extractor</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">subsampling_warnings</span><span class="p">)</span>
+        <span class="n">embeddings</span><span class="p">,</span> <span class="n">embedding_metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_or_compute_embeddings</span><span class="p">(</span>
+            <span class="n">extractor</span><span class="p">,</span>
+            <span class="n">dataset</span><span class="p">,</span>
+            <span class="n">subsampling_metadata</span><span class="p">,</span>
+            <span class="n">probe_plan</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">runtime</span><span class="p">[</span><span class="s2">&quot;embedding_seconds&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span>
+
+        <span class="n">score_start</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_admit_scoring_memory</span><span class="p">(</span><span class="n">embedding_metadata</span><span class="p">)</span>
+        <span class="n">overlap</span> <span class="o">=</span> <span class="n">OverlapIndexScorer</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scoring_config</span><span class="p">)</span><span class="o">.</span><span class="n">score</span><span class="p">(</span><span class="n">embeddings</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+        <span class="n">runtime</span><span class="p">[</span><span class="s2">&quot;scoring_seconds&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">score_start</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">overlap</span><span class="o">.</span><span class="n">warnings</span><span class="p">)</span>
+
+        <span class="n">stability_start</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span>
+        <span class="n">stability</span> <span class="o">=</span> <span class="n">run_stability_analysis</span><span class="p">(</span>
+            <span class="n">embeddings</span><span class="p">,</span>
+            <span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">scoring_config</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">stability_config</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">runtime</span><span class="p">[</span><span class="s2">&quot;stability_seconds&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">stability_start</span>
+        <span class="k">if</span> <span class="n">stability</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">stability</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;warnings&quot;</span><span class="p">,</span> <span class="p">[]))</span>
+
+        <span class="n">probe_start</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span>
+        <span class="n">probes</span> <span class="o">=</span> <span class="n">run_probes</span><span class="p">(</span><span class="n">embeddings</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">probe_config</span><span class="p">)</span>
+        <span class="n">runtime</span><span class="p">[</span><span class="s2">&quot;probe_seconds&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">probe_start</span>
+        <span class="k">if</span> <span class="n">probes</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">probes</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;warnings&quot;</span><span class="p">,</span> <span class="p">[]))</span>
+
+        <span class="n">weakest_class</span><span class="p">,</span> <span class="n">weakest_score</span> <span class="o">=</span> <span class="n">_weakest_class</span><span class="p">(</span><span class="n">overlap</span><span class="o">.</span><span class="n">per_class_scores</span><span class="p">)</span>
+        <span class="n">recommendation</span> <span class="o">=</span> <span class="n">recommendation_for_extractor</span><span class="p">(</span><span class="n">overlap</span><span class="o">.</span><span class="n">macro_score</span><span class="p">,</span> <span class="n">stability</span><span class="p">,</span> <span class="n">weakest_score</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ExtractorResult</span><span class="p">(</span>
+            <span class="n">name</span><span class="o">=</span><span class="n">extractor</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+            <span class="n">extractor_type</span><span class="o">=</span><span class="nb">getattr</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="s2">&quot;extractor_type&quot;</span><span class="p">,</span> <span class="s2">&quot;unknown&quot;</span><span class="p">),</span>
+            <span class="n">overlap</span><span class="o">=</span><span class="n">overlap</span><span class="p">,</span>
+            <span class="n">stability</span><span class="o">=</span><span class="n">stability</span><span class="p">,</span>
+            <span class="n">probes</span><span class="o">=</span><span class="n">probes</span><span class="p">,</span>
+            <span class="n">embedding_metadata</span><span class="o">=</span><span class="n">embedding_metadata</span><span class="p">,</span>
+            <span class="n">runtime</span><span class="o">=</span><span class="n">runtime</span><span class="p">,</span>
+            <span class="n">warnings</span><span class="o">=</span><span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">warnings</span><span class="p">)),</span>
+            <span class="n">weakest_class</span><span class="o">=</span><span class="n">weakest_class</span><span class="p">,</span>
+            <span class="n">weakest_class_score</span><span class="o">=</span><span class="n">weakest_score</span><span class="p">,</span>
+            <span class="n">recommendation</span><span class="o">=</span><span class="n">recommendation</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_prepare_dataset_for_extractor</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">SampleBatch</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">]]]:</span>
+        <span class="n">dataset</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dataset</span>
+        <span class="n">warnings</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">probe_plan</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">SampleBatch</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;subsampled&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="s2">&quot;subsample_reason&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;requested_subsample_rate&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">subsample_rate</span><span class="p">,</span>
+            <span class="s2">&quot;effective_subsample_rate&quot;</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>
+            <span class="s2">&quot;parent_n_samples&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)),</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">subsample_rate</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="n">dataset</span><span class="p">,</span> <span class="n">user_metadata</span><span class="p">,</span> <span class="n">warning</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_subsample_dataset</span><span class="p">(</span>
+                <span class="n">dataset</span><span class="p">,</span>
+                <span class="n">rate</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">subsample_rate</span><span class="p">,</span>
+                <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;user_requested&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">metadata</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">user_metadata</span><span class="p">)</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">warning</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_should_stream_embeddings</span><span class="p">(</span><span class="n">extractor</span><span class="p">):</span>
+            <span class="n">auto_rate</span><span class="p">,</span> <span class="n">probe_plan</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_auto_subsample_rate_for_streaming_estimate</span><span class="p">(</span>
+                <span class="n">extractor</span><span class="p">,</span>
+                <span class="n">dataset</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">auto_rate</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+                <span class="n">dataset</span><span class="p">,</span> <span class="n">auto_metadata</span><span class="p">,</span> <span class="n">warning</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_subsample_dataset</span><span class="p">(</span>
+                    <span class="n">dataset</span><span class="p">,</span>
+                    <span class="n">rate</span><span class="o">=</span><span class="n">auto_rate</span><span class="p">,</span>
+                    <span class="n">reason</span><span class="o">=</span><span class="s2">&quot;memory_limit&quot;</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">metadata</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">auto_metadata</span><span class="p">)</span>
+                <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;parent_n_samples&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">))</span>
+                <span class="n">warnings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">warning</span><span class="p">)</span>
+                <span class="n">probe_plan</span> <span class="o">=</span> <span class="kc">None</span>
+
+        <span class="k">return</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">warnings</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="n">probe_plan</span>
+
+    <span class="k">def</span> <span class="nf">_subsample_dataset</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dataset</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">rate</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">dict</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
+        <span class="n">indices</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">stratified_subsample_indices</span><span class="p">(</span>
+            <span class="n">rate</span><span class="o">=</span><span class="n">rate</span><span class="p">,</span>
+            <span class="n">random_state</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">subsample_random_state</span><span class="p">,</span>
+            <span class="n">min_samples_per_class</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">min_subsample_samples_per_class</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">parent_n_samples</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">))</span>
+        <span class="n">subset</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">subset</span><span class="p">(</span>
+            <span class="n">indices</span><span class="p">,</span>
+            <span class="n">metadata</span><span class="o">=</span><span class="p">{</span>
+                <span class="s2">&quot;subsampled&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+                <span class="s2">&quot;subsample_reason&quot;</span><span class="p">:</span> <span class="n">reason</span><span class="p">,</span>
+                <span class="s2">&quot;requested_subsample_rate&quot;</span><span class="p">:</span> <span class="n">rate</span><span class="p">,</span>
+                <span class="s2">&quot;effective_subsample_rate&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="o">/</span> <span class="n">parent_n_samples</span><span class="p">,</span>
+            <span class="p">},</span>
+        <span class="p">)</span>
+        <span class="n">effective_rate</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="o">/</span> <span class="n">parent_n_samples</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="p">{</span>
+            <span class="s2">&quot;subsampled&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+            <span class="s2">&quot;subsample_reason&quot;</span><span class="p">:</span> <span class="n">reason</span><span class="p">,</span>
+            <span class="s2">&quot;requested_subsample_rate&quot;</span><span class="p">:</span> <span class="n">rate</span><span class="p">,</span>
+            <span class="s2">&quot;effective_subsample_rate&quot;</span><span class="p">:</span> <span class="n">effective_rate</span><span class="p">,</span>
+            <span class="s2">&quot;parent_n_samples&quot;</span><span class="p">:</span> <span class="n">parent_n_samples</span><span class="p">,</span>
+            <span class="s2">&quot;sample_indices&quot;</span><span class="p">:</span> <span class="n">subset</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;sample_indices&quot;</span><span class="p">,</span> <span class="n">indices</span><span class="o">.</span><span class="n">tolist</span><span class="p">()),</span>
+            <span class="s2">&quot;n_samples_after_subsampling&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)),</span>
+        <span class="p">}</span>
+        <span class="k">if</span> <span class="n">reason</span> <span class="o">==</span> <span class="s2">&quot;memory_limit&quot;</span><span class="p">:</span>
+            <span class="n">warning</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="s2">&quot;Embedding memory estimate exceeded the configured budget; using a &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;class-stratified subsample with effective rate </span><span class="si">{</span><span class="n">effective_rate</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">parent_n_samples</span><span class="si">}</span><span class="s2"> samples).&quot;</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">warning</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="s2">&quot;Using user-requested class-stratified subsample with effective rate &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">effective_rate</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">parent_n_samples</span><span class="si">}</span><span class="s2"> samples).&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">subset</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="n">warning</span>
+
+    <span class="k">def</span> <span class="nf">_auto_subsample_rate_for_streaming_estimate</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">dataset</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">SampleBatch</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">]]]:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">auto_subsample_on_memory_exceeded</span><span class="p">:</span>
+            <span class="k">return</span> <span class="mf">1.0</span><span class="p">,</span> <span class="kc">None</span>
+        <span class="n">extractor</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">X</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+        <span class="n">first_batch</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span>
+            <span class="n">dataset</span><span class="o">.</span><span class="n">iter_batches</span><span class="p">(</span>
+                <span class="n">batch_size</span><span class="o">=</span><span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)),</span>
+                <span class="n">shard</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">shard</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">first_embeddings</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embed_batch</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="n">first_batch</span><span class="p">)</span>
+        <span class="n">estimate</span> <span class="o">=</span> <span class="n">estimate_embedding_from_probe</span><span class="p">(</span>
+            <span class="n">first_embeddings</span><span class="p">,</span>
+            <span class="n">n_samples</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">),</span>
+            <span class="n">batch_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span>
+            <span class="n">memory_config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">required</span> <span class="o">=</span> <span class="n">estimate</span><span class="o">.</span><span class="n">dense_scoring_bytes</span>
+        <span class="k">if</span> <span class="n">estimate</span><span class="o">.</span><span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;in_memory&quot;</span><span class="p">:</span>
+            <span class="n">required</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">required</span><span class="p">,</span> <span class="n">estimate</span><span class="o">.</span><span class="n">resident_bytes</span><span class="p">)</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_admit_embedding_plan</span><span class="p">(</span><span class="n">estimate</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="n">rate</span> <span class="o">=</span> <span class="n">largest_fitting_subsample_rate</span><span class="p">(</span><span class="n">required</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">rate</span> <span class="o">&lt;=</span> <span class="mf">0.0</span><span class="p">:</span>
+                <span class="k">return</span> <span class="mf">1.0</span><span class="p">,</span> <span class="p">(</span><span class="n">first_batch</span><span class="p">,</span> <span class="n">first_embeddings</span><span class="p">,</span> <span class="n">estimate</span><span class="p">)</span>
+            <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">rate</span><span class="p">),</span> <span class="kc">None</span>
+        <span class="k">return</span> <span class="mf">1.0</span><span class="p">,</span> <span class="p">(</span><span class="n">first_batch</span><span class="p">,</span> <span class="n">first_embeddings</span><span class="p">,</span> <span class="n">estimate</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_get_or_compute_embeddings</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">dataset</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">subsampling_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">probe_plan</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">SampleBatch</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="n">recipe</span> <span class="o">=</span> <span class="n">extractor</span><span class="o">.</span><span class="n">recipe</span><span class="p">()</span>
+        <span class="n">dataset_key</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">fingerprint</span><span class="p">()</span>
+        <span class="n">extractor_key</span> <span class="o">=</span> <span class="n">fingerprint_extractor_recipe</span><span class="p">(</span><span class="n">recipe</span><span class="p">)</span>
+        <span class="n">cache_key</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;embeddings/</span><span class="si">{</span><span class="n">dataset_key</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">extractor_key</span><span class="si">}</span><span class="s2">&quot;</span>
+        <span class="n">store</span> <span class="o">=</span> <span class="n">create_artifact_store</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="o">.</span><span class="n">cache_dir</span><span class="p">,</span>
+            <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="o">.</span><span class="n">storage_options</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="o">.</span><span class="n">enabled</span>
+            <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="o">.</span><span class="n">force_recompute</span>
+            <span class="ow">and</span> <span class="n">store</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">cache_key</span><span class="p">)</span>
+        <span class="p">):</span>
+            <span class="n">metadata</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">get_json</span><span class="p">(</span><span class="n">cache_key</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_admit_cached_embedding_load</span><span class="p">(</span><span class="n">metadata</span><span class="p">)</span>
+            <span class="n">embeddings</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">get_array</span><span class="p">(</span><span class="n">cache_key</span><span class="p">)</span>
+            <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;cache_hit&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+            <span class="n">metadata</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">subsampling_metadata</span> <span class="ow">or</span> <span class="p">{})</span>
+            <span class="k">return</span> <span class="n">embeddings</span><span class="p">,</span> <span class="n">metadata</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_should_stream_embeddings</span><span class="p">(</span><span class="n">extractor</span><span class="p">):</span>
+            <span class="n">embeddings</span><span class="p">,</span> <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_stream_embeddings</span><span class="p">(</span>
+                <span class="n">extractor</span><span class="p">,</span>
+                <span class="n">dataset</span><span class="p">,</span>
+                <span class="n">store</span><span class="p">,</span>
+                <span class="n">cache_key</span><span class="p">,</span>
+                <span class="n">recipe</span><span class="p">,</span>
+                <span class="n">probe_plan</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">metadata</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">subsampling_metadata</span> <span class="ow">or</span> <span class="p">{})</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="o">.</span><span class="n">enabled</span><span class="p">:</span>
+                <span class="n">store</span><span class="o">.</span><span class="n">put_json</span><span class="p">(</span><span class="n">cache_key</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">embeddings</span><span class="p">,</span> <span class="n">metadata</span>
+
+        <span class="n">embeddings</span> <span class="o">=</span> <span class="n">extractor</span><span class="o">.</span><span class="n">fit_transform</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">X</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+        <span class="n">embeddings</span> <span class="o">=</span> <span class="n">ensure_numeric_matrix</span><span class="p">(</span>
+            <span class="n">embeddings</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;Extractor &#39;</span><span class="si">{</span><span class="n">extractor</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39; embeddings&quot;</span><span class="p">,</span>
+            <span class="n">allow_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_admit_resident_embedding</span><span class="p">(</span><span class="n">embeddings</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Extractor &#39;</span><span class="si">{</span><span class="n">extractor</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39; returned </span><span class="si">{</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> embeddings &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;for </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)</span><span class="si">}</span><span class="s2"> labels.&quot;</span>
+            <span class="p">)</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_metadata</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">embeddings</span><span class="p">,</span> <span class="n">cache_key</span><span class="p">,</span> <span class="n">recipe</span><span class="p">)</span>
+        <span class="n">metadata</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">subsampling_metadata</span> <span class="ow">or</span> <span class="p">{})</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="o">.</span><span class="n">enabled</span><span class="p">:</span>
+            <span class="n">store</span><span class="o">.</span><span class="n">put_array</span><span class="p">(</span><span class="n">cache_key</span><span class="p">,</span> <span class="n">embeddings</span><span class="p">)</span>
+            <span class="n">store</span><span class="o">.</span><span class="n">put_json</span><span class="p">(</span><span class="n">cache_key</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">embeddings</span><span class="p">,</span> <span class="n">metadata</span>
+
+    <span class="k">def</span> <span class="nf">_should_stream_embeddings</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">streaming_enabled</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="n">shard</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">shard</span>
+        <span class="k">if</span> <span class="n">shard</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">shard</span><span class="o">.</span><span class="n">is_complete</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;Benchmark.run requires a complete embedding artifact for scoring. &quot;</span>
+                <span class="s2">&quot;Use BenchmarkDataset.iter_batches(..., shard=...) or a future embedding &quot;</span>
+                <span class="s2">&quot;job runner to materialize distributed shards without duplicate samples.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="nb">bool</span><span class="p">(</span><span class="nb">getattr</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="s2">&quot;streaming_safe&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">))</span> <span class="ow">or</span> <span class="nb">bool</span><span class="p">(</span>
+            <span class="nb">getattr</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="s2">&quot;already_fitted&quot;</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_stream_embeddings</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">dataset</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">store</span><span class="p">:</span> <span class="n">ArtifactStore</span><span class="p">,</span>
+        <span class="n">cache_key</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">recipe</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+        <span class="n">probe_plan</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">SampleBatch</span><span class="p">,</span> <span class="n">Any</span><span class="p">,</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">dict</span><span class="p">]:</span>
+        <span class="n">n_samples</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+        <span class="n">batch_iterator</span> <span class="o">=</span> <span class="nb">iter</span><span class="p">(</span>
+            <span class="n">dataset</span><span class="o">.</span><span class="n">iter_batches</span><span class="p">(</span>
+                <span class="n">batch_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span>
+                <span class="n">shard</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">shard</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">probe_plan</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">extractor</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">X</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">y</span><span class="p">)</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">first_batch</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">batch_iterator</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">StopIteration</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;At least one sample is required for embedding.&quot;</span><span class="p">)</span> <span class="kn">from</span> <span class="nn">exc</span>
+            <span class="n">first_embeddings</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embed_batch</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="n">first_batch</span><span class="p">)</span>
+            <span class="n">memory_estimate</span> <span class="o">=</span> <span class="n">estimate_embedding_from_probe</span><span class="p">(</span>
+                <span class="n">first_embeddings</span><span class="p">,</span>
+                <span class="n">n_samples</span><span class="o">=</span><span class="n">n_samples</span><span class="p">,</span>
+                <span class="n">batch_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">batch_size</span><span class="p">,</span>
+                <span class="n">memory_config</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_admit_embedding_plan</span><span class="p">(</span><span class="n">memory_estimate</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">first_batch</span><span class="p">,</span> <span class="n">first_embeddings</span><span class="p">,</span> <span class="n">memory_estimate</span> <span class="o">=</span> <span class="n">probe_plan</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">skipped_batch</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="n">batch_iterator</span><span class="p">)</span>
+            <span class="k">except</span> <span class="ne">StopIteration</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;At least one sample is required for embedding.&quot;</span><span class="p">)</span> <span class="kn">from</span> <span class="nn">exc</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">skipped_batch</span><span class="o">.</span><span class="n">indices</span><span class="p">,</span> <span class="n">first_batch</span><span class="o">.</span><span class="n">indices</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Reusable embedding probe does not match streaming batch order.&quot;</span><span class="p">)</span>
+        <span class="n">batch_pairs</span> <span class="o">=</span> <span class="n">_prepend_batch</span><span class="p">(</span>
+            <span class="n">first_batch</span><span class="o">.</span><span class="n">indices</span><span class="p">,</span>
+            <span class="n">first_embeddings</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_batches_from</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="n">batch_iterator</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cache_config</span><span class="o">.</span><span class="n">enabled</span><span class="p">:</span>
+            <span class="n">store</span><span class="o">.</span><span class="n">put_array_batches</span><span class="p">(</span>
+                <span class="n">cache_key</span><span class="p">,</span>
+                <span class="n">batch_pairs</span><span class="p">,</span>
+                <span class="n">n_samples</span><span class="o">=</span><span class="n">n_samples</span><span class="p">,</span>
+                <span class="n">require_complete</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">embeddings</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">get_array</span><span class="p">(</span><span class="n">cache_key</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">memory_estimate</span><span class="o">.</span><span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;stream_to_disk&quot;</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;Embedding artifact is estimated to exceed the memory budget, but &quot;</span>
+                    <span class="s2">&quot;CacheConfig.enabled=False prevents streaming it to disk. Enable &quot;</span>
+                    <span class="s2">&quot;the cache or increase MemoryConfig.max_memory_bytes.&quot;</span>
+                <span class="p">)</span>
+            <span class="n">embeddings</span> <span class="o">=</span> <span class="n">_combine_embedding_batches</span><span class="p">(</span>
+                <span class="n">batch_pairs</span><span class="p">,</span>
+                <span class="n">n_samples</span><span class="o">=</span><span class="n">n_samples</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embedding_metadata</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">embeddings</span><span class="p">,</span> <span class="n">cache_key</span><span class="p">,</span> <span class="n">recipe</span><span class="p">)</span>
+        <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;streamed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;stream_batch_size&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_config</span><span class="o">.</span><span class="n">batch_size</span>
+        <span class="n">metadata</span><span class="p">[</span><span class="s2">&quot;memory_estimate&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">memory_estimate</span><span class="o">.</span><span class="n">to_dict</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">embeddings</span><span class="p">,</span> <span class="n">metadata</span>
+
+    <span class="k">def</span> <span class="nf">_embedding_batches_from</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">batches</span><span class="p">:</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">SampleBatch</span><span class="p">],</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]:</span>
+        <span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batches</span><span class="p">:</span>
+            <span class="k">yield</span> <span class="n">batch</span><span class="o">.</span><span class="n">indices</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_embed_batch</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_embed_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">batch</span><span class="p">:</span> <span class="n">SampleBatch</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+        <span class="n">embeddings</span> <span class="o">=</span> <span class="n">extractor</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">X</span><span class="p">)</span>
+        <span class="n">embeddings</span> <span class="o">=</span> <span class="n">ensure_numeric_matrix</span><span class="p">(</span>
+            <span class="n">embeddings</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;Extractor &#39;</span><span class="si">{</span><span class="n">extractor</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39; batch embeddings&quot;</span><span class="p">,</span>
+            <span class="n">allow_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">indices</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Extractor &#39;</span><span class="si">{</span><span class="n">extractor</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&#39; returned </span><span class="si">{</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> embeddings &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;for a batch with </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">indices</span><span class="p">)</span><span class="si">}</span><span class="s2"> samples.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">embeddings</span>
+
+    <span class="k">def</span> <span class="nf">_embedding_metadata</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">extractor</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">dataset</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">embeddings</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">cache_key</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">recipe</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+        <span class="n">sparse_embeddings</span> <span class="o">=</span> <span class="n">is_sparse_matrix</span><span class="p">(</span><span class="n">embeddings</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">&quot;extractor_name&quot;</span><span class="p">:</span> <span class="n">extractor</span><span class="o">.</span><span class="n">name</span><span class="p">,</span>
+            <span class="s2">&quot;extractor_type&quot;</span><span class="p">:</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="s2">&quot;extractor_type&quot;</span><span class="p">,</span> <span class="s2">&quot;unknown&quot;</span><span class="p">),</span>
+            <span class="s2">&quot;modality&quot;</span><span class="p">:</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">extractor</span><span class="p">,</span> <span class="s2">&quot;modality&quot;</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">modality</span><span class="p">),</span>
+            <span class="s2">&quot;cache_hit&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="s2">&quot;cache_key&quot;</span><span class="p">:</span> <span class="n">cache_key</span><span class="p">,</span>
+            <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
+            <span class="s2">&quot;n_samples&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span>
+            <span class="s2">&quot;embedding_dim&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">embeddings</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span>
+            <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">embeddings</span><span class="o">.</span><span class="n">dtype</span><span class="p">),</span>
+            <span class="s2">&quot;sparse&quot;</span><span class="p">:</span> <span class="n">sparse_embeddings</span><span class="p">,</span>
+            <span class="s2">&quot;nnz&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">embeddings</span><span class="o">.</span><span class="n">nnz</span><span class="p">)</span> <span class="k">if</span> <span class="n">sparse_embeddings</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;storage_format&quot;</span><span class="p">:</span> <span class="n">embeddings</span><span class="o">.</span><span class="n">getformat</span><span class="p">()</span> <span class="k">if</span> <span class="n">sparse_embeddings</span> <span class="k">else</span> <span class="s2">&quot;dense&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;streamed&quot;</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+            <span class="s2">&quot;memory_estimate&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="s2">&quot;recipe&quot;</span><span class="p">:</span> <span class="n">recipe</span><span class="p">,</span>
+            <span class="s2">&quot;extractor_recipe&quot;</span><span class="p">:</span> <span class="n">recipe</span><span class="p">,</span>
+        <span class="p">}</span>
+
+    <span class="k">def</span> <span class="nf">_admit_embedding_plan</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">estimate</span><span class="p">:</span> <span class="n">EmbeddingMemoryEstimate</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">batch_required</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">estimate</span><span class="o">.</span><span class="n">batch_embedding_bytes</span>
+            <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">model_memory_bytes</span>
+            <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="o">.</span><span class="n">raw_batch_memory_bytes</span>
+        <span class="p">)</span>
+        <span class="n">assert_within_memory</span><span class="p">(</span>
+            <span class="n">batch_required</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+            <span class="n">purpose</span><span class="o">=</span><span class="s2">&quot;Embedding batch&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">estimate</span><span class="o">.</span><span class="n">strategy</span> <span class="o">==</span> <span class="s2">&quot;in_memory&quot;</span><span class="p">:</span>
+            <span class="n">assert_within_memory</span><span class="p">(</span>
+                <span class="n">estimate</span><span class="o">.</span><span class="n">resident_bytes</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+                <span class="n">purpose</span><span class="o">=</span><span class="s2">&quot;Resident embedding artifact&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="n">assert_within_memory</span><span class="p">(</span>
+            <span class="n">estimate</span><span class="o">.</span><span class="n">dense_scoring_bytes</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+            <span class="n">purpose</span><span class="o">=</span><span class="s2">&quot;Dense scoring input&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_admit_resident_embedding</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">embeddings</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">required</span> <span class="o">=</span> <span class="n">estimate_matrix_resident_bytes</span><span class="p">(</span><span class="n">embeddings</span><span class="p">)</span>
+        <span class="n">assert_within_memory</span><span class="p">(</span>
+            <span class="n">required</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+            <span class="n">purpose</span><span class="o">=</span><span class="s2">&quot;Resident embedding artifact&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_admit_cached_embedding_load</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">required</span> <span class="o">=</span> <span class="n">estimate_metadata_resident_bytes</span><span class="p">(</span><span class="n">metadata</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">required</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">assert_within_memory</span><span class="p">(</span>
+                <span class="n">required</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+                <span class="n">purpose</span><span class="o">=</span><span class="s2">&quot;Cached embedding artifact load&quot;</span><span class="p">,</span>
+            <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_admit_scoring_memory</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">required</span> <span class="o">=</span> <span class="n">estimate_metadata_dense_scoring_bytes</span><span class="p">(</span><span class="n">metadata</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">required</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">assert_within_memory</span><span class="p">(</span>
+                <span class="n">required</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">memory_config</span><span class="p">,</span>
+                <span class="n">purpose</span><span class="o">=</span><span class="s2">&quot;Dense scoring input&quot;</span><span class="p">,</span>
+            <span class="p">)</span></div>
+
+
+
+<span class="k">def</span> <span class="nf">_weakest_class</span><span class="p">(</span><span class="n">per_class_scores</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="n">numeric_scores</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="nb">str</span><span class="p">(</span><span class="n">label</span><span class="p">):</span> <span class="nb">float</span><span class="p">(</span><span class="n">score</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">score</span> <span class="ow">in</span> <span class="n">per_class_scores</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">score</span><span class="p">,</span> <span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">number</span><span class="p">))</span>
+    <span class="p">}</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">numeric_scores</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+    <span class="n">label</span><span class="p">,</span> <span class="n">score</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">numeric_scores</span><span class="o">.</span><span class="n">items</span><span class="p">(),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">item</span><span class="p">:</span> <span class="n">item</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="k">return</span> <span class="n">label</span><span class="p">,</span> <span class="n">score</span>
+
+
+<span class="k">def</span> <span class="nf">_combine_embedding_batches</span><span class="p">(</span>
+    <span class="n">batches</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
+    <span class="n">n_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+    <span class="n">collected</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">batches</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">collected</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;At least one embedding batch is required.&quot;</span><span class="p">)</span>
+    <span class="n">first</span> <span class="o">=</span> <span class="n">collected</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">written</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_samples</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">is_sparse_matrix</span><span class="p">(</span><span class="n">first</span><span class="p">):</span>
+        <span class="kn">from</span> <span class="nn">scipy</span> <span class="kn">import</span> <span class="n">sparse</span>
+
+        <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">indices</span><span class="p">,</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">collected</span><span class="p">:</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">is_sparse_matrix</span><span class="p">(</span><span class="n">batch</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Cannot mix sparse and dense embedding batches.&quot;</span><span class="p">)</span>
+            <span class="n">_check_batch_indices</span><span class="p">(</span><span class="n">indices</span><span class="p">,</span> <span class="n">batch</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">written</span><span class="p">)</span>
+            <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">bool</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">written</span><span class="p">)):</span>
+            <span class="n">missing</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">flatnonzero</span><span class="p">(</span><span class="o">~</span><span class="n">written</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Embedding batches did not cover all samples; missing </span><span class="si">{</span><span class="n">missing</span><span class="p">[:</span><span class="mi">10</span><span class="p">]</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">sparse</span><span class="o">.</span><span class="n">vstack</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="nb">format</span><span class="o">=</span><span class="s2">&quot;csr&quot;</span><span class="p">)</span>
+
+    <span class="n">first_arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">first</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">n_samples</span><span class="p">,</span> <span class="n">first_arr</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">first_arr</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">indices</span><span class="p">,</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">collected</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">is_sparse_matrix</span><span class="p">(</span><span class="n">batch</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Cannot mix sparse and dense embedding batches.&quot;</span><span class="p">)</span>
+        <span class="n">arr</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+        <span class="n">_check_batch_indices</span><span class="p">(</span><span class="n">indices</span><span class="p">,</span> <span class="n">arr</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">written</span><span class="p">)</span>
+        <span class="n">output</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">indices</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)]</span> <span class="o">=</span> <span class="n">arr</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">bool</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">written</span><span class="p">)):</span>
+        <span class="n">missing</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">flatnonzero</span><span class="p">(</span><span class="o">~</span><span class="n">written</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Embedding batches did not cover all samples; missing </span><span class="si">{</span><span class="n">missing</span><span class="p">[:</span><span class="mi">10</span><span class="p">]</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">output</span>
+
+
+<span class="k">def</span> <span class="nf">_check_batch_indices</span><span class="p">(</span><span class="n">indices</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">n_rows</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">written</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">indices</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">indices</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">int</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="o">!=</span> <span class="n">n_rows</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Batch index count must match embedding row count.&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">any</span><span class="p">(</span><span class="n">written</span><span class="p">[</span><span class="n">indices</span><span class="p">]):</span>
+        <span class="n">duplicates</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">written</span><span class="p">[</span><span class="n">indices</span><span class="p">]]</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Duplicate embedding rows for sample indices </span><span class="si">{</span><span class="n">duplicates</span><span class="p">[:</span><span class="mi">10</span><span class="p">]</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+    <span class="n">written</span><span class="p">[</span><span class="n">indices</span><span class="p">]</span> <span class="o">=</span> <span class="kc">True</span>
+
+
+<span class="k">def</span> <span class="nf">_prepend_batch</span><span class="p">(</span>
+    <span class="n">indices</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">embeddings</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="n">remaining</span><span class="p">:</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]:</span>
+    <span class="k">yield</span> <span class="n">indices</span><span class="p">,</span> <span class="n">embeddings</span>
+    <span class="k">yield from</span> <span class="n">remaining</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Niklas Melton.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

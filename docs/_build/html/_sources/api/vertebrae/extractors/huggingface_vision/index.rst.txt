@@ -1,0 +1,88 @@
+vertebrae.extractors.huggingface_vision
+=======================================
+
+.. py:module:: vertebrae.extractors.huggingface_vision
+
+.. autoapi-nested-parse::
+
+   Optional Hugging Face vision embedding extractor.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.extractors.huggingface_vision.HFVisionExtractor
+
+
+Module Contents
+---------------
+
+.. py:class:: HFVisionExtractor(name, model_id, processor_id = None, pooling = 'cls', hidden_layer = None, batch_size = 16, image_mode = 'auto', alpha_mode = 'drop', device = None, revision = None, trust_remote_code = False, processor_kwargs = None, model_kwargs = None)
+
+   Hugging Face vision backbone extractor with explicit pooling.
+
+   :param name: User-facing extractor name.
+   :param model_id: Hugging Face model identifier or local path.
+   :param processor_id: Optional Hugging Face processor identifier or local path.
+                        Defaults to `model_id`.
+   :param pooling: Pooling mode: `"cls"`, `"mean"`, or `"pooler"`.
+   :param hidden_layer: Optional hidden-state layer index to pool from. Defaults to
+                        the model's final output.
+   :param batch_size: Number of images encoded per batch.
+   :param image_mode: Image representation to pass to the processor:
+                      `"auto"`, `"rgb"`, `"grayscale"`, or `"preserve"`.
+   :param alpha_mode: How alpha channels are handled when converting:
+                      `"drop"`, `"white_background"`, or `"black_background"`.
+   :param device: Optional device string.
+   :param revision: Optional model revision.
+   :param trust_remote_code: Whether to allow remote model code.
+   :param processor_kwargs: Extra keyword arguments for `AutoImageProcessor`.
+   :param model_kwargs: Extra keyword arguments for `AutoModel`.
+
+
+   .. py:method:: fit(X, y = None)
+
+      No-op fit for frozen Hugging Face vision models.
+
+      :param X: Image inputs.
+      :param y: Optional labels.
+
+      :returns: This extractor.
+
+
+
+   .. py:method:: transform(X)
+
+      Encode image inputs into dense embeddings.
+
+      :param X: PIL images, NumPy image arrays, image paths, or a sequence of them.
+
+      :returns: Dense float32 embedding matrix.
+
+      :raises ImportError: If optional Hugging Face vision dependencies are missing.
+      :raises ValueError: If pooling is invalid for the model output.
+
+
+
+   .. py:method:: fit_transform(X, y = None)
+
+      Encode image inputs into dense embeddings.
+
+      :param X: Image inputs.
+      :param y: Optional labels.
+
+      :returns: Dense float32 embedding matrix.
+
+
+
+   .. py:method:: recipe()
+
+      Return a serializable Hugging Face vision recipe.
+
+      :returns: JSON-compatible recipe dictionary.
+
+
+

@@ -1,0 +1,72 @@
+vertebrae.execution.base
+========================
+
+.. py:module:: vertebrae.execution.base
+
+.. autoapi-nested-parse::
+
+   Execution backend protocol.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.execution.base.ExecutionBackend
+
+
+Module Contents
+---------------
+
+.. py:class:: ExecutionBackend
+
+   Bases: :py:obj:`Protocol`
+
+
+   Protocol for local or future distributed execution backends.
+
+
+   .. py:method:: submit(fn, job)
+
+      Submit a single job.
+
+      :param fn: Callable to execute.
+      :param job: Job input.
+
+      :returns: Backend-specific job handle.
+
+
+
+   .. py:method:: gather(handles)
+
+      Collect submitted job results.
+
+      :param handles: Backend-specific job handles.
+
+      :returns: Results in handle order.
+
+
+
+   .. py:method:: status(handle)
+
+      Return a backend-specific job status string.
+
+      :param handle: Backend-specific job handle.
+
+      :returns: Status string such as `"finished"` or `"running"`.
+
+
+
+   .. py:method:: map(fn, jobs)
+
+      Map a callable over jobs.
+
+      :param fn: Callable to execute.
+      :param jobs: Iterable of job inputs.
+
+      :returns: Results in job order.
+
+
+

@@ -1,0 +1,63 @@
+vertebrae.execution.ray_backend
+===============================
+
+.. py:module:: vertebrae.execution.ray_backend
+
+.. autoapi-nested-parse::
+
+   Ray execution backend.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.execution.ray_backend.RayJobHandle
+   vertebrae.execution.ray_backend.RayBackend
+
+
+Module Contents
+---------------
+
+.. py:class:: RayJobHandle
+
+   Handle for a submitted Ray task.
+
+
+.. py:class:: RayBackend(address = None, num_cpus = None, num_gpus = None, memory_bytes = None, runtime_env = None)
+
+   Ray execution backend.
+
+   :param address: Optional Ray cluster address.
+   :param num_cpus: Optional default CPU request for tasks.
+   :param num_gpus: Optional default GPU request for tasks.
+   :param memory_bytes: Optional default memory request for tasks.
+   :param runtime_env: Optional Ray runtime environment.
+
+
+   .. py:method:: submit(fn, job)
+
+      Submit a single Ray job.
+
+
+
+   .. py:method:: gather(handles)
+
+      Collect Ray job results.
+
+
+
+   .. py:method:: status(handle)
+
+      Return Ray task status.
+
+
+
+   .. py:method:: map(fn, jobs)
+
+      Map a callable over Ray jobs while preserving order.
+
+
+

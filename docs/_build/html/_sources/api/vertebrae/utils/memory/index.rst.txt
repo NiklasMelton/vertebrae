@@ -1,0 +1,188 @@
+vertebrae.utils.memory
+======================
+
+.. py:module:: vertebrae.utils.memory
+
+.. autoapi-nested-parse::
+
+   Memory estimation and admission helpers.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.utils.memory.MemoryBudget
+   vertebrae.utils.memory.EmbeddingMemoryEstimate
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.utils.memory.resolve_memory_budget
+   vertebrae.utils.memory.estimate_embedding_from_probe
+   vertebrae.utils.memory.estimate_matrix_resident_bytes
+   vertebrae.utils.memory.estimate_metadata_resident_bytes
+   vertebrae.utils.memory.estimate_metadata_dense_scoring_bytes
+   vertebrae.utils.memory.assert_within_memory
+   vertebrae.utils.memory.largest_fitting_subsample_rate
+   vertebrae.utils.memory.sparse_matrix_nbytes
+   vertebrae.utils.memory.sparse_nbytes_from_nnz
+   vertebrae.utils.memory.estimate_sparse_bytes
+
+
+Module Contents
+---------------
+
+.. py:class:: MemoryBudget
+
+   Resolved memory budget from a `MemoryConfig`.
+
+   .. attribute:: total_bytes
+
+      Total system memory.
+
+   .. attribute:: available_bytes
+
+      Currently available system memory.
+
+   .. attribute:: reserve_system_bytes
+
+      Bytes reserved for system use.
+
+   .. attribute:: max_memory_bytes
+
+      Maximum bytes vertebrae should use for planned work.
+
+
+.. py:class:: EmbeddingMemoryEstimate
+
+   Estimated memory footprint for an embedding artifact.
+
+   .. attribute:: n_samples
+
+      Number of embedding rows.
+
+   .. attribute:: embedding_dim
+
+      Number of embedding columns.
+
+   .. attribute:: dtype
+
+      Embedding dtype string.
+
+   .. attribute:: resident_bytes
+
+      Estimated bytes to hold the embedding artifact in memory.
+
+   .. attribute:: dense_scoring_bytes
+
+      Estimated dense bytes required by scoring.
+
+   .. attribute:: batch_embedding_bytes
+
+      Estimated bytes for one embedding batch.
+
+   .. attribute:: strategy
+
+      Planned strategy: `"in_memory"` or `"stream_to_disk"`.
+
+
+   .. py:method:: to_dict()
+
+      Serialize the estimate for result metadata.
+
+      :returns: JSON-compatible memory estimate.
+
+
+
+.. py:function:: resolve_memory_budget(config)
+
+   Resolve an effective memory budget using psutil.
+
+   :param config: Memory configuration.
+
+   :returns: Resolved memory budget.
+
+
+.. py:function:: estimate_embedding_from_probe(probe_embeddings, n_samples, batch_size, memory_config)
+
+   Estimate full embedding memory from a probe batch.
+
+   :param probe_embeddings: Dense or sparse probe embedding batch.
+   :param n_samples: Full dataset sample count.
+   :param batch_size: Planned embedding batch size.
+   :param memory_config: Memory configuration.
+
+   :returns: Estimated embedding footprint and strategy.
+
+
+.. py:function:: estimate_matrix_resident_bytes(matrix)
+
+   Estimate memory required to hold a dense or sparse matrix.
+
+   :param matrix: Dense or sparse matrix.
+
+   :returns: Estimated resident bytes.
+
+
+.. py:function:: estimate_metadata_resident_bytes(metadata)
+
+   Estimate resident bytes from embedding metadata.
+
+   :param metadata: Embedding metadata dictionary.
+
+   :returns: Estimated bytes, or `None` if metadata is incomplete.
+
+
+.. py:function:: estimate_metadata_dense_scoring_bytes(metadata)
+
+   Estimate dense bytes needed for scoring from embedding metadata.
+
+   :param metadata: Embedding metadata dictionary.
+
+   :returns: Estimated dense scoring bytes, or `None` if metadata is incomplete.
+
+
+.. py:function:: assert_within_memory(required_bytes, memory_config, purpose)
+
+   Fail fast when a planned allocation exceeds the memory budget.
+
+   :param required_bytes: Estimated required bytes.
+   :param memory_config: Memory configuration.
+   :param purpose: Human-readable description of the planned work.
+
+   :returns: Resolved memory budget.
+
+   :raises ValueError: If `required_bytes` exceeds the configured budget.
+
+
+.. py:function:: largest_fitting_subsample_rate(required_bytes, memory_config)
+
+   Estimate the largest sample fraction that fits the memory budget.
+
+   :param required_bytes: Estimated bytes for the full sample set.
+   :param memory_config: Memory configuration.
+
+   :returns: Fraction in `(0, 1]` that should fit the configured budget.
+
+
+.. py:function:: sparse_matrix_nbytes(matrix)
+
+   Estimate resident bytes for an existing scipy sparse matrix.
+
+
+.. py:function:: sparse_nbytes_from_nnz(nnz, n_rows, dtype)
+
+   Estimate CSR sparse bytes from non-zero count and row count.
+
+
+.. py:function:: estimate_sparse_bytes(n_samples, n_features, dtype, density)
+
+   Estimate sparse matrix bytes from shape, dtype, and density.
+
+

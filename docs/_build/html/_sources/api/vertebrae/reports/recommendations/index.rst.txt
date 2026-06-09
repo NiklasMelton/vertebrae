@@ -1,0 +1,43 @@
+vertebrae.reports.recommendations
+=================================
+
+.. py:module:: vertebrae.reports.recommendations
+
+.. autoapi-nested-parse::
+
+   Simple recommendation rules for benchmark reports.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.reports.recommendations.recommendation_for_extractor
+   vertebrae.reports.recommendations.recommendations_for_benchmark
+
+
+Module Contents
+---------------
+
+.. py:function:: recommendation_for_extractor(macro_score, stability, weakest_class_score)
+
+   Compute a recommendation label for one extractor.
+
+   :param macro_score: Global OverlapIndex score.
+   :param stability: Optional stability summary.
+   :param weakest_class_score: Lowest per-class score when available.
+
+   :returns: Recommendation label string.
+
+
+.. py:function:: recommendations_for_benchmark(extractor_results)
+
+   Compute practitioner-facing recommendations for a benchmark.
+
+   :param extractor_results: Evaluated extractor results.
+
+   :returns: Recommendation messages for the report executive summary.
+
+

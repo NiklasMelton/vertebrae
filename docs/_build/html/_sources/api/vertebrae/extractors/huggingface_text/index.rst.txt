@@ -1,0 +1,83 @@
+vertebrae.extractors.huggingface_text
+=====================================
+
+.. py:module:: vertebrae.extractors.huggingface_text
+
+.. autoapi-nested-parse::
+
+   Optional Hugging Face text embedding extractor.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.extractors.huggingface_text.HFTextExtractor
+
+
+Module Contents
+---------------
+
+.. py:class:: HFTextExtractor(name, model_id, pooling = 'mean', hidden_layer = None, batch_size = 32, max_length = 512, device = None, revision = None, trust_remote_code = False, tokenizer_kwargs = None, model_kwargs = None)
+
+   Hugging Face text backbone extractor with explicit pooling.
+
+   :param name: User-facing extractor name.
+   :param model_id: Hugging Face model identifier or local path.
+   :param pooling: Pooling mode: `"mean"`, `"cls"`, or `"last_token"`.
+   :param hidden_layer: Optional hidden-state layer index to pool from. Defaults to
+                        the model's final output.
+   :param batch_size: Number of texts encoded per batch.
+   :param max_length: Tokenizer truncation length.
+   :param device: Optional device string.
+   :param revision: Optional model revision.
+   :param trust_remote_code: Whether to allow remote model code.
+   :param tokenizer_kwargs: Extra keyword arguments for `AutoTokenizer`.
+   :param model_kwargs: Extra keyword arguments for `AutoModel`.
+
+
+   .. py:method:: fit(X, y = None)
+
+      No-op fit for frozen Hugging Face text models.
+
+      :param X: Input text samples.
+      :param y: Optional labels.
+
+      :returns: This extractor.
+
+
+
+   .. py:method:: transform(X)
+
+      Encode text inputs into dense embeddings.
+
+      :param X: Sequence of strings.
+
+      :returns: Dense float32 embedding matrix.
+
+      :raises ImportError: If optional Hugging Face dependencies are missing.
+      :raises ValueError: If inputs are invalid.
+
+
+
+   .. py:method:: fit_transform(X, y = None)
+
+      Encode text inputs into dense embeddings.
+
+      :param X: Sequence of strings.
+      :param y: Optional labels.
+
+      :returns: Dense float32 embedding matrix.
+
+
+
+   .. py:method:: recipe()
+
+      Return a serializable Hugging Face text recipe.
+
+      :returns: JSON-compatible recipe dictionary.
+
+
+

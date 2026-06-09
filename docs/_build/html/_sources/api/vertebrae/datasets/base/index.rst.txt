@@ -1,0 +1,183 @@
+vertebrae.datasets.base
+=======================
+
+.. py:module:: vertebrae.datasets.base
+
+.. autoapi-nested-parse::
+
+   Dataset abstraction for benchmark inputs.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.datasets.base.BenchmarkDataset
+
+
+Module Contents
+---------------
+
+.. py:class:: BenchmarkDataset
+
+   A labeled dataset prepared for feature extraction or scoring.
+
+   .. attribute:: X
+
+      Input samples, tabular frame, image paths, or embedding matrix.
+
+   .. attribute:: y
+
+      One-dimensional label array.
+
+   .. attribute:: modality
+
+      Dataset modality such as `"text"`, `"tabular"`, or `"embeddings"`.
+
+   .. attribute:: input_col
+
+      Source dataframe input column or columns.
+
+   .. attribute:: label_col
+
+      Source dataframe label column.
+
+   .. attribute:: metadata
+
+      User and construction metadata.
+
+
+   .. py:method:: from_arrays(X, y, modality, metadata = None)
+      :classmethod:
+
+
+      Create a dataset from array-like inputs and labels.
+
+      :param X: Input samples or feature matrix.
+      :param y: Class labels.
+      :param modality: Dataset modality.
+      :param metadata: Optional metadata to preserve.
+
+      :returns: Validated benchmark dataset.
+
+
+
+   .. py:method:: from_dataframe(df, input_col, label_col, modality, metadata = None)
+      :classmethod:
+
+
+      Create a dataset from a pandas DataFrame.
+
+      :param df: DataFrame containing inputs and labels.
+      :param input_col: Input column name or list of tabular feature columns.
+      :param label_col: Label column name.
+      :param modality: Dataset modality.
+      :param metadata: Optional metadata to preserve.
+
+      :returns: Validated benchmark dataset.
+
+      :raises ValueError: If requested columns are missing.
+
+
+
+   .. py:method:: from_image_paths(paths, labels, metadata = None)
+      :classmethod:
+
+
+      Create an image dataset from filesystem paths.
+
+      :param paths: Image file paths.
+      :param labels: Class labels.
+      :param metadata: Optional metadata to preserve.
+
+      :returns: Validated image dataset.
+
+
+
+   .. py:method:: from_embeddings(embeddings, labels, metadata = None)
+      :classmethod:
+
+
+      Create a dataset from precomputed dense or sparse embeddings.
+
+      :param embeddings: Dense array or scipy sparse embedding matrix.
+      :param labels: Class labels.
+      :param metadata: Optional metadata to preserve.
+
+      :returns: Validated embedding dataset.
+
+
+
+   .. py:method:: validate()
+
+      Validate dataset shape and labels.
+
+      :raises ValueError: If sample counts mismatch, labels are missing, too few
+          classes are present, or a class has fewer than two samples.
+
+
+
+   .. py:method:: class_counts()
+
+      Count samples per class.
+
+      :returns: Mapping from original label values to sample counts.
+
+
+
+   .. py:method:: iter_batches(batch_size, shard = None)
+
+      Yield deterministic sample batches for embedding.
+
+      :param batch_size: Maximum samples per batch.
+      :param shard: Optional non-overlapping shard assignment.
+
+      :Yields: Sample batches with original dataset indices and sliced inputs.
+
+      :raises ValueError: If `batch_size` is less than one.
+
+
+
+   .. py:method:: stratified_subsample_indices(rate, random_state = 42, min_samples_per_class = 2)
+
+      Select class-stratified sample indices without replacement.
+
+      :param rate: Fraction of each class to keep. Must be in `(0, 1]`.
+      :param random_state: Random seed for reproducible selection.
+      :param min_samples_per_class: Minimum retained samples per class when possible.
+
+      :returns: Sorted original sample indices for the stratified subset.
+
+      :raises ValueError: If `rate` is outside `(0, 1]`.
+
+
+
+   .. py:method:: subset(indices, metadata = None)
+
+      Create a dataset subset by original sample indices.
+
+      :param indices: Sample indices to retain.
+      :param metadata: Additional metadata to merge into the subset.
+
+      :returns: Validated dataset containing only the selected samples.
+
+
+
+   .. py:method:: summary()
+
+      Summarize the dataset for result metadata and reports.
+
+      :returns: JSON-compatible dataset summary.
+
+
+
+   .. py:method:: fingerprint()
+
+      Compute a conservative dataset fingerprint for caching.
+
+      :returns: Stable hash string derived from inputs, labels, modality, and metadata.
+
+
+

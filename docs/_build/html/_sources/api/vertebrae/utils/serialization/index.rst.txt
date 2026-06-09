@@ -1,0 +1,31 @@
+vertebrae.utils.serialization
+=============================
+
+.. py:module:: vertebrae.utils.serialization
+
+.. autoapi-nested-parse::
+
+   Serialization helpers for reportable result objects.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.utils.serialization.make_json_safe
+
+
+Module Contents
+---------------
+
+.. py:function:: make_json_safe(value)
+
+   Convert common scientific Python objects into JSON-compatible values.
+
+   :param value: Value to convert.
+
+   :returns: JSON-compatible representation.
+
+

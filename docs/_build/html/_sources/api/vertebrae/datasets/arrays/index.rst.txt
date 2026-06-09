@@ -1,0 +1,11 @@
+vertebrae.datasets.arrays
+=========================
+
+.. py:module:: vertebrae.datasets.arrays
+
+.. autoapi-nested-parse::
+
+   Array dataset entrypoints.
+
+
+

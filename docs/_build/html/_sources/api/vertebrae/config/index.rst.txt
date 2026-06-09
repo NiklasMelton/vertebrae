@@ -1,0 +1,223 @@
+vertebrae.config
+================
+
+.. py:module:: vertebrae.config
+
+.. autoapi-nested-parse::
+
+   Public configuration objects for vertebrae.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.config.OverlapScoringConfig
+   vertebrae.config.StabilityConfig
+   vertebrae.config.ProbeConfig
+   vertebrae.config.CacheConfig
+   vertebrae.config.EmbeddingConfig
+   vertebrae.config.MemoryConfig
+
+
+Module Contents
+---------------
+
+.. py:class:: OverlapScoringConfig
+
+   Configuration for MiniBatchKMeans-backed OverlapIndex scoring.
+
+   .. attribute:: k
+
+      Global k, class-to-k mapping, or `"auto"` for per-class resolution.
+
+   .. attribute:: min_k
+
+      Lower target used by automatic k resolution.
+
+   .. attribute:: max_k
+
+      Maximum k allowed for any class.
+
+   .. attribute:: min_samples_per_cluster
+
+      Minimum class samples expected per prototype.
+
+   .. attribute:: kmeans_kwargs
+
+      Extra keyword arguments passed to MiniBatchKMeans.
+
+   .. attribute:: offline_chunk_size
+
+      Chunk size forwarded to `OverlapIndex.fit_offline`.
+
+   .. attribute:: normalize_embeddings
+
+      Whether to L2-normalize embeddings before scoring.
+
+   .. attribute:: max_dense_bytes
+
+      Maximum sparse-to-dense allocation allowed for scoring.
+
+
+.. py:class:: StabilityConfig
+
+   Configuration for prototype or subsample stability analysis.
+
+   .. attribute:: enabled
+
+      Whether stability analysis should run.
+
+   .. attribute:: mode
+
+      Stability mode: `"prototype"`, `"subsample"`, or `"none"`.
+
+   .. attribute:: repeats
+
+      Number of repeated scoring runs.
+
+   .. attribute:: interval_level
+
+      Percentile interval level reported in summaries.
+
+   .. attribute:: subsample_fraction
+
+      Fraction sampled for subsample stability.
+
+   .. attribute:: stratified
+
+      Whether subsampling should preserve class membership.
+
+   .. attribute:: random_state
+
+      Seed used to generate repeat seeds and subsamples.
+
+
+.. py:class:: ProbeConfig
+
+   Configuration for lightweight probe classifiers.
+
+   .. attribute:: enabled
+
+      Whether probe evaluation should run.
+
+   .. attribute:: test_size
+
+      Fraction of samples held out for probe testing.
+
+   .. attribute:: random_state
+
+      Seed used for train/test splitting.
+
+   .. attribute:: methods
+
+      Probe classifiers to evaluate.
+
+
+.. py:class:: CacheConfig
+
+   Artifact cache settings.
+
+   .. attribute:: enabled
+
+      Whether embedding artifacts should be cached.
+
+   .. attribute:: cache_dir
+
+      Local cache directory or artifact-store URI.
+
+   .. attribute:: force_recompute
+
+      Whether to ignore cache hits and recompute embeddings.
+
+   .. attribute:: storage_options
+
+      Provider-specific store options such as S3 endpoint URLs.
+
+   .. attribute:: metadata
+
+      Additional user metadata to preserve with cache settings.
+
+
+.. py:class:: EmbeddingConfig
+
+   Configuration for embedding generation and materialization.
+
+   .. attribute:: batch_size
+
+      Number of samples to pass to streaming-safe extractors.
+
+   .. attribute:: streaming_enabled
+
+      Whether streaming-safe extractors should be embedded
+      batch-by-batch instead of in one full transform call.
+
+   .. attribute:: shard
+
+      Optional deterministic shard assignment. Local benchmarking requires
+      a complete shard, but this field is available for future distributed
+      embedding jobs.
+
+
+.. py:class:: MemoryConfig
+
+   Memory budget and admission-control settings.
+
+   .. attribute:: max_memory_bytes
+
+      Explicit process memory budget. When `None`, the budget
+      is derived from current available memory using `psutil`.
+
+   .. attribute:: reserve_system_bytes
+
+      Memory to leave available for the OS and other
+      processes. When `None`, a conservative reserve is selected.
+
+   .. attribute:: max_fraction
+
+      Maximum fraction of currently available memory to use.
+
+   .. attribute:: allow_disk_spill
+
+      Whether large embedding artifacts may be streamed to disk.
+
+   .. attribute:: fail_fast
+
+      Whether to raise before expensive work when estimates exceed
+      the configured budget.
+
+   .. attribute:: probe_batch_size
+
+      Number of samples used to infer unknown embedding shape.
+
+   .. attribute:: model_memory_bytes
+
+      Optional model memory hint included in admission checks.
+
+   .. attribute:: raw_batch_memory_bytes
+
+      Optional raw batch memory hint included in checks.
+
+   .. attribute:: subsample_rate
+
+      Fraction of samples to keep before embedding and scoring.
+      A value of `1.0` disables user-requested subsampling.
+
+   .. attribute:: subsample_random_state
+
+      Seed used for deterministic stratified subsampling.
+
+   .. attribute:: min_subsample_samples_per_class
+
+      Minimum retained samples per class when
+      class sizes allow it.
+
+   .. attribute:: auto_subsample_on_memory_exceeded
+
+      Whether to warn and select the largest
+      fitting stratified subsample instead of raising when a full embedding
+      artifact would exceed memory.
+
+

@@ -1,0 +1,449 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vertebrae.config &mdash; vertebrae</title>
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
+      <link rel="stylesheet" type="text/css" href="../../_static/graphviz.css?v=fd3f3429" />
+
+  
+      <script src="../../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../../_static/documentation_options.js?v=01f34227"></script>
+      <script src="../../_static/doctools.js?v=9a2dae69"></script>
+      <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            vertebrae
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../overview.html">Vertebrae</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../datasets.html">datasets</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../feature_extractors.html">feature extractors</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../scoring.html">scoring</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../results_and_reports.html">results and reports</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples.html">examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../distributed_readiness.html">distributed readiness</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/vertebrae/index.html">vertebrae</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">vertebrae</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">vertebrae.config</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for vertebrae.config</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Public configuration objects for vertebrae.&quot;&quot;&quot;</span>
+
+<span class="kn">from</span> <span class="nn">dataclasses</span> <span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">Union</span>
+
+<span class="kn">from</span> <span class="nn">vertebrae.execution.jobs</span> <span class="kn">import</span> <span class="n">ShardSpec</span>
+
+
+<span class="nd">@dataclass</span>
+<div class="viewcode-block" id="OverlapScoringConfig">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig">[docs]</a>
+<span class="k">class</span> <span class="nc">OverlapScoringConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configuration for MiniBatchKMeans-backed OverlapIndex scoring.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        k: Global k, class-to-k mapping, or `&quot;auto&quot;` for per-class resolution.</span>
+<span class="sd">        min_k: Lower target used by automatic k resolution.</span>
+<span class="sd">        max_k: Maximum k allowed for any class.</span>
+<span class="sd">        min_samples_per_cluster: Minimum class samples expected per prototype.</span>
+<span class="sd">        kmeans_kwargs: Extra keyword arguments passed to MiniBatchKMeans.</span>
+<span class="sd">        offline_chunk_size: Chunk size forwarded to `OverlapIndex.fit_offline`.</span>
+<span class="sd">        normalize_embeddings: Whether to L2-normalize embeddings before scoring.</span>
+<span class="sd">        max_dense_bytes: Maximum sparse-to-dense allocation allowed for scoring.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="OverlapScoringConfig.k">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.k">[docs]</a>
+    <span class="n">k</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Dict</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="s2">&quot;auto&quot;</span></div>
+
+<div class="viewcode-block" id="OverlapScoringConfig.min_k">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.min_k">[docs]</a>
+    <span class="n">min_k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">10</span></div>
+
+<div class="viewcode-block" id="OverlapScoringConfig.max_k">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.max_k">[docs]</a>
+    <span class="n">max_k</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">50</span></div>
+
+<div class="viewcode-block" id="OverlapScoringConfig.min_samples_per_cluster">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.min_samples_per_cluster">[docs]</a>
+    <span class="n">min_samples_per_cluster</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span></div>
+
+<div class="viewcode-block" id="OverlapScoringConfig.kmeans_kwargs">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.kmeans_kwargs">[docs]</a>
+    <span class="n">kmeans_kwargs</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="OverlapScoringConfig.offline_chunk_size">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.offline_chunk_size">[docs]</a>
+    <span class="n">offline_chunk_size</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="mi">10_000</span></div>
+
+<div class="viewcode-block" id="OverlapScoringConfig.normalize_embeddings">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.normalize_embeddings">[docs]</a>
+    <span class="n">normalize_embeddings</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="OverlapScoringConfig.max_dense_bytes">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.OverlapScoringConfig.max_dense_bytes">[docs]</a>
+    <span class="n">max_dense_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2_000_000_000</span></div>
+
+
+    <span class="k">def</span> <span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">k</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">k</span> <span class="o">!=</span> <span class="s2">&quot;auto&quot;</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;OverlapScoringConfig.k must be an int, a class-to-k dict, or &#39;auto&#39;.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">k</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">k</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;OverlapScoringConfig.k must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">min_k</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;min_k must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_k</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_k must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">min_k</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_k</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;min_k must be &lt;= max_k.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">min_samples_per_cluster</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;min_samples_per_cluster must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_dense_bytes</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;max_dense_bytes must be &gt;= 1.&quot;</span><span class="p">)</span></div>
+
+
+
+<span class="nd">@dataclass</span>
+<div class="viewcode-block" id="StabilityConfig">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig">[docs]</a>
+<span class="k">class</span> <span class="nc">StabilityConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configuration for prototype or subsample stability analysis.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        enabled: Whether stability analysis should run.</span>
+<span class="sd">        mode: Stability mode: `&quot;prototype&quot;`, `&quot;subsample&quot;`, or `&quot;none&quot;`.</span>
+<span class="sd">        repeats: Number of repeated scoring runs.</span>
+<span class="sd">        interval_level: Percentile interval level reported in summaries.</span>
+<span class="sd">        subsample_fraction: Fraction sampled for subsample stability.</span>
+<span class="sd">        stratified: Whether subsampling should preserve class membership.</span>
+<span class="sd">        random_state: Seed used to generate repeat seeds and subsamples.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="StabilityConfig.enabled">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig.enabled">[docs]</a>
+    <span class="n">enabled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="StabilityConfig.mode">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig.mode">[docs]</a>
+    <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;prototype&quot;</span></div>
+
+<div class="viewcode-block" id="StabilityConfig.repeats">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig.repeats">[docs]</a>
+    <span class="n">repeats</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">20</span></div>
+
+<div class="viewcode-block" id="StabilityConfig.interval_level">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig.interval_level">[docs]</a>
+    <span class="n">interval_level</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.95</span></div>
+
+<div class="viewcode-block" id="StabilityConfig.subsample_fraction">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig.subsample_fraction">[docs]</a>
+    <span class="n">subsample_fraction</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.8</span></div>
+
+<div class="viewcode-block" id="StabilityConfig.stratified">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig.stratified">[docs]</a>
+    <span class="n">stratified</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="StabilityConfig.random_state">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.StabilityConfig.random_state">[docs]</a>
+    <span class="n">random_state</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span></div>
+
+
+    <span class="k">def</span> <span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">allowed_modes</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;prototype&quot;</span><span class="p">,</span> <span class="s2">&quot;subsample&quot;</span><span class="p">,</span> <span class="s2">&quot;none&quot;</span><span class="p">}</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">allowed_modes</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;StabilityConfig.mode must be one of </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">allowed_modes</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">repeats</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;StabilityConfig.repeats must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">interval_level</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;interval_level must be between 0 and 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">subsample_fraction</span> <span class="o">&lt;=</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;subsample_fraction must be in (0, 1].&quot;</span><span class="p">)</span></div>
+
+
+
+<span class="nd">@dataclass</span>
+<div class="viewcode-block" id="ProbeConfig">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.ProbeConfig">[docs]</a>
+<span class="k">class</span> <span class="nc">ProbeConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configuration for lightweight probe classifiers.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        enabled: Whether probe evaluation should run.</span>
+<span class="sd">        test_size: Fraction of samples held out for probe testing.</span>
+<span class="sd">        random_state: Seed used for train/test splitting.</span>
+<span class="sd">        methods: Probe classifiers to evaluate.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="ProbeConfig.enabled">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.ProbeConfig.enabled">[docs]</a>
+    <span class="n">enabled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="ProbeConfig.test_size">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.ProbeConfig.test_size">[docs]</a>
+    <span class="n">test_size</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.2</span></div>
+
+<div class="viewcode-block" id="ProbeConfig.random_state">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.ProbeConfig.random_state">[docs]</a>
+    <span class="n">random_state</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span></div>
+
+<div class="viewcode-block" id="ProbeConfig.methods">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.ProbeConfig.methods">[docs]</a>
+    <span class="n">methods</span><span class="p">:</span> <span class="n">Tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;knn&quot;</span><span class="p">,</span> <span class="s2">&quot;logistic_regression&quot;</span><span class="p">)</span></div>
+
+
+    <span class="k">def</span> <span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">test_size</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;ProbeConfig.test_size must be between 0 and 1.&quot;</span><span class="p">)</span>
+        <span class="n">allowed_methods</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;knn&quot;</span><span class="p">,</span> <span class="s2">&quot;logistic_regression&quot;</span><span class="p">,</span> <span class="s2">&quot;nearest_centroid&quot;</span><span class="p">}</span>
+        <span class="n">unknown</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">methods</span><span class="p">)</span> <span class="o">-</span> <span class="n">allowed_methods</span>
+        <span class="k">if</span> <span class="n">unknown</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown probe methods: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">unknown</span><span class="p">)</span><span class="si">}</span><span class="s2">.&quot;</span><span class="p">)</span></div>
+
+
+
+<span class="nd">@dataclass</span>
+<div class="viewcode-block" id="CacheConfig">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.CacheConfig">[docs]</a>
+<span class="k">class</span> <span class="nc">CacheConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Artifact cache settings.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        enabled: Whether embedding artifacts should be cached.</span>
+<span class="sd">        cache_dir: Local cache directory or artifact-store URI.</span>
+<span class="sd">        force_recompute: Whether to ignore cache hits and recompute embeddings.</span>
+<span class="sd">        storage_options: Provider-specific store options such as S3 endpoint URLs.</span>
+<span class="sd">        metadata: Additional user metadata to preserve with cache settings.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="CacheConfig.enabled">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.CacheConfig.enabled">[docs]</a>
+    <span class="n">enabled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="CacheConfig.cache_dir">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.CacheConfig.cache_dir">[docs]</a>
+    <span class="n">cache_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;.vertebrae_cache&quot;</span></div>
+
+<div class="viewcode-block" id="CacheConfig.force_recompute">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.CacheConfig.force_recompute">[docs]</a>
+    <span class="n">force_recompute</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span></div>
+
+<div class="viewcode-block" id="CacheConfig.storage_options">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.CacheConfig.storage_options">[docs]</a>
+    <span class="n">storage_options</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="CacheConfig.metadata">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.CacheConfig.metadata">[docs]</a>
+    <span class="n">metadata</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span></div>
+</div>
+
+
+
+<span class="nd">@dataclass</span>
+<div class="viewcode-block" id="EmbeddingConfig">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.EmbeddingConfig">[docs]</a>
+<span class="k">class</span> <span class="nc">EmbeddingConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Configuration for embedding generation and materialization.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        batch_size: Number of samples to pass to streaming-safe extractors.</span>
+<span class="sd">        streaming_enabled: Whether streaming-safe extractors should be embedded</span>
+<span class="sd">            batch-by-batch instead of in one full transform call.</span>
+<span class="sd">        shard: Optional deterministic shard assignment. Local benchmarking requires</span>
+<span class="sd">            a complete shard, but this field is available for future distributed</span>
+<span class="sd">            embedding jobs.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="EmbeddingConfig.batch_size">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.EmbeddingConfig.batch_size">[docs]</a>
+    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">128</span></div>
+
+<div class="viewcode-block" id="EmbeddingConfig.streaming_enabled">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.EmbeddingConfig.streaming_enabled">[docs]</a>
+    <span class="n">streaming_enabled</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="EmbeddingConfig.shard">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.EmbeddingConfig.shard">[docs]</a>
+    <span class="n">shard</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">ShardSpec</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+
+    <span class="k">def</span> <span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;EmbeddingConfig.batch_size must be &gt;= 1.&quot;</span><span class="p">)</span></div>
+
+
+
+<span class="nd">@dataclass</span>
+<div class="viewcode-block" id="MemoryConfig">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig">[docs]</a>
+<span class="k">class</span> <span class="nc">MemoryConfig</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Memory budget and admission-control settings.</span>
+
+<span class="sd">    Attributes:</span>
+<span class="sd">        max_memory_bytes: Explicit process memory budget. When `None`, the budget</span>
+<span class="sd">            is derived from current available memory using `psutil`.</span>
+<span class="sd">        reserve_system_bytes: Memory to leave available for the OS and other</span>
+<span class="sd">            processes. When `None`, a conservative reserve is selected.</span>
+<span class="sd">        max_fraction: Maximum fraction of currently available memory to use.</span>
+<span class="sd">        allow_disk_spill: Whether large embedding artifacts may be streamed to disk.</span>
+<span class="sd">        fail_fast: Whether to raise before expensive work when estimates exceed</span>
+<span class="sd">            the configured budget.</span>
+<span class="sd">        probe_batch_size: Number of samples used to infer unknown embedding shape.</span>
+<span class="sd">        model_memory_bytes: Optional model memory hint included in admission checks.</span>
+<span class="sd">        raw_batch_memory_bytes: Optional raw batch memory hint included in checks.</span>
+<span class="sd">        subsample_rate: Fraction of samples to keep before embedding and scoring.</span>
+<span class="sd">            A value of `1.0` disables user-requested subsampling.</span>
+<span class="sd">        subsample_random_state: Seed used for deterministic stratified subsampling.</span>
+<span class="sd">        min_subsample_samples_per_class: Minimum retained samples per class when</span>
+<span class="sd">            class sizes allow it.</span>
+<span class="sd">        auto_subsample_on_memory_exceeded: Whether to warn and select the largest</span>
+<span class="sd">            fitting stratified subsample instead of raising when a full embedding</span>
+<span class="sd">            artifact would exceed memory.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="MemoryConfig.max_memory_bytes">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.max_memory_bytes">[docs]</a>
+    <span class="n">max_memory_bytes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.reserve_system_bytes">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.reserve_system_bytes">[docs]</a>
+    <span class="n">reserve_system_bytes</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.max_fraction">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.max_fraction">[docs]</a>
+    <span class="n">max_fraction</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.75</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.allow_disk_spill">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.allow_disk_spill">[docs]</a>
+    <span class="n">allow_disk_spill</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.fail_fast">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.fail_fast">[docs]</a>
+    <span class="n">fail_fast</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.probe_batch_size">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.probe_batch_size">[docs]</a>
+    <span class="n">probe_batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">4</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.model_memory_bytes">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.model_memory_bytes">[docs]</a>
+    <span class="n">model_memory_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.raw_batch_memory_bytes">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.raw_batch_memory_bytes">[docs]</a>
+    <span class="n">raw_batch_memory_bytes</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.subsample_rate">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.subsample_rate">[docs]</a>
+    <span class="n">subsample_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.0</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.subsample_random_state">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.subsample_random_state">[docs]</a>
+    <span class="n">subsample_random_state</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">42</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.min_subsample_samples_per_class">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.min_subsample_samples_per_class">[docs]</a>
+    <span class="n">min_subsample_samples_per_class</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span></div>
+
+<div class="viewcode-block" id="MemoryConfig.auto_subsample_on_memory_exceeded">
+<a class="viewcode-back" href="../../api/vertebrae/config/index.html#vertebrae.config.MemoryConfig.auto_subsample_on_memory_exceeded">[docs]</a>
+    <span class="n">auto_subsample_on_memory_exceeded</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span></div>
+
+
+    <span class="k">def</span> <span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_memory_bytes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_memory_bytes</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.max_memory_bytes must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">reserve_system_bytes</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">reserve_system_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.reserve_system_bytes must be &gt;= 0.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_fraction</span> <span class="o">&lt;=</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.max_fraction must be in (0, 1].&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">probe_batch_size</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.probe_batch_size must be &gt;= 1.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_memory_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.model_memory_bytes must be &gt;= 0.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">raw_batch_memory_bytes</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.raw_batch_memory_bytes must be &gt;= 0.&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mf">0.0</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">subsample_rate</span> <span class="o">&lt;=</span> <span class="mf">1.0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.subsample_rate must be in (0, 1].&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">min_subsample_samples_per_class</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;MemoryConfig.min_subsample_samples_per_class must be &gt;= 1.&quot;</span><span class="p">)</span></div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2026, Niklas Melton.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

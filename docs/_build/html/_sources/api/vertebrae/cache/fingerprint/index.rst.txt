@@ -1,0 +1,51 @@
+vertebrae.cache.fingerprint
+===========================
+
+.. py:module:: vertebrae.cache.fingerprint
+
+.. autoapi-nested-parse::
+
+   Conservative cache fingerprint helpers.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.cache.fingerprint.hash_json
+   vertebrae.cache.fingerprint.fingerprint_array_like
+   vertebrae.cache.fingerprint.fingerprint_extractor_recipe
+
+
+Module Contents
+---------------
+
+.. py:function:: hash_json(value)
+
+   Hash a value after conservative JSON normalization.
+
+   :param value: Value to fingerprint.
+
+   :returns: SHA-256 hash string.
+
+
+.. py:function:: fingerprint_array_like(value)
+
+   Fingerprint an array-like or sparse-matrix value.
+
+   :param value: Value to fingerprint.
+
+   :returns: SHA-256 hash string.
+
+
+.. py:function:: fingerprint_extractor_recipe(recipe)
+
+   Fingerprint a serializable extractor recipe.
+
+   :param recipe: Extractor recipe dictionary.
+
+   :returns: SHA-256 hash string.
+
+

@@ -1,0 +1,61 @@
+vertebrae.execution.dask_backend
+================================
+
+.. py:module:: vertebrae.execution.dask_backend
+
+.. autoapi-nested-parse::
+
+   Dask execution backend.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.execution.dask_backend.DaskJobHandle
+   vertebrae.execution.dask_backend.DaskBackend
+
+
+Module Contents
+---------------
+
+.. py:class:: DaskJobHandle
+
+   Handle for a submitted Dask future.
+
+
+.. py:class:: DaskBackend(address = None, client = None, timeout = None)
+
+   Dask execution backend.
+
+   :param address: Optional scheduler address.
+   :param client: Optional pre-existing Dask client.
+   :param timeout: Optional client connect timeout.
+
+
+   .. py:method:: submit(fn, job)
+
+      Submit a single Dask job.
+
+
+
+   .. py:method:: gather(handles)
+
+      Collect Dask job results.
+
+
+
+   .. py:method:: status(handle)
+
+      Return Dask future status.
+
+
+
+   .. py:method:: map(fn, jobs)
+
+      Map a callable over Dask jobs while preserving order.
+
+
+

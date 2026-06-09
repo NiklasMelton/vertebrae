@@ -1,0 +1,11 @@
+vertebrae.datasets.dataframe
+============================
+
+.. py:module:: vertebrae.datasets.dataframe
+
+.. autoapi-nested-parse::
+
+   Dataframe dataset entrypoints.
+
+
+

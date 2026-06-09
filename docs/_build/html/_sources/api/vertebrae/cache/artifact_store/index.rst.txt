@@ -1,0 +1,98 @@
+vertebrae.cache.artifact_store
+==============================
+
+.. py:module:: vertebrae.cache.artifact_store
+
+.. autoapi-nested-parse::
+
+   Artifact store protocols and configuration.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.cache.artifact_store.ArtifactStoreConfig
+   vertebrae.cache.artifact_store.ArtifactStore
+
+
+Module Contents
+---------------
+
+.. py:class:: ArtifactStoreConfig
+
+   Serializable artifact-store configuration.
+
+   .. attribute:: uri
+
+      Artifact store URI or local path.
+
+   .. attribute:: options
+
+      Provider-specific options used to reconstruct the store.
+
+
+.. py:class:: ArtifactStore
+
+   Bases: :py:obj:`Protocol`
+
+
+   Protocol for embedding and metadata artifact stores.
+
+
+   .. py:method:: config()
+
+      Return a serializable configuration for this store.
+
+
+
+   .. py:method:: exists(key)
+
+      Return whether an artifact exists for a key.
+
+
+
+   .. py:method:: put_array(key, arr)
+
+      Store a dense or sparse array artifact and return its URI/path.
+
+
+
+   .. py:method:: get_array(key)
+
+      Load a dense or sparse array artifact by key.
+
+
+
+   .. py:method:: put_array_batches(key, batches, n_samples, require_complete = True)
+
+      Store arrays from deterministic batches and return their URI/path.
+
+
+
+   .. py:method:: put_labels(key, labels)
+
+      Store labels and return their URI/path.
+
+
+
+   .. py:method:: get_labels(key)
+
+      Load labels by key.
+
+
+
+   .. py:method:: put_json(key, obj)
+
+      Store a JSON metadata artifact and return its URI/path.
+
+
+
+   .. py:method:: get_json(key)
+
+      Load a JSON metadata artifact by key.
+
+
+

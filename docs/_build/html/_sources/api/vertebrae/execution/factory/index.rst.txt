@@ -1,0 +1,34 @@
+vertebrae.execution.factory
+===========================
+
+.. py:module:: vertebrae.execution.factory
+
+.. autoapi-nested-parse::
+
+   Execution backend factory helpers.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.execution.factory.create_execution_backend
+
+
+Module Contents
+---------------
+
+.. py:function:: create_execution_backend(name, **kwargs)
+
+   Create an execution backend by name.
+
+   :param name: Backend name.
+   :param \*\*kwargs: Backend-specific configuration.
+
+   :returns: Execution backend instance.
+
+   :raises ValueError: If the backend name is unknown.
+
+

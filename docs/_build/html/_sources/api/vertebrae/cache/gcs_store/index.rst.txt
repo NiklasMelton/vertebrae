@@ -1,0 +1,93 @@
+vertebrae.cache.gcs_store
+=========================
+
+.. py:module:: vertebrae.cache.gcs_store
+
+.. autoapi-nested-parse::
+
+   GCS-backed artifact store.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.cache.gcs_store.GCSArtifactStore
+
+
+Module Contents
+---------------
+
+.. py:class:: GCSArtifactStore(bucket, prefix = '', project = None)
+
+   Store artifacts in Google Cloud Storage.
+
+   :param bucket: GCS bucket name.
+   :param prefix: Optional object key prefix.
+   :param project: Optional GCP project override.
+
+
+   .. py:method:: from_uri(uri, **options)
+      :classmethod:
+
+
+      Build a GCS store from a `gs://bucket/prefix` URI.
+
+
+
+   .. py:method:: config()
+
+      Return a serializable config for reconstructing this store.
+
+
+
+   .. py:method:: exists(key)
+
+      Return whether an embedding artifact exists for `key`.
+
+
+
+   .. py:method:: put_array(key, arr)
+
+      Store a dense or sparse embedding matrix.
+
+
+
+   .. py:method:: put_array_batches(key, batches, n_samples, require_complete = True)
+
+      Store embeddings from deterministic batches.
+
+
+
+   .. py:method:: get_array(key)
+
+      Load a dense or sparse embedding matrix.
+
+
+
+   .. py:method:: put_labels(key, labels)
+
+      Store labels as JSON.
+
+
+
+   .. py:method:: get_labels(key)
+
+      Load labels from JSON.
+
+
+
+   .. py:method:: put_json(key, obj)
+
+      Store JSON metadata for an artifact key.
+
+
+
+   .. py:method:: get_json(key)
+
+      Load JSON metadata for an artifact key.
+
+
+

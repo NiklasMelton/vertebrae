@@ -1,0 +1,40 @@
+vertebrae.reports.markdown_report
+=================================
+
+.. py:module:: vertebrae.reports.markdown_report
+
+.. autoapi-nested-parse::
+
+   Markdown report rendering.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.reports.markdown_report.save_markdown_report
+   vertebrae.reports.markdown_report.render_markdown_report
+
+
+Module Contents
+---------------
+
+.. py:function:: save_markdown_report(result, path)
+
+   Save a benchmark result as a Markdown report.
+
+   :param result: Result object renderable by `render_markdown_report`.
+   :param path: Destination file path.
+
+
+.. py:function:: render_markdown_report(result)
+
+   Render a benchmark result as Markdown.
+
+   :param result: Benchmark result object.
+
+   :returns: Markdown report text.
+
+

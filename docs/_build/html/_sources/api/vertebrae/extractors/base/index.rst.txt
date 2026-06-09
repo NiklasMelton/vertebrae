@@ -1,0 +1,82 @@
+vertebrae.extractors.base
+=========================
+
+.. py:module:: vertebrae.extractors.base
+
+.. autoapi-nested-parse::
+
+   Feature extractor protocol.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.extractors.base.FeatureExtractor
+
+
+Module Contents
+---------------
+
+.. py:class:: FeatureExtractor
+
+   Bases: :py:obj:`Protocol`
+
+
+   Protocol implemented by all vertebrae feature extractors.
+
+   .. attribute:: name
+
+      User-facing extractor name.
+
+   .. attribute:: modality
+
+      Input modality handled by the extractor.
+
+   .. attribute:: extractor_type
+
+      Extractor family metadata.
+
+
+   .. py:method:: fit(X, y = None)
+
+      Fit extractor state when applicable.
+
+      :param X: Input samples.
+      :param y: Optional labels.
+
+      :returns: The fitted extractor.
+
+
+
+   .. py:method:: transform(X)
+
+      Transform inputs into embeddings.
+
+      :param X: Input samples.
+
+      :returns: Dense or sparse numeric embedding matrix.
+
+
+
+   .. py:method:: fit_transform(X, y = None)
+
+      Fit the extractor and transform inputs into embeddings.
+
+      :param X: Input samples.
+      :param y: Optional labels.
+
+      :returns: Dense or sparse numeric embedding matrix.
+
+
+
+   .. py:method:: recipe()
+
+      Return a serializable extractor recipe.
+
+      :returns: JSON-compatible recipe used for cache keys and reports.
+
+
+

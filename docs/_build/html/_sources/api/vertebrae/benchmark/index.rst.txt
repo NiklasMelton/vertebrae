@@ -1,0 +1,56 @@
+vertebrae.benchmark
+===================
+
+.. py:module:: vertebrae.benchmark
+
+.. autoapi-nested-parse::
+
+   Benchmark runner.
+
+
+
+Classes
+-------
+
+.. autoapisummary::
+
+   vertebrae.benchmark.Benchmark
+
+
+Module Contents
+---------------
+
+.. py:class:: Benchmark(dataset, extractors = None, scoring_config = None, stability_config = None, probe_config = None, cache_config = None, embedding_config = None, memory_config = None, execution = None)
+
+   Run one or more extractors against a labeled dataset.
+
+   :param dataset: Dataset object with inputs and labels.
+   :param extractors: Optional iterable of extractors to evaluate.
+   :param scoring_config: OverlapIndex scoring configuration.
+   :param stability_config: Stability-analysis configuration.
+   :param probe_config: Probe-classifier configuration.
+   :param cache_config: Embedding cache configuration.
+   :param embedding_config: Embedding batching and streaming configuration.
+   :param execution: Local execution backend.
+
+
+   .. py:method:: add_extractor(extractor)
+
+      Add an extractor to this benchmark.
+
+      :param extractor: Feature extractor implementing the vertebrae protocol.
+
+      :returns: This benchmark instance for fluent chaining.
+
+
+
+   .. py:method:: run()
+
+      Run feature extraction, scoring, optional probes, and reporting aggregation.
+
+      :returns: Aggregated benchmark result.
+
+      :raises ValueError: If no extractors are configured or dataset validation fails.
+
+
+

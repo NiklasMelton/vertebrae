@@ -1,0 +1,34 @@
+vertebrae.utils.imports
+=======================
+
+.. py:module:: vertebrae.utils.imports
+
+.. autoapi-nested-parse::
+
+   Helpers for optional dependency imports.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.utils.imports.optional_import
+
+
+Module Contents
+---------------
+
+.. py:function:: optional_import(module_name, install_hint)
+
+   Import an optional dependency with a user-friendly error message.
+
+   :param module_name: Module to import.
+   :param install_hint: Installation instructions included in the error.
+
+   :returns: Imported module.
+
+   :raises ImportError: If the optional module is unavailable.
+
+

@@ -1,0 +1,11 @@
+vertebrae.datasets.embeddings
+=============================
+
+.. py:module:: vertebrae.datasets.embeddings
+
+.. autoapi-nested-parse::
+
+   Precomputed embedding dataset entrypoints.
+
+
+

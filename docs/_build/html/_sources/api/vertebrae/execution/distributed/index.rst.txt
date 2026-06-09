@@ -1,0 +1,218 @@
+vertebrae.execution.distributed
+===============================
+
+.. py:module:: vertebrae.execution.distributed
+
+.. autoapi-nested-parse::
+
+   Distributed embedding primitives.
+
+
+
+Functions
+---------
+
+.. autoapisummary::
+
+   vertebrae.execution.distributed.embedding_artifact_key
+   vertebrae.execution.distributed.embedding_shard_key
+   vertebrae.execution.distributed.labels_artifact_key
+   vertebrae.execution.distributed.scoring_artifact_key
+   vertebrae.execution.distributed.plan_embedding_shard_jobs
+   vertebrae.execution.distributed.materialize_embedding_shards
+   vertebrae.execution.distributed.materialize_and_merge_embeddings
+   vertebrae.execution.distributed.materialize_label_artifact
+   vertebrae.execution.distributed.score_embedding_artifact
+   vertebrae.execution.distributed.score_embedding_artifacts
+   vertebrae.execution.distributed.validate_embedding_label_artifacts
+   vertebrae.execution.distributed.plan_scoring_jobs
+   vertebrae.execution.distributed.collect_score_artifacts
+   vertebrae.execution.distributed.benchmark_result_from_artifacts
+   vertebrae.execution.distributed.materialize_embedding_shard
+   vertebrae.execution.distributed.merge_embedding_shards
+
+
+Module Contents
+---------------
+
+.. py:function:: embedding_artifact_key(dataset, extractor)
+
+   Build the canonical embedding artifact key.
+
+   :param dataset: Dataset object with a `fingerprint()` method.
+   :param extractor: Feature extractor with a serializable `recipe()`.
+
+   :returns: Artifact key for the complete embedding matrix.
+
+
+.. py:function:: embedding_shard_key(base_key, shard)
+
+   Build an artifact key for one embedding shard.
+
+   :param base_key: Complete embedding artifact key.
+   :param shard: Deterministic shard assignment.
+
+   :returns: Artifact key for the shard.
+
+
+.. py:function:: labels_artifact_key(dataset)
+
+   Build the canonical label artifact key.
+
+   :param dataset: Dataset object with a `fingerprint()` method.
+
+   :returns: Artifact key for labels.
+
+
+.. py:function:: scoring_artifact_key(embedding_key, seed = None)
+
+   Build a scoring artifact key.
+
+   :param embedding_key: Complete embedding artifact key.
+   :param seed: Optional scoring seed.
+
+   :returns: Artifact key for scoring output.
+
+
+.. py:function:: plan_embedding_shard_jobs(dataset, extractor, total_shards, batch_size = 128)
+
+   Create deterministic embedding shard jobs.
+
+   :param dataset: Dataset to embed.
+   :param extractor: Feature extractor to run on each shard.
+   :param total_shards: Number of non-overlapping shards to create.
+   :param batch_size: Number of samples per transform batch.
+
+   :returns: Embedding shard jobs with canonical output keys.
+
+
+.. py:function:: materialize_embedding_shards(jobs, store, execution)
+
+   Materialize embedding shards with an execution backend.
+
+   :param jobs: Embedding shard jobs.
+   :param store: Artifact store receiving shard outputs.
+   :param execution: Backend with a `map()` method, such as `LocalBackend`.
+
+   :returns: Shard manifests in job order.
+
+
+.. py:function:: materialize_and_merge_embeddings(dataset, extractor, store, execution, total_shards, batch_size = 128)
+
+   Materialize sharded embeddings and merge them into one artifact.
+
+   :param dataset: Dataset to embed.
+   :param extractor: Feature extractor to run.
+   :param store: Artifact store for shard and merged artifacts.
+   :param execution: Backend used to materialize shard jobs.
+   :param total_shards: Number of deterministic sample shards.
+   :param batch_size: Number of samples per transform batch.
+
+   :returns: Merged embedding manifest.
+
+
+.. py:function:: materialize_label_artifact(dataset, store, key = None)
+
+   Materialize dataset labels as an artifact.
+
+   :param dataset: Dataset with labels.
+   :param store: Artifact store receiving labels.
+   :param key: Optional artifact key. Defaults to `labels_artifact_key(dataset)`.
+
+   :returns: JSON-compatible label manifest.
+
+
+.. py:function:: score_embedding_artifact(job, store)
+
+   Score a persisted embedding artifact against persisted labels.
+
+   :param job: Scoring job.
+   :param store: Artifact store containing inputs and receiving the score.
+
+   :returns: JSON-compatible scoring artifact.
+
+
+.. py:function:: score_embedding_artifacts(jobs, store, execution)
+
+   Score persisted embeddings with an execution backend.
+
+   :param jobs: Scoring jobs.
+   :param store: Artifact store containing inputs and receiving outputs.
+   :param execution: Backend with a `map()` method.
+
+   :returns: Scoring artifacts in job order.
+
+
+.. py:function:: validate_embedding_label_artifacts(store, embedding_key, labels_key)
+
+   Validate that embedding and label artifacts can be scored together.
+
+   :param store: Artifact store containing the artifacts.
+   :param embedding_key: Complete embedding artifact key.
+   :param labels_key: Label artifact key.
+
+   :returns: Embedding and label manifests.
+
+   :raises ValueError: If metadata is incompatible.
+
+
+.. py:function:: plan_scoring_jobs(embedding_key, labels_key, seeds, scoring_config = None)
+
+   Create scoring jobs for one embedding and label artifact pair.
+
+   :param embedding_key: Complete embedding artifact key.
+   :param labels_key: Label artifact key.
+   :param seeds: Seeds for scoring jobs. Use `None` for the default single score.
+   :param scoring_config: Optional scoring configuration shared by all jobs.
+
+   :returns: Scoring jobs with canonical output keys.
+
+
+.. py:function:: collect_score_artifacts(score_keys, store, output_key, interval_level = 0.95)
+
+   Collect scoring artifacts into a stability-style summary.
+
+   :param score_keys: Score artifact keys to aggregate.
+   :param store: Artifact store containing score artifacts.
+   :param output_key: Artifact key for the collection summary.
+   :param interval_level: Percentile interval level for summary statistics.
+
+   :returns: JSON-compatible score collection artifact.
+
+
+.. py:function:: benchmark_result_from_artifacts(score_key, store, output_key = None, stability_key = None)
+
+   Build and optionally persist a benchmark-style result from artifacts.
+
+   :param score_key: Score artifact key.
+   :param store: Artifact store containing score and source artifacts.
+   :param output_key: Optional result artifact key.
+   :param stability_key: Optional score collection key to use as stability metadata.
+
+   :returns: JSON-compatible benchmark result.
+
+
+.. py:function:: materialize_embedding_shard(job, store)
+
+   Materialize one embedding shard artifact.
+
+   :param job: Embedding shard job.
+   :param store: Artifact store receiving the shard.
+
+   :returns: JSON-compatible shard manifest.
+
+   :raises ValueError: If the extractor emits invalid embeddings.
+
+
+.. py:function:: merge_embedding_shards(job, store)
+
+   Merge embedding shard artifacts into a complete embedding artifact.
+
+   :param job: Embedding merge job.
+   :param store: Artifact store containing shards and receiving the merge.
+
+   :returns: JSON-compatible merged embedding manifest.
+
+   :raises ValueError: If shard metadata is inconsistent, duplicated, or incomplete.
+
+
