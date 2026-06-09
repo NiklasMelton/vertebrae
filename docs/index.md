@@ -1,0 +1,19 @@
+# Vertebrae Documentation
+
+Core guides, API docs, and project notes live here. The pages below pull directly
+from the repository README, existing Markdown guides, and generated API reference.
+
+```{toctree}
+:maxdepth: 2
+:caption: Guides
+
+overview
+datasets
+feature_extractors
+compression
+scoring
+results_and_reports
+examples
+distributed_readiness
+api/vertebrae/index
+```

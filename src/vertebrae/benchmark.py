@@ -3,15 +3,17 @@
 from dataclasses import asdict
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Any, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 
 from vertebrae import __version__
 from vertebrae.cache import ArtifactStore, create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
+from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
 from vertebrae.config import (
     CacheConfig,
+    EmbeddingCompressionConfig,
     EmbeddingConfig,
     MemoryConfig,
     OverlapScoringConfig,
@@ -62,6 +64,8 @@ class Benchmark:
         stability_config: Optional[StabilityConfig] = None,
         probe_config: Optional[ProbeConfig] = None,
         cache_config: Optional[CacheConfig] = None,
+        compression_config: Optional[EmbeddingCompressionConfig] = None,
+        compression_configs: Optional[Iterable[EmbeddingCompressionConfig]] = None,
         embedding_config: Optional[EmbeddingConfig] = None,
         memory_config: Optional[MemoryConfig] = None,
         execution: Optional[Any] = None,
@@ -72,6 +76,14 @@ class Benchmark:
         self.stability_config = stability_config or StabilityConfig()
         self.probe_config = probe_config or ProbeConfig()
         self.cache_config = cache_config or CacheConfig()
+        if compression_config is not None and compression_configs is not None:
+            raise ValueError("Provide compression_config or compression_configs, not both.")
+        default_compressions = (
+            [compression_config]
+            if compression_config is not None
+            else [EmbeddingCompressionConfig()]
+        )
+        self.compression_configs = list(compression_configs or default_compressions)
         self.embedding_config = embedding_config or EmbeddingConfig()
         self.memory_config = memory_config or MemoryConfig()
         self.execution = execution or LocalBackend()
@@ -103,7 +115,13 @@ class Benchmark:
         if not self.extractors:
             raise ValueError("At least one extractor must be provided.")
 
-        extractor_results = [self._run_extractor(extractor) for extractor in self.extractors]
+        extractor_results: List[ExtractorResult] = []
+        for extractor in self.extractors:
+            result = self._run_extractor(extractor)
+            if isinstance(result, list):
+                extractor_results.extend(result)
+            else:
+                extractor_results.append(result)
         recommendations = recommendations_for_benchmark(extractor_results)
         return BenchmarkResult(
             dataset_summary=self.dataset.summary(),
@@ -116,12 +134,13 @@ class Benchmark:
                 "stability_config": asdict(self.stability_config),
                 "probe_config": asdict(self.probe_config),
                 "cache_config": asdict(self.cache_config),
+                "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
                 "memory_config": asdict(self.memory_config),
             },
         )
 
-    def _run_extractor(self, extractor: Any) -> ExtractorResult:
+    def _run_extractor(self, extractor: Any) -> Union[ExtractorResult, List[ExtractorResult]]:
         warnings: List[str] = []
         runtime = {}
         start = perf_counter()
@@ -129,52 +148,99 @@ class Benchmark:
             self._prepare_dataset_for_extractor(extractor)
         )
         warnings.extend(subsampling_warnings)
+        store = create_artifact_store(
+            self.cache_config.cache_dir,
+            **self.cache_config.storage_options,
+        )
         embeddings, embedding_metadata = self._get_or_compute_embeddings(
             extractor,
             dataset,
+            store,
             subsampling_metadata,
             probe_plan,
         )
         runtime["embedding_seconds"] = perf_counter() - start
+        results: List[ExtractorResult] = []
+        for compression_config in self.compression_configs:
+            variant_warnings = list(warnings)
+            variant_runtime = dict(runtime)
+            compression_start = perf_counter()
+            compressed_embeddings, compression_metadata = (
+                self._get_or_compute_compressed_embeddings(
+                    embeddings=embeddings,
+                    embedding_metadata=embedding_metadata,
+                    labels=dataset.y,
+                    store=store,
+                    config=compression_config,
+                )
+            )
+            variant_runtime["compression_seconds"] = perf_counter() - compression_start
+            variant_warnings.extend(compression_metadata.get("warnings", []))
 
-        score_start = perf_counter()
-        self._admit_scoring_memory(embedding_metadata)
-        overlap = OverlapIndexScorer(self.scoring_config).score(embeddings, dataset.y)
-        runtime["scoring_seconds"] = perf_counter() - score_start
-        warnings.extend(overlap.warnings)
+            score_start = perf_counter()
+            scoring_metadata = dict(embedding_metadata)
+            scoring_metadata["embedding_dim"] = compression_metadata.get(
+                "compressed_dim",
+                embedding_metadata.get("embedding_dim"),
+            )
+            scoring_metadata["shape"] = [
+                embedding_metadata.get("n_samples"),
+                scoring_metadata["embedding_dim"],
+            ]
+            scoring_metadata["sparse"] = compression_metadata.get(
+                "output_sparse",
+                embedding_metadata.get("sparse"),
+            )
+            self._admit_scoring_memory(scoring_metadata)
+            overlap = OverlapIndexScorer(self.scoring_config).score(
+                compressed_embeddings,
+                dataset.y,
+            )
+            variant_runtime["scoring_seconds"] = perf_counter() - score_start
+            variant_warnings.extend(overlap.warnings)
 
-        stability_start = perf_counter()
-        stability = run_stability_analysis(
-            embeddings,
-            dataset.y,
-            self.scoring_config,
-            self.stability_config,
-        )
-        runtime["stability_seconds"] = perf_counter() - stability_start
-        if stability:
-            warnings.extend(stability.get("warnings", []))
+            stability_start = perf_counter()
+            stability = run_stability_analysis(
+                compressed_embeddings,
+                dataset.y,
+                self.scoring_config,
+                self.stability_config,
+            )
+            variant_runtime["stability_seconds"] = perf_counter() - stability_start
+            if stability:
+                variant_warnings.extend(stability.get("warnings", []))
 
-        probe_start = perf_counter()
-        probes = run_probes(embeddings, dataset.y, self.probe_config)
-        runtime["probe_seconds"] = perf_counter() - probe_start
-        if probes:
-            warnings.extend(probes.get("warnings", []))
+            probe_start = perf_counter()
+            probes = run_probes(compressed_embeddings, dataset.y, self.probe_config)
+            variant_runtime["probe_seconds"] = perf_counter() - probe_start
+            if probes:
+                variant_warnings.extend(probes.get("warnings", []))
 
-        weakest_class, weakest_score = _weakest_class(overlap.per_class_scores)
-        recommendation = recommendation_for_extractor(overlap.macro_score, stability, weakest_score)
-        return ExtractorResult(
-            name=extractor.name,
-            extractor_type=getattr(extractor, "extractor_type", "unknown"),
-            overlap=overlap,
-            stability=stability,
-            probes=probes,
-            embedding_metadata=embedding_metadata,
-            runtime=runtime,
-            warnings=sorted(set(warnings)),
-            weakest_class=weakest_class,
-            weakest_class_score=weakest_score,
-            recommendation=recommendation,
-        )
+            weakest_class, weakest_score = _weakest_class(overlap.per_class_scores)
+            recommendation = recommendation_for_extractor(
+                overlap.macro_score,
+                stability,
+                weakest_score,
+            )
+            results.append(
+                ExtractorResult(
+                    name=_variant_extractor_name(extractor.name, compression_metadata),
+                    extractor_type=getattr(extractor, "extractor_type", "unknown"),
+                    overlap=overlap,
+                    stability=stability,
+                    probes=probes,
+                    embedding_metadata=embedding_metadata,
+                    compression_metadata=compression_metadata,
+                    runtime=variant_runtime,
+                    warnings=sorted(set(variant_warnings)),
+                    weakest_class=weakest_class,
+                    weakest_class_score=weakest_score,
+                    recommendation=recommendation,
+                )
+            )
+        if len(results) == 1:
+            return results[0]
+        return results
 
     def _prepare_dataset_for_extractor(
         self,
@@ -293,6 +359,7 @@ class Benchmark:
         self,
         extractor: Any,
         dataset: Any,
+        store: ArtifactStore,
         subsampling_metadata: Optional[dict] = None,
         probe_plan: Optional[Tuple[SampleBatch, Any, EmbeddingMemoryEstimate]] = None,
     ) -> Any:
@@ -300,11 +367,6 @@ class Benchmark:
         dataset_key = dataset.fingerprint()
         extractor_key = fingerprint_extractor_recipe(recipe)
         cache_key = f"embeddings/{dataset_key}/{extractor_key}"
-        store = create_artifact_store(
-            self.cache_config.cache_dir,
-            **self.cache_config.storage_options,
-        )
-
         if (
             self.cache_config.enabled
             and not self.cache_config.force_recompute
@@ -349,6 +411,38 @@ class Benchmark:
             store.put_array(cache_key, embeddings)
             store.put_json(cache_key, metadata)
         return embeddings, metadata
+
+    def _get_or_compute_compressed_embeddings(
+        self,
+        embeddings: Any,
+        embedding_metadata: dict,
+        labels: Any,
+        store: ArtifactStore,
+        config: EmbeddingCompressionConfig,
+    ) -> Tuple[Any, dict]:
+        if not config.enabled or config.method == "none":
+            compression_result = compress_embeddings(embeddings, config=config, y=labels)
+            return compression_result.embeddings, compression_result.metadata
+
+        source_key = embedding_metadata["cache_key"]
+        compression_key = compress_embedding_artifact_key(source_key, config)
+        if (
+            self.cache_config.enabled
+            and not self.cache_config.force_recompute
+            and store.exists(compression_key)
+        ):
+            metadata = store.get_json(compression_key)
+            metadata["cache_hit"] = True
+            return store.get_array(compression_key), metadata
+
+        compression_result = compress_embeddings(embeddings, config=config, y=labels)
+        metadata = dict(compression_result.metadata)
+        metadata["cache_key"] = compression_key
+        metadata["cache_hit"] = False
+        if self.cache_config.enabled:
+            store.put_array(compression_key, compression_result.embeddings)
+            store.put_json(compression_key, metadata)
+        return compression_result.embeddings, metadata
 
     def _should_stream_embeddings(self, extractor: Any) -> bool:
         if not self.embedding_config.streaming_enabled:
@@ -542,6 +636,19 @@ def _weakest_class(per_class_scores: dict) -> Any:
         return None, None
     label, score = min(numeric_scores.items(), key=lambda item: item[1])
     return label, score
+
+
+def _variant_extractor_name(name: str, compression_metadata: dict) -> str:
+    method = compression_metadata.get("method", "none")
+    if method == "none":
+        return name
+    precision = compression_metadata.get("precision")
+    if precision:
+        return f"{name}[{method}_{precision}]"
+    compressed_dim = compression_metadata.get("compressed_dim")
+    if compressed_dim is None:
+        return f"{name}[{method}]"
+    return f"{name}[{method}_{compressed_dim}]"
 
 
 def _combine_embedding_batches(

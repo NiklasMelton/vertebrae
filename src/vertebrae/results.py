@@ -32,6 +32,7 @@ class ExtractorResult:
     stability: Optional[Dict[str, Any]]
     probes: Optional[Dict[str, Any]]
     embedding_metadata: Dict[str, Any]
+    compression_metadata: Dict[str, Any]
     runtime: Dict[str, Any]
     warnings: List[str]
     recommendation: str
@@ -106,6 +107,12 @@ class BenchmarkResult:
                     "weakest_class": item.weakest_class,
                     "weakest_class_score": item.weakest_class_score,
                     "embedding_dim": item.embedding_metadata.get("embedding_dim"),
+                    "compression_method": item.compression_metadata.get("method", "none"),
+                    "compression_precision": item.compression_metadata.get("precision"),
+                    "compressed_dim": item.compression_metadata.get(
+                        "compressed_dim",
+                        item.embedding_metadata.get("embedding_dim"),
+                    ),
                     "recommendation": item.recommendation,
                 }
             )

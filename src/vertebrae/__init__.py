@@ -10,8 +10,10 @@ from vertebrae.cache import (
     S3ArtifactStore,
     create_artifact_store,
 )
+from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
 from vertebrae.config import (
     CacheConfig,
+    EmbeddingCompressionConfig,
     EmbeddingConfig,
     MemoryConfig,
     OverlapScoringConfig,
@@ -21,6 +23,7 @@ from vertebrae.config import (
 from vertebrae.datasets import BenchmarkDataset
 from vertebrae.evaluator import Evaluator
 from vertebrae.execution import (
+    CompressionJob,
     DaskBackend,
     EmbeddingJob,
     EmbeddingMergeJob,
@@ -33,6 +36,7 @@ from vertebrae.execution import (
     ShardSpec,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
+    compress_embedding_artifact,
     create_execution_backend,
     embedding_artifact_key,
     embedding_shard_key,
@@ -42,6 +46,7 @@ from vertebrae.execution import (
     materialize_embedding_shards,
     materialize_label_artifact,
     merge_embedding_shards,
+    plan_compression_job,
     plan_embedding_shard_jobs,
     plan_scoring_jobs,
     score_embedding_artifact,
@@ -56,7 +61,9 @@ __all__ = [
     "BenchmarkDataset",
     "BenchmarkResult",
     "CacheConfig",
+    "CompressionJob",
     "DaskBackend",
+    "EmbeddingCompressionConfig",
     "EmbeddingConfig",
     "EmbeddingJob",
     "EmbeddingMergeJob",
@@ -78,8 +85,11 @@ __all__ = [
     "ArtifactStoreConfig",
     "benchmark_result_from_artifacts",
     "collect_score_artifacts",
+    "compress_embedding_artifact",
     "StabilityConfig",
     "create_artifact_store",
+    "compress_embedding_artifact_key",
+    "compress_embeddings",
     "embedding_artifact_key",
     "embedding_shard_key",
     "labels_artifact_key",
@@ -88,6 +98,7 @@ __all__ = [
     "materialize_embedding_shards",
     "materialize_label_artifact",
     "merge_embedding_shards",
+    "plan_compression_job",
     "plan_embedding_shard_jobs",
     "plan_scoring_jobs",
     "score_embedding_artifact",

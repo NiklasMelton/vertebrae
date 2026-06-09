@@ -12,8 +12,16 @@ class HFVisionExtractor:
     Args:
         name: User-facing extractor name.
         model_id: Hugging Face model identifier or local path.
+        processor_id: Optional Hugging Face processor identifier or local path.
+            Defaults to `model_id`.
         pooling: Pooling mode: `"cls"`, `"mean"`, or `"pooler"`.
+        hidden_layer: Optional hidden-state layer index to pool from. Defaults to
+            the model's final output.
         batch_size: Number of images encoded per batch.
+        image_mode: Image representation to pass to the processor:
+            `"auto"`, `"rgb"`, `"grayscale"`, or `"preserve"`.
+        alpha_mode: How alpha channels are handled when converting:
+            `"drop"`, `"white_background"`, or `"black_background"`.
         device: Optional device string.
         revision: Optional model revision.
         trust_remote_code: Whether to allow remote model code.
@@ -25,8 +33,12 @@ class HFVisionExtractor:
         self,
         name: str,
         model_id: str,
+        processor_id: Optional[str] = None,
         pooling: str = "cls",
+        hidden_layer: Optional[int] = None,
         batch_size: int = 16,
+        image_mode: str = "auto",
+        alpha_mode: str = "drop",
         device: Optional[str] = None,
         revision: Optional[str] = None,
         trust_remote_code: bool = False,
@@ -35,10 +47,18 @@ class HFVisionExtractor:
     ) -> None:
         if pooling not in {"cls", "mean", "pooler"}:
             raise ValueError("pooling must be one of: cls, mean, pooler.")
+        if image_mode not in _IMAGE_MODES:
+            raise ValueError(f"image_mode must be one of: {', '.join(sorted(_IMAGE_MODES))}.")
+        if alpha_mode not in _ALPHA_MODES:
+            raise ValueError(f"alpha_mode must be one of: {', '.join(sorted(_ALPHA_MODES))}.")
         self.name = name
         self.model_id = model_id
+        self.processor_id = processor_id or model_id
         self.pooling = pooling
+        self.hidden_layer = hidden_layer
         self.batch_size = batch_size
+        self.image_mode = image_mode
+        self.alpha_mode = alpha_mode
         self.device = device
         self.revision = revision
         self.trust_remote_code = trust_remote_code
@@ -84,11 +104,19 @@ class HFVisionExtractor:
         model.eval()
         with torch.no_grad():
             for items in _iter_chunks(_as_iterable(X), self.batch_size):
-                batch = [_coerce_image(item, image_module) for item in items]
+                batch = [
+                    _coerce_image(item, image_module, self.image_mode, self.alpha_mode)
+                    for item in items
+                ]
                 encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
-                model_output = model(**encoded)
+                model_output = model(
+                    **encoded,
+                    output_hidden_states=self.hidden_layer is not None,
+                )
                 pooled = self._pool(model_output)
+                if len(pooled.shape) > 2:
+                    pooled = pooled.flatten(start_dim=1)
                 outputs.append(pooled.detach().cpu().numpy().astype(np.float32, copy=False))
         return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
 
@@ -117,8 +145,12 @@ class HFVisionExtractor:
             "extractor_type": self.extractor_type,
             "modality": self.modality,
             "model_id": self.model_id,
+            "processor_id": self.processor_id,
             "pooling": self.pooling,
+            "hidden_layer": self.hidden_layer,
             "batch_size": self.batch_size,
+            "image_mode": self.image_mode,
+            "alpha_mode": self.alpha_mode,
             "device": self.device,
             "revision": self.revision,
             "trust_remote_code": self.trust_remote_code,
@@ -147,7 +179,7 @@ class HFVisionExtractor:
                 key: value for key, value in common_kwargs.items() if value is not None
             }
             self._processor = AutoImageProcessor.from_pretrained(
-                self.model_id,
+                self.processor_id,
                 **common_kwargs,
                 **self.processor_kwargs,
             )
@@ -168,6 +200,13 @@ class HFVisionExtractor:
         return "cuda" if torch.cuda.is_available() else "cpu"
 
     def _pool(self, output: Any) -> Any:
+        if self.hidden_layer is not None:
+            if self.pooling == "pooler":
+                raise ValueError("pooler pooling cannot be used with hidden_layer.")
+            hidden = self._select_hidden_state(output)
+            if self.pooling == "cls":
+                return hidden[:, 0, :]
+            return hidden.mean(dim=1)
         if self.pooling == "pooler":
             pooler_output = getattr(output, "pooler_output", None)
             if pooler_output is None:
@@ -177,6 +216,21 @@ class HFVisionExtractor:
         if self.pooling == "cls":
             return hidden[:, 0, :]
         return hidden.mean(dim=1)
+
+    def _select_hidden_state(self, output: Any) -> Any:
+        hidden_states = getattr(output, "hidden_states", None)
+        if hidden_states is None:
+            raise ValueError(
+                "hidden_layer was requested, but model output has no hidden_states. "
+                "This model may not support output_hidden_states."
+            )
+        try:
+            return hidden_states[self.hidden_layer]
+        except IndexError as exc:
+            raise ValueError(
+                f"hidden_layer index {self.hidden_layer} is out of range for "
+                f"{len(hidden_states)} hidden states."
+            ) from exc
 
 
 def _as_iterable(value: Any) -> Any:
@@ -199,9 +253,77 @@ def _iter_chunks(items: Any, batch_size: int) -> Any:
         yield batch
 
 
-def _coerce_image(value: Any, image_module: Any) -> Any:
+_IMAGE_MODES = {"auto", "rgb", "grayscale", "preserve"}
+_ALPHA_MODES = {"drop", "white_background", "black_background"}
+
+
+def _coerce_image(value: Any, image_module: Any, image_mode: str, alpha_mode: str) -> Any:
+    if image_mode not in _IMAGE_MODES:
+        raise ValueError(f"image_mode must be one of: {', '.join(sorted(_IMAGE_MODES))}.")
+    if alpha_mode not in _ALPHA_MODES:
+        raise ValueError(f"alpha_mode must be one of: {', '.join(sorted(_ALPHA_MODES))}.")
+
+    is_path = isinstance(value, (str, Path))
+    if image_mode == "preserve" and not is_path:
+        return value
+
     if isinstance(value, (str, Path)):
-        return image_module.open(value).convert("RGB")
+        image = image_module.open(value)
+        if image_mode == "preserve":
+            return image
+        if image_mode == "auto":
+            return image.convert("RGB")
+        return _convert_image(image, image_module, image_mode, alpha_mode)
+
     if isinstance(value, np.ndarray):
-        return image_module.fromarray(value)
+        image = _array_to_image(value, image_module)
+        if image_mode == "auto":
+            return image
+        return _convert_image(image, image_module, image_mode, alpha_mode)
+    if image_mode in {"rgb", "grayscale"}:
+        return _convert_image(value, image_module, image_mode, alpha_mode)
     return value
+
+
+def _array_to_image(value: np.ndarray, image_module: Any) -> Any:
+    array = np.asarray(value)
+    if array.ndim == 2:
+        return image_module.fromarray(array)
+    if array.ndim != 3:
+        raise ValueError(
+            "NumPy image arrays must have shape (height, width), "
+            "(height, width, 1), (height, width, 3), or (height, width, 4)."
+        )
+    channels = array.shape[2]
+    if channels == 1:
+        return image_module.fromarray(array[:, :, 0])
+    if channels in {3, 4}:
+        return image_module.fromarray(array)
+    raise ValueError(
+        "NumPy image arrays must have 1, 3, or 4 channels in the last dimension; "
+        f"got {channels}."
+    )
+
+
+def _convert_image(image: Any, image_module: Any, image_mode: str, alpha_mode: str) -> Any:
+    image = _apply_alpha_mode(image, image_module, alpha_mode)
+    if image_mode == "rgb":
+        return image.convert("RGB")
+    if image_mode == "grayscale":
+        grayscale = np.asarray(image.convert("L"))
+        return grayscale[:, :, np.newaxis]
+    raise ValueError("image_mode must be 'rgb' or 'grayscale' for conversion.")
+
+
+def _apply_alpha_mode(image: Any, image_module: Any, alpha_mode: str) -> Any:
+    if alpha_mode == "drop" or not _has_alpha(image):
+        return image
+    color = (255, 255, 255, 255) if alpha_mode == "white_background" else (0, 0, 0, 255)
+    rgba = image.convert("RGBA")
+    background = image_module.new("RGBA", rgba.size, color)
+    return image_module.alpha_composite(background, rgba).convert("RGB")
+
+
+def _has_alpha(image: Any) -> bool:
+    mode = getattr(image, "mode", "")
+    return mode in {"RGBA", "LA"} or ("transparency" in getattr(image, "info", {}))
