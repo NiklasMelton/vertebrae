@@ -1,13 +1,12 @@
 # scoring
 
 All overlap scoring in `vertebrae` goes through one internal adapter:
-`OverlapIndexScorer`. This keeps the package aligned with its v1 metric contract and
-ensures every benchmark run uses the same backend path.
+`OverlapIndexScorer`.
 
 ## Fixed metric backend
 
 `vertebrae` depends on the external `overlapindex` package and does not reimplement
-OverlapIndex. In v1, the backend is fixed internally to MiniBatchKMeans:
+OverlapIndex. Currently, the backend is fixed internally to MiniBatchKMeans:
 
 ```python
 OverlapIndex(

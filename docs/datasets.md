@@ -101,7 +101,7 @@ scored in one pass.
 
 ## Working with precomputed embeddings
 
-Precomputed embeddings are the simplest v1 path and the best starting point for new
+Precomputed embeddings are the simplest path and the best starting point for new
 benchmarks. `BenchmarkDataset.from_embeddings(...)` accepts:
 
 - dense NumPy-like matrices, or
