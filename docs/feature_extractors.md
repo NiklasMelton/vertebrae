@@ -23,6 +23,30 @@ fit_transform(X, y=None)
 recipe()
 ```
 
+Some extractors can also emit multiple named embedding matrices from one model
+pass. `Benchmark` and `Evaluator` score each named output as a separate result.
+
+Native multi-output support is available for:
+
+- `HFTextExtractor`
+- `HFAudioExtractor`
+- `HFTimeSeriesExtractor`
+- `HFVisionExtractor`
+- `MultiOutputExtractor`
+
+For Hugging Face backbones, pass explicit output specs:
+
+```python
+extractor = HFVisionExtractor(
+    name="mnist_vit",
+    model_id="farleyknight-org-username/vit-base-mnist",
+    outputs=[
+        {"name": "final_cls", "pooling": "cls"},
+        {"name": "mid_cls", "pooling": "cls", "hidden_layer": 6},
+    ],
+)
+```
+
 Extractor recipes are serialized into result metadata and cache keys. Scoring consumes
 numeric embeddings and labels, not live model objects. Embeddings may be dense NumPy
 arrays or scipy sparse matrices. Sparse embeddings are stored as `.npz` artifacts and

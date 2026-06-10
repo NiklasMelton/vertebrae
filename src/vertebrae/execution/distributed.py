@@ -2,12 +2,16 @@
 
 from dataclasses import asdict
 from functools import partial
-from typing import Any, Iterable, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, Optional, Tuple
 
 import numpy as np
 
 from vertebrae import __version__
-from vertebrae.cache import ArtifactStore, ArtifactStoreConfig, create_artifact_store_from_config
+from vertebrae.cache import (
+    ArtifactStore,
+    ArtifactStoreConfig,
+    create_artifact_store_from_config,
+)
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
 from vertebrae.execution.jobs import (
@@ -17,6 +21,7 @@ from vertebrae.execution.jobs import (
     ScoringJob,
     ShardSpec,
 )
+from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -49,6 +54,20 @@ def embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
     """
 
     return f"{base_key}/shards/{shard.shard_index:05d}-of-{shard.total_shards:05d}"
+
+
+def embedding_output_key(base_key: str, output_name: str) -> str:
+    """Build an artifact key for one named embedding output."""
+
+    safe_name = str(output_name).replace("/", "_")
+    return f"{base_key}/outputs/{safe_name}"
+
+
+def embedding_output_shard_key(shard_key: str, output_name: str) -> str:
+    """Build an artifact key for one named embedding shard output."""
+
+    safe_name = str(output_name).replace("/", "_")
+    return f"{shard_key}/outputs/{safe_name}"
 
 
 def labels_artifact_key(dataset: Any) -> str:
@@ -610,6 +629,13 @@ def materialize_embedding_shard(
     local_positions = {
         int(sample_index): position for position, sample_index in enumerate(sample_indices)
     }
+    if _is_multi_output_extractor(extractor):
+        return _materialize_multi_output_embedding_shard(
+            job=job,
+            store=store,
+            sample_indices=sample_indices,
+            local_positions=local_positions,
+        )
     batches = _local_embedding_batches(dataset, extractor, job, local_positions)
     artifact_path = store.put_array_batches(
         job.output_key,
@@ -661,6 +687,8 @@ def merge_embedding_shards(
     """
 
     manifests = [store.get_json(key) for key in job.shard_keys]
+    if manifests and manifests[0].get("artifact_type") == "multi_output_embedding_shard":
+        return _merge_multi_output_embedding_shards(job, store, manifests)
     _validate_shard_manifests(manifests, expected_n_samples=job.n_samples)
     batches = [
         (np.asarray(manifest["sample_indices"], dtype=int), store.get_array(manifest["output_key"]))
@@ -716,6 +744,231 @@ def _local_embedding_batches(
             )
         indices = np.asarray([local_positions[int(index)] for index in batch.indices], dtype=int)
         yield indices, embeddings
+
+
+def _materialize_multi_output_embedding_shard(
+    job: EmbeddingShardJob,
+    store: ArtifactStore,
+    sample_indices: np.ndarray,
+    local_positions: dict[int, int],
+) -> dict[str, Any]:
+    dataset = job.dataset
+    extractor = job.extractor
+    output_specs = _multi_output_specs(extractor)
+    output_batches: Dict[str, list[Tuple[np.ndarray, Any]]] = {
+        spec["name"]: [] for spec in output_specs
+    }
+    output_recipes: Dict[str, dict[str, Any]] = {}
+    output_metadata: Dict[str, dict[str, Any]] = {}
+    for batch in dataset.iter_batches(batch_size=job.batch_size, shard=job.shard):
+        outputs = _validated_multi_outputs(extractor, batch.X, len(batch.indices))
+        indices = np.asarray([local_positions[int(index)] for index in batch.indices], dtype=int)
+        for output in outputs:
+            output_batches[output.name].append((indices, output.embeddings))
+            output_recipes[output.name] = dict(output.recipe)
+            output_metadata[output.name] = dict(output.metadata)
+
+    manifests = []
+    for spec in output_specs:
+        output_name = spec["name"]
+        output_key = embedding_output_shard_key(job.output_key, output_name)
+        artifact_path = store.put_array_batches(
+            output_key,
+            output_batches[output_name],
+            n_samples=len(sample_indices),
+            require_complete=True,
+        )
+        embeddings = store.get_array(output_key)
+        sparse_embeddings = is_sparse_matrix(embeddings)
+        output_manifest = {
+            "artifact_type": "embedding_shard",
+            "vertebrae_version": __version__,
+            "output_key": output_key,
+            "artifact_path": artifact_path,
+            "dataset_fingerprint": dataset.fingerprint(),
+            "extractor_recipe": extractor.recipe(),
+            "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+            "output_name": output_name,
+            "output_recipe": output_recipes.get(output_name, {}),
+            "output_metadata": output_metadata.get(output_name, {}),
+            "shard": asdict(job.shard),
+            "sample_indices": sample_indices.tolist(),
+            "n_samples": int(embeddings.shape[0]),
+            "embedding_dim": int(embeddings.shape[1]),
+            "shape": list(embeddings.shape),
+            "dtype": str(embeddings.dtype),
+            "sparse": sparse_embeddings,
+            "nnz": int(embeddings.nnz) if sparse_embeddings else None,
+            "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
+            "batch_size": job.batch_size,
+            "resources": asdict(job.resources),
+        }
+        store.put_json(output_key, output_manifest)
+        manifests.append(output_manifest)
+
+    bundle_manifest = {
+        "artifact_type": "multi_output_embedding_shard",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "dataset_fingerprint": dataset.fingerprint(),
+        "extractor_recipe": extractor.recipe(),
+        "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+        "shard": asdict(job.shard),
+        "sample_indices": sample_indices.tolist(),
+        "n_samples": int(len(sample_indices)),
+        "batch_size": job.batch_size,
+        "resources": asdict(job.resources),
+        "outputs": [
+            {
+                "output_name": manifest["output_name"],
+                "output_key": manifest["output_key"],
+                "embedding_dim": manifest["embedding_dim"],
+                "shape": manifest["shape"],
+                "dtype": manifest["dtype"],
+                "sparse": manifest["sparse"],
+                "nnz": manifest["nnz"],
+                "storage_format": manifest["storage_format"],
+                "output_recipe": manifest.get("output_recipe", {}),
+                "output_metadata": manifest.get("output_metadata", {}),
+            }
+            for manifest in manifests
+        ],
+    }
+    store.put_json(job.output_key, bundle_manifest)
+    return bundle_manifest
+
+
+def _merge_multi_output_embedding_shards(
+    job: EmbeddingMergeJob,
+    store: ArtifactStore,
+    manifests: list[dict[str, Any]],
+) -> dict[str, Any]:
+    output_names = _validate_multi_output_shard_manifests(manifests)
+    output_manifests = []
+    for output_name in output_names:
+        shard_keys = []
+        for manifest in manifests:
+            output = _find_output_manifest_entry(manifest, output_name)
+            shard_keys.append(output["output_key"])
+        output_key = embedding_output_key(job.output_key, output_name)
+        merged = merge_embedding_shards(
+            EmbeddingMergeJob(
+                shard_keys=tuple(shard_keys),
+                output_key=output_key,
+                n_samples=job.n_samples,
+                resources=job.resources,
+            ),
+            store,
+        )
+        output_manifests.append(
+            {
+                "output_name": output_name,
+                "output_key": merged["output_key"],
+                "artifact_path": merged["artifact_path"],
+                "shape": merged["shape"],
+                "n_samples": merged["n_samples"],
+                "embedding_dim": merged["embedding_dim"],
+                "dtype": merged["dtype"],
+                "sparse": merged["sparse"],
+                "nnz": merged["nnz"],
+                "storage_format": merged["storage_format"],
+            }
+        )
+    first = manifests[0]
+    bundle_manifest = {
+        "artifact_type": "multi_output_embedding",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "shard_keys": list(job.shard_keys),
+        "n_shards": len(job.shard_keys),
+        "n_samples": int(job.n_samples),
+        "dataset_fingerprint": first.get("dataset_fingerprint"),
+        "extractor_recipe": first.get("extractor_recipe"),
+        "recipe_hash": first.get("recipe_hash"),
+        "resources": asdict(job.resources),
+        "outputs": output_manifests,
+    }
+    store.put_json(job.output_key, bundle_manifest)
+    return bundle_manifest
+
+
+def _is_multi_output_extractor(extractor: Any) -> bool:
+    if not callable(getattr(extractor, "transform_many", None)):
+        return False
+    if not callable(getattr(extractor, "output_specs", None)):
+        return False
+    return len(list(extractor.output_specs())) > 1
+
+
+def _multi_output_specs(extractor: Any) -> list[dict[str, Any]]:
+    specs = []
+    for spec in extractor.output_specs():
+        specs.append(
+            {
+                "name": spec.name,
+                "pooling": getattr(spec, "pooling", None),
+                "hidden_layer": getattr(spec, "hidden_layer", None),
+                "metadata": dict(getattr(spec, "metadata", {}) or {}),
+            }
+        )
+    return specs
+
+
+def _validated_multi_outputs(
+    extractor: Any,
+    X: Any,
+    expected_rows: int,
+) -> list[EmbeddingOutput]:
+    outputs = list(extractor.transform_many(X))
+    expected_names = [spec["name"] for spec in _multi_output_specs(extractor)]
+    actual_names = [output.name for output in outputs]
+    if set(actual_names) != set(expected_names):
+        raise ValueError(
+            f"Extractor '{extractor.name}' returned outputs {sorted(actual_names)}, expected "
+            f"{sorted(expected_names)}."
+        )
+    validated = []
+    for output in outputs:
+        embeddings = ensure_numeric_matrix(
+            output.embeddings,
+            f"Extractor '{extractor.name}' output '{output.name}' shard embeddings",
+            allow_sparse=True,
+        )
+        if embeddings.shape[0] != expected_rows:
+            raise ValueError(
+                f"Extractor '{extractor.name}' output '{output.name}' returned "
+                f"{embeddings.shape[0]} embeddings for a shard batch with {expected_rows} samples."
+            )
+        validated.append(
+            EmbeddingOutput(
+                name=output.name,
+                embeddings=embeddings,
+                recipe=dict(output.recipe),
+                metadata=dict(output.metadata),
+            )
+        )
+    validated.sort(key=lambda item: expected_names.index(item.name))
+    return validated
+
+
+def _validate_multi_output_shard_manifests(manifests: list[dict[str, Any]]) -> list[str]:
+    if not manifests:
+        raise ValueError("At least one shard manifest is required.")
+    output_names: Optional[list[str]] = None
+    for manifest in manifests:
+        names = [str(output["output_name"]) for output in manifest.get("outputs", [])]
+        if output_names is None:
+            output_names = names
+        elif names != output_names:
+            raise ValueError("Multi-output embedding shards have inconsistent output names.")
+    return output_names or []
+
+
+def _find_output_manifest_entry(manifest: dict[str, Any], output_name: str) -> dict[str, Any]:
+    for output in manifest.get("outputs", []):
+        if output.get("output_name") == output_name:
+            return output
+    raise ValueError(f"Output '{output_name}' was not found in shard manifest.")
 
 
 def _validate_shard_manifests(

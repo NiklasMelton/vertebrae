@@ -26,6 +26,10 @@ Each extractor contributes an `ExtractorResult` with:
 - recommendation label,
 - weakest-class diagnostics when available.
 
+Multi-output extractors contribute one `ExtractorResult` per named output. Result
+names use the form `parent_name:output_name`, and embedding metadata preserves
+`parent_extractor_name` and `output_name`.
+
 ## Ranking and tabular views
 
 `BenchmarkResult.ranked_results()` sorts extractors by descending macro overlap

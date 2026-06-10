@@ -1,9 +1,11 @@
 """Optional Hugging Face audio embedding extractor."""
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
+
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 
 
 class HFAudioExtractor:
@@ -33,6 +35,7 @@ class HFAudioExtractor:
         processor_id: Optional[str] = None,
         pooling: str = "mean",
         hidden_layer: Optional[int] = None,
+        outputs: Optional[List[Dict[str, Any]]] = None,
         batch_size: int = 16,
         sampling_rate: Optional[int] = None,
         device: Optional[str] = None,
@@ -48,6 +51,11 @@ class HFAudioExtractor:
         self.processor_id = processor_id or model_id
         self.pooling = pooling
         self.hidden_layer = hidden_layer
+        self._output_specs = _resolve_output_specs(
+            outputs=outputs,
+            default_pooling=pooling,
+            default_hidden_layer=hidden_layer,
+        )
         self.batch_size = batch_size
         self.sampling_rate = sampling_rate
         self.device = device
@@ -69,11 +77,28 @@ class HFAudioExtractor:
 
     def transform(self, X: Any) -> np.ndarray:
         """Encode audio inputs into dense embeddings."""
+        outputs = self.transform_many(X)
+        if len(outputs) != 1:
+            raise ValueError(
+                "HFAudioExtractor.transform() is only available when exactly one output is "
+                "configured. Use Benchmark/Evaluator or transform_many()."
+            )
+        return outputs[0].embeddings
 
+    def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        """Encode audio inputs into dense embeddings."""
+
+        return self.transform(X)
+
+    def output_specs(self) -> List[EmbeddingOutputSpec]:
+        return list(self._output_specs)
+
+    def transform_many(self, X: Any) -> List[EmbeddingOutput]:
         processor, model, torch = self._load_model()
         samples = _normalize_audio_inputs(X, owner="HFAudioExtractor")
-        outputs: List[np.ndarray] = []
+        collected: Dict[str, List[np.ndarray]] = {spec.name: [] for spec in self._output_specs}
         model.eval()
+        need_hidden_states = any(spec.hidden_layer is not None for spec in self._output_specs)
         with torch.no_grad():
             for batch in _iter_chunks(samples, self.batch_size):
                 arrays, sampling_rate = self._resolve_batch(batch)
@@ -87,22 +112,45 @@ class HFAudioExtractor:
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
                 model_output = model(
                     **encoded,
-                    output_hidden_states=self.hidden_layer is not None,
+                    output_hidden_states=need_hidden_states,
                 )
-                hidden = self._select_hidden_state(model_output)
-                pooled = self._pool(model_output, hidden, encoded.get("attention_mask"))
-                outputs.append(pooled.detach().cpu().numpy().astype(np.float32, copy=False))
-        return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
-
-    def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
-        """Encode audio inputs into dense embeddings."""
-
-        return self.transform(X)
+                for spec in self._output_specs:
+                    hidden = self._select_hidden_state(model_output, spec.hidden_layer)
+                    pooled = self._pool(
+                        output=model_output,
+                        hidden=hidden,
+                        mask=encoded.get("attention_mask"),
+                        pooling=cast(str, spec.pooling),
+                    )
+                    collected[spec.name].append(
+                        pooled.detach().cpu().numpy().astype(np.float32, copy=False)
+                    )
+        outputs: List[EmbeddingOutput] = []
+        for spec in self._output_specs:
+            arrays = collected[spec.name]
+            embeddings = (
+                np.vstack(arrays).astype(np.float32, copy=False) if arrays else np.empty((0, 0))
+            )
+            outputs.append(
+                EmbeddingOutput(
+                    name=spec.name,
+                    embeddings=embeddings,
+                    recipe={
+                        "pooling": spec.pooling,
+                        "hidden_layer": spec.hidden_layer,
+                    },
+                    metadata={
+                        "pooling": spec.pooling,
+                        "hidden_layer": spec.hidden_layer,
+                    },
+                )
+            )
+        return outputs
 
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable Hugging Face audio recipe."""
 
-        return {
+        recipe: Dict[str, Any] = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -119,6 +167,9 @@ class HFAudioExtractor:
             "model_kwargs": self.model_kwargs,
             "streaming_safe": self.streaming_safe,
         }
+        if len(self._output_specs) > 1:
+            recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        return recipe
 
     def _load_model(self) -> Any:
         if self._model is None:
@@ -187,8 +238,8 @@ class HFAudioExtractor:
             )
         return arrays, sampling_rates.pop()
 
-    def _select_hidden_state(self, output: Any) -> Any:
-        if self.hidden_layer is None:
+    def _select_hidden_state(self, output: Any, hidden_layer: Optional[int]) -> Any:
+        if hidden_layer is None:
             hidden = getattr(output, "last_hidden_state", None)
             if hidden is None:
                 hidden = getattr(output, "extract_features", None)
@@ -202,17 +253,17 @@ class HFAudioExtractor:
                 "This model may not support output_hidden_states."
             )
         try:
-            return hidden_states[self.hidden_layer]
+            return hidden_states[hidden_layer]
         except IndexError as exc:
             raise ValueError(
-                f"hidden_layer index {self.hidden_layer} is out of range for "
+                f"hidden_layer index {hidden_layer} is out of range for "
                 f"{len(hidden_states)} hidden states."
             ) from exc
 
-    def _pool(self, output: Any, hidden: Any, mask: Any) -> Any:
-        if self.pooling == "cls":
+    def _pool(self, output: Any, hidden: Any, mask: Any, pooling: str) -> Any:
+        if pooling == "cls":
             return hidden[:, 0, :]
-        if self.pooling == "pooler":
+        if pooling == "pooler":
             pooler_output = getattr(output, "pooler_output", None)
             if pooler_output is None:
                 raise ValueError("pooler pooling requested, but model output has no pooler_output.")
@@ -279,6 +330,55 @@ def _broadcast_optional_sequence(value: Any, size: int) -> List[Optional[int]]:
             f"got {len(values)} and {size}."
         )
     return [_coerce_optional_int(item) for item in values]
+
+
+def _resolve_output_specs(
+    outputs: Optional[List[Dict[str, Any]]],
+    default_pooling: str,
+    default_hidden_layer: Optional[int],
+) -> List[EmbeddingOutputSpec]:
+    if outputs is None:
+        return [
+            EmbeddingOutputSpec(
+                name="default",
+                pooling=default_pooling,
+                hidden_layer=default_hidden_layer,
+            )
+        ]
+    specs = []
+    for raw in outputs:
+        if "name" not in raw:
+            raise ValueError("HFAudioExtractor output specs must include a name.")
+        pooling = raw.get("pooling", default_pooling)
+        if pooling not in {"mean", "cls", "pooler"}:
+            raise ValueError("HFAudioExtractor output pooling must be one of: mean, cls, pooler.")
+        hidden_layer = raw.get("hidden_layer")
+        if pooling == "pooler" and hidden_layer is not None:
+            raise ValueError("pooler pooling cannot be used with hidden_layer.")
+        specs.append(
+            EmbeddingOutputSpec(
+                name=str(raw["name"]),
+                pooling=pooling,
+                hidden_layer=hidden_layer,
+            )
+        )
+    _ensure_unique_names(specs)
+    return specs
+
+
+def _ensure_unique_names(specs: List[EmbeddingOutputSpec]) -> None:
+    names = [spec.name for spec in specs]
+    if len(set(names)) != len(names):
+        raise ValueError("HFAudioExtractor output names must be unique.")
+
+
+def _spec_to_dict(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
+    return {
+        "name": spec.name,
+        "pooling": spec.pooling,
+        "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
+    }
 
 
 def _iter_chunks(items: List[Dict[str, Any]], batch_size: int) -> Any:

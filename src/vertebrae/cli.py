@@ -18,6 +18,8 @@ from vertebrae.execution import (
     compress_embedding_artifact,
     create_execution_backend,
     embedding_artifact_key,
+    embedding_output_key,
+    embedding_output_shard_key,
     embedding_shard_key,
     labels_artifact_key,
     materialize_embedding_shard,
@@ -230,7 +232,7 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         batch_size=args.batch_size,
     )
     base_key = embedding_artifact_key(dataset, extractor)
-    return {
+    plan = {
         "dataset_pickle": str(Path(args.dataset_pickle)),
         "extractor_pickle": str(Path(args.extractor_pickle)),
         "cache_dir": args.cache_dir,
@@ -252,6 +254,21 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
             for job in jobs
         ],
     }
+    output_names = _multi_output_plan_names(extractor)
+    if output_names:
+        plan["outputs"] = [
+            {
+                "name": output_name,
+                "output_key": embedding_output_key(base_key, output_name),
+                "score_key": scoring_artifact_key(embedding_output_key(base_key, output_name)),
+                "shard_keys": [
+                    embedding_output_shard_key(job["output_key"], output_name)
+                    for job in plan["shard_jobs"]
+                ],
+            }
+            for output_name in output_names
+        ]
+    return plan
 
 
 def _cmd_embed_shard(args: argparse.Namespace) -> dict[str, Any]:
@@ -304,7 +321,7 @@ def _cmd_write_labels(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
     plan = _load_json(args.plan_json) if args.plan_json else {}
-    embedding_key = args.embedding_key or plan.get("output_key")
+    embedding_key = args.embedding_key or _resolve_embedding_key_from_plan(plan)
     labels_key = args.labels_key or plan.get("labels_key")
     if embedding_key is None:
         raise ValueError("score requires --embedding-key or --plan-json.")
@@ -666,13 +683,34 @@ def _cache_flag_lines(args: argparse.Namespace, indent: bool = True) -> list[str
 
 def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]:
     plan = _load_json(args.plan_json) if getattr(args, "plan_json", None) else {}
-    embedding_key = getattr(args, "embedding_key", None) or plan.get("output_key")
+    embedding_key = getattr(args, "embedding_key", None) or _resolve_embedding_key_from_plan(plan)
     labels_key = getattr(args, "labels_key", None) or plan.get("labels_key")
     if embedding_key is None:
         raise ValueError("An embedding key or plan JSON is required.")
     if labels_key is None:
         raise ValueError("A labels key or plan JSON is required.")
     return embedding_key, labels_key
+
+
+def _resolve_embedding_key_from_plan(plan: dict[str, Any]) -> Optional[str]:
+    outputs = plan.get("outputs", [])
+    if not outputs:
+        return plan.get("output_key")
+    if len(outputs) == 1:
+        return outputs[0].get("output_key")
+    raise ValueError(
+        "This plan contains multiple embedding outputs. Pass --embedding-key with one of the "
+        "output keys listed in the plan JSON."
+    )
+
+
+def _multi_output_plan_names(extractor: Any) -> list[str]:
+    if not callable(getattr(extractor, "output_specs", None)):
+        return []
+    if not callable(getattr(extractor, "transform_many", None)):
+        return []
+    names = [spec.name for spec in extractor.output_specs()]
+    return names if len(names) > 1 else []
 
 
 def _repeat_seeds(repeats: Any, random_state: int) -> list[int]:

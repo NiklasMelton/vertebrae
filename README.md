@@ -275,6 +275,38 @@ result = benchmark.run()
 print(result.to_dataframe())
 ```
 
+You can also benchmark multiple embedding outputs from the same backbone without
+duplicating extractor classes. This is useful for comparing intermediate layers,
+pooling strategies, or multi-head outputs from one model:
+
+```python
+from vertebrae import Benchmark
+from vertebrae.extractors import HFVisionExtractor
+
+benchmark = Benchmark(dataset)
+benchmark.add_extractor(
+    HFVisionExtractor(
+        name="mnist_vit",
+        model_id="farleyknight-org-username/vit-base-mnist",
+        outputs=[
+            {"name": "final_cls", "pooling": "cls"},
+            {"name": "mid_cls", "pooling": "cls", "hidden_layer": 6},
+        ],
+        image_mode="rgb",
+        batch_size=8,
+    )
+)
+
+result = benchmark.run()
+print(result.to_dataframe()[["name", "overlap_macro"]])
+```
+
+Each configured output is scored as its own result variant, so this run produces
+rows named `mnist_vit:final_cls` and `mnist_vit:mid_cls`. See
+`examples/hf_vision_mnist.py` for a fuller example that compares multi-output
+Hugging Face vision embeddings alongside a classical scikit-learn image
+baseline.
+
 ## Supported Workflows
 
 `vertebrae` is designed for:

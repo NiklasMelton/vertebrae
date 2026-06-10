@@ -23,7 +23,8 @@ from vertebrae.execution import (
     score_embedding_artifacts,
     scoring_artifact_key,
 )
-from vertebrae.extractors import CallableExtractor
+from vertebrae.extractors import CallableExtractor, MultiOutputExtractor
+from vertebrae.extractors.base import EmbeddingOutputSpec
 
 
 def test_resource_spec_validates_bounds():
@@ -154,6 +155,77 @@ def test_merge_embedding_shards_rejects_duplicate_sample_indices(tmp_path):
             ),
             store,
         )
+
+
+def test_plan_materialize_and_merge_multi_output_embedding_shards(tmp_path):
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        modality="tabular",
+    )
+    extractor = MultiOutputExtractor(
+        name="multi",
+        output_specs=[EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")],
+        transform_many_fn=lambda batch: {
+            "left": np.asarray(batch)[:, :2],
+            "right": np.asarray(batch)[:, 1:3],
+        },
+        modality="tabular",
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+
+    jobs = plan_embedding_shard_jobs(dataset, extractor, total_shards=2, batch_size=2)
+    manifests = [materialize_embedding_shard(job, store) for job in jobs]
+    merged = merge_embedding_shards(
+        EmbeddingMergeJob(
+            shard_keys=tuple(manifest["output_key"] for manifest in manifests),
+            output_key=embedding_artifact_key(dataset, extractor),
+            n_samples=len(dataset.y),
+        ),
+        store,
+    )
+
+    assert merged["artifact_type"] == "multi_output_embedding"
+    assert [output["output_name"] for output in merged["outputs"]] == ["left", "right"]
+    left = store.get_array(merged["outputs"][0]["output_key"])
+    right = store.get_array(merged["outputs"][1]["output_key"])
+    assert np.array_equal(left, dataset.X[:, :2])
+    assert np.array_equal(right, dataset.X[:, 1:3])
+
+
+def test_materialize_and_merge_embeddings_supports_multi_output(tmp_path):
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        modality="tabular",
+    )
+    extractor = MultiOutputExtractor(
+        name="multi",
+        output_specs=[EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")],
+        transform_many_fn=lambda batch: {
+            "left": np.asarray(batch)[:, :2] * 2,
+            "right": np.asarray(batch)[:, 1:3] + 1,
+        },
+        modality="tabular",
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+
+    manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+
+    assert manifest["artifact_type"] == "multi_output_embedding"
+    left_key = manifest["outputs"][0]["output_key"]
+    right_key = manifest["outputs"][1]["output_key"]
+    assert np.array_equal(store.get_array(left_key), dataset.X[:, :2] * 2)
+    assert np.array_equal(store.get_array(right_key), dataset.X[:, 1:3] + 1)
 
 
 def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(

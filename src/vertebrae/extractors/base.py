@@ -1,8 +1,29 @@
-"""Feature extractor protocol."""
+"""Feature extractor protocols and shared multi-output types."""
 
-from typing import Any, Dict, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Protocol
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class EmbeddingOutputSpec:
+    """Declarative description of one named extractor output."""
+
+    name: str
+    pooling: Optional[str] = None
+    hidden_layer: Optional[int] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EmbeddingOutput:
+    """Materialized embedding output from one extractor pass."""
+
+    name: str
+    embeddings: Any
+    recipe: Dict[str, Any]
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class FeatureExtractor(Protocol):
@@ -62,5 +83,19 @@ class FeatureExtractor(Protocol):
         Returns:
             JSON-compatible recipe used for cache keys and reports.
         """
+
+        ...
+
+
+class MultiOutputFeatureExtractor(Protocol):
+    """Optional protocol for extractors that can emit multiple embedding matrices."""
+
+    def output_specs(self) -> List[EmbeddingOutputSpec]:
+        """Return the named outputs this extractor can materialize."""
+
+        ...
+
+    def transform_many(self, X: Any) -> List[EmbeddingOutput]:
+        """Transform inputs into multiple named embedding outputs."""
 
         ...

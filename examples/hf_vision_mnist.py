@@ -24,20 +24,16 @@ MODEL_SPECS = (
     {
         "name": "deit_tiny_imagenet_cls",
         "model_id": "facebook/deit-tiny-patch16-224",
-        "pooling": "cls",
+        "outputs": [{"name": "cls", "pooling": "cls"}],
         "image_mode": "rgb",
     },
     {
-        "name": "mnist_vit_trained_final_cls",
+        "name": "mnist_vit_trained",
         "model_id": "farleyknight-org-username/vit-base-mnist",
-        "pooling": "cls",
-        "image_mode": "rgb",
-    },
-    {
-        "name": "mnist_vit_trained_mid_cls",
-        "model_id": "farleyknight-org-username/vit-base-mnist",
-        "pooling": "cls",
-        "hidden_layer": 6,
+        "outputs": [
+            {"name": "final_cls", "pooling": "cls"},
+            {"name": "mid_cls", "pooling": "cls", "hidden_layer": 6},
+        ],
         "image_mode": "rgb",
     },
 )
@@ -82,8 +78,9 @@ def main() -> None:
                     name=spec["name"],
                     model_id=spec["model_id"],
                     processor_id=spec.get("processor_id"),
-                    pooling=spec["pooling"],
-                    hidden_layer=spec.get("hidden_layer"),
+                    pooling=spec["outputs"][0]["pooling"],
+                    hidden_layer=spec["outputs"][0].get("hidden_layer"),
+                    outputs=spec["outputs"],
                     image_mode=spec["image_mode"],
                     batch_size=8,
                 )

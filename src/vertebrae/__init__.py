@@ -39,6 +39,8 @@ from vertebrae.execution import (
     compress_embedding_artifact,
     create_execution_backend,
     embedding_artifact_key,
+    embedding_output_key,
+    embedding_output_shard_key,
     embedding_shard_key,
     labels_artifact_key,
     materialize_and_merge_embeddings,
@@ -54,6 +56,7 @@ from vertebrae.execution import (
     scoring_artifact_key,
     validate_embedding_label_artifacts,
 )
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.results import BenchmarkResult, ExtractorResult
 
 __all__ = [
@@ -63,6 +66,8 @@ __all__ = [
     "CacheConfig",
     "CompressionJob",
     "DaskBackend",
+    "EmbeddingOutput",
+    "EmbeddingOutputSpec",
     "EmbeddingCompressionConfig",
     "EmbeddingConfig",
     "EmbeddingJob",
@@ -91,6 +96,8 @@ __all__ = [
     "compress_embedding_artifact_key",
     "compress_embeddings",
     "embedding_artifact_key",
+    "embedding_output_key",
+    "embedding_output_shard_key",
     "embedding_shard_key",
     "labels_artifact_key",
     "materialize_and_merge_embeddings",

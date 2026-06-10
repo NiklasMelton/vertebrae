@@ -7,7 +7,16 @@ import pytest
 from vertebrae import BenchmarkDataset
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.cli import main
-from vertebrae.extractors import PrecomputedExtractor
+from vertebrae.extractors import MultiOutputExtractor, PrecomputedExtractor
+from vertebrae.extractors.base import EmbeddingOutputSpec
+
+
+def _multi_output_transform(batch):
+    values = np.asarray(batch)
+    return {
+        "left": values[:, :2],
+        "right": values[:, 1:3],
+    }
 
 
 def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex):
@@ -220,6 +229,122 @@ def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
     assert "python -m vertebrae.cli embed-shard" in script
     assert "--shard-index ${SLURM_ARRAY_TASK_ID}" in script
     assert "merge-embeddings" in script
+
+
+def test_cli_plan_embed_merge_multi_output_workflow(tmp_path, capsys, fake_overlapindex):
+    dataset_path, extractor_path = _write_pickled_multi_output_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "2",
+                "--batch-size",
+                "2",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert [output["name"] for output in plan["outputs"]] == ["left", "right"]
+
+    for shard_index in range(2):
+        assert (
+            main(
+                [
+                    "embed-shard",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--cache-dir",
+                    str(cache_dir),
+                    "--total-shards",
+                    "2",
+                    "--shard-index",
+                    str(shard_index),
+                    "--batch-size",
+                    "2",
+                ]
+            )
+            == 0
+        )
+        manifest = json.loads(capsys.readouterr().out)
+        assert manifest["artifact_type"] == "multi_output_embedding_shard"
+
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    merged_manifest = json.loads(capsys.readouterr().out)
+    assert merged_manifest["artifact_type"] == "multi_output_embedding"
+    left = LocalArtifactStore(str(cache_dir)).get_array(merged_manifest["outputs"][0]["output_key"])
+    right = LocalArtifactStore(str(cache_dir)).get_array(
+        merged_manifest["outputs"][1]["output_key"]
+    )
+    assert np.array_equal(left, np.arange(24).reshape(8, 3)[:, :2])
+    assert np.array_equal(right, np.arange(24).reshape(8, 3)[:, 1:3])
+
+    assert (
+        main(
+            [
+                "write-labels",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+                "--embedding-key",
+                plan["outputs"][0]["output_key"],
+            ]
+        )
+        == 0
+    )
+    score = json.loads(capsys.readouterr().out)
+    assert score["embedding_key"] == plan["outputs"][0]["output_key"]
+
+    with pytest.raises(ValueError, match="multiple embedding outputs"):
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
 
 
 def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
@@ -468,6 +593,27 @@ def _write_pickled_inputs(tmp_path):
         ["a"] * 4 + ["b"] * 4,
     )
     extractor = PrecomputedExtractor()
+    dataset_path = tmp_path / "dataset.pkl"
+    extractor_path = tmp_path / "extractor.pkl"
+    with dataset_path.open("wb") as f:
+        pickle.dump(dataset, f)
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+    return dataset_path, extractor_path
+
+
+def _write_pickled_multi_output_inputs(tmp_path):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+    )
+    extractor = MultiOutputExtractor(
+        name="multi",
+        output_specs=[EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")],
+        transform_many_fn=_multi_output_transform,
+        modality="tabular",
+        streaming_safe=True,
+    )
     dataset_path = tmp_path / "dataset.pkl"
     extractor_path = tmp_path / "extractor.pkl"
     with dataset_path.open("wb") as f:
