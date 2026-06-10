@@ -182,9 +182,7 @@ def render_markdown_report(result: Any) -> str:
         else:
             lines.append(f"- Recommendation: {item.separatix.recommendation or ''}")
             lines.append(f"- Confidence: {item.separatix.confidence or ''}")
-            lines.append(
-                f"- Summary: {(item.separatix.recommendation_text or '').strip()}"
-            )
+            lines.append(f"- Summary: {(item.separatix.recommendation_text or '').strip()}")
             if item.separatix.decision_path:
                 lines.append("- Decision path:")
                 for step in item.separatix.decision_path:
@@ -199,9 +197,7 @@ def render_markdown_report(result: Any) -> str:
                 lines.append("")
                 lines.append("- Skipped diagnostics:")
                 for entry in item.separatix.skipped_diagnostics:
-                    lines.append(
-                        f"  - {entry.get('name', '')}: {entry.get('reason', '')}"
-                    )
+                    lines.append(f"  - {entry.get('name', '')}: {entry.get('reason', '')}")
             if item.separatix.warnings:
                 lines.append("")
                 lines.append("- Warnings:")

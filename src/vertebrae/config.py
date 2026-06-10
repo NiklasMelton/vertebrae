@@ -72,9 +72,7 @@ class SeparatixConfig:
         if not 0.0 <= self.overlap_threshold <= 1.0:
             raise ValueError("SeparatixConfig.overlap_threshold must be between 0 and 1.")
         if self.budget is not None and self.budget not in allowed_budgets:
-            raise ValueError(
-                f"SeparatixConfig.budget must be one of {sorted(allowed_budgets)}."
-            )
+            raise ValueError(f"SeparatixConfig.budget must be one of {sorted(allowed_budgets)}.")
         if self.max_samples is not None and self.max_samples < 1:
             raise ValueError("SeparatixConfig.max_samples must be >= 1 when provided.")
         if self.max_dense_bytes is not None and self.max_dense_bytes < 1:

@@ -120,9 +120,7 @@ class BenchmarkResult:
                     "separatix_recommendation": (
                         item.separatix.recommendation if item.separatix else None
                     ),
-                    "separatix_confidence": (
-                        item.separatix.confidence if item.separatix else None
-                    ),
+                    "separatix_confidence": (item.separatix.confidence if item.separatix else None),
                 }
             )
         return pd.DataFrame(rows)
