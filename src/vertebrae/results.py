@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from vertebrae.scoring.overlap import OverlapScoreResult
+from vertebrae.scoring.separatix import SeparatixResult
 from vertebrae.utils.serialization import make_json_safe
 
 
@@ -31,6 +32,7 @@ class ExtractorResult:
     overlap: OverlapScoreResult
     stability: Optional[Dict[str, Any]]
     probes: Optional[Dict[str, Any]]
+    separatix: Optional[SeparatixResult]
     embedding_metadata: Dict[str, Any]
     compression_metadata: Dict[str, Any]
     runtime: Dict[str, Any]
@@ -114,6 +116,13 @@ class BenchmarkResult:
                         item.embedding_metadata.get("embedding_dim"),
                     ),
                     "recommendation": item.recommendation,
+                    "separatix_ran": bool(item.separatix and item.separatix.ran),
+                    "separatix_recommendation": (
+                        item.separatix.recommendation if item.separatix else None
+                    ),
+                    "separatix_confidence": (
+                        item.separatix.confidence if item.separatix else None
+                    ),
                 }
             )
         return pd.DataFrame(rows)

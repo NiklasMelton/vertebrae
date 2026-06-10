@@ -12,11 +12,13 @@ from vertebrae.config import EmbeddingCompressionConfig
 from vertebrae.execution import (
     EmbeddingMergeJob,
     ScoringJob,
+    SeparatixJob,
     ShardSpec,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
     compress_embedding_artifact,
     create_execution_backend,
+    diagnose_embedding_artifact,
     embedding_artifact_key,
     embedding_output_key,
     embedding_output_shard_key,
@@ -31,6 +33,7 @@ from vertebrae.execution import (
     score_embedding_artifact,
     score_embedding_artifacts,
     scoring_artifact_key,
+    separatix_artifact_key,
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
 
@@ -109,6 +112,20 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--output-json")
     score.set_defaults(func=_cmd_score)
 
+    diagnose = subparsers.add_parser(
+        "diagnose-complexity",
+        help="Run Separatix on persisted embeddings and labels.",
+    )
+    _add_cache_arg(diagnose)
+    diagnose.add_argument("--embedding-key")
+    diagnose.add_argument("--labels-key")
+    diagnose.add_argument("--score-key")
+    diagnose.add_argument("--plan-json")
+    diagnose.add_argument("--separatix-config-pickle")
+    diagnose.add_argument("--output-key")
+    diagnose.add_argument("--output-json")
+    diagnose.set_defaults(func=_cmd_diagnose_complexity)
+
     compress = subparsers.add_parser("compress", help="Compress a persisted embedding artifact.")
     _add_cache_arg(compress)
     compress.add_argument("--embedding-key", required=True)
@@ -166,6 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(artifacts)
     artifacts.add_argument("--score-key", required=True)
     artifacts.add_argument("--stability-key")
+    artifacts.add_argument("--separatix-key")
     artifacts.add_argument("--output-key")
     artifacts.add_argument("--json-output")
     artifacts.add_argument("--markdown-output")
@@ -343,6 +361,31 @@ def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_diagnose_complexity(args: argparse.Namespace) -> dict[str, Any]:
+    plan = _load_json(args.plan_json) if args.plan_json else {}
+    embedding_key = args.embedding_key or _resolve_embedding_key_from_plan(plan)
+    labels_key = args.labels_key or plan.get("labels_key")
+    if embedding_key is None:
+        raise ValueError("diagnose-complexity requires --embedding-key or --plan-json.")
+    if labels_key is None:
+        raise ValueError("diagnose-complexity requires --labels-key or --plan-json.")
+    score_key = args.score_key or _resolve_score_key_from_plan(plan, embedding_key)
+    separatix_config = (
+        _load_pickle(args.separatix_config_pickle) if args.separatix_config_pickle else None
+    )
+    output_key = args.output_key or separatix_artifact_key(embedding_key)
+    return diagnose_embedding_artifact(
+        SeparatixJob(
+            embedding_key=embedding_key,
+            labels_key=labels_key,
+            score_key=score_key,
+            output_key=output_key,
+            separatix_config=separatix_config,
+        ),
+        _store_from_args(args),
+    )
+
+
 def _cmd_compress(args: argparse.Namespace) -> dict[str, Any]:
     compression_config = EmbeddingCompressionConfig(
         enabled=args.method != "none",
@@ -408,6 +451,7 @@ def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
         store=_store_from_args(args),
         output_key=args.output_key,
         stability_key=args.stability_key,
+        separatix_key=args.separatix_key,
     )
     if args.json_output:
         _write_json_file(result, args.json_output)
@@ -415,6 +459,7 @@ def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
         from vertebrae.reports.markdown_report import render_markdown_report
         from vertebrae.results import BenchmarkResult, ExtractorResult
         from vertebrae.scoring.overlap import OverlapScoreResult
+        from vertebrae.scoring.separatix import SeparatixResult
 
         markdown = render_markdown_report(
             _benchmark_result_from_dict(
@@ -422,6 +467,7 @@ def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
                 BenchmarkResult,
                 ExtractorResult,
                 OverlapScoreResult,
+                SeparatixResult,
             )
         )
         target = Path(args.markdown_output)
@@ -733,10 +779,14 @@ def _benchmark_result_from_dict(
     benchmark_cls: Any,
     extractor_cls: Any,
     overlap_cls: Any,
+    separatix_cls: Any,
 ) -> Any:
     extractor_results = []
     for item in data.get("extractor_results", []):
         overlap = overlap_cls(**item["overlap"])
+        separatix = None
+        if item.get("separatix") is not None:
+            separatix = separatix_cls(**item["separatix"])
         extractor_results.append(
             extractor_cls(
                 name=item["name"],
@@ -744,6 +794,7 @@ def _benchmark_result_from_dict(
                 overlap=overlap,
                 stability=item.get("stability"),
                 probes=item.get("probes"),
+                separatix=separatix,
                 embedding_metadata=item.get("embedding_metadata", {}),
                 compression_metadata=item.get("compression_metadata", {"method": "none"}),
                 runtime=item.get("runtime", {}),
@@ -759,6 +810,16 @@ def _benchmark_result_from_dict(
         recommendations=data.get("recommendations", []),
         metadata=data.get("metadata", {}),
     )
+
+
+def _resolve_score_key_from_plan(plan: dict[str, Any], embedding_key: str) -> str:
+    outputs = plan.get("outputs", [])
+    if not outputs:
+        return plan.get("score_key") or scoring_artifact_key(embedding_key)
+    for output in outputs:
+        if output.get("output_key") == embedding_key:
+            return output.get("score_key") or scoring_artifact_key(embedding_key)
+    return scoring_artifact_key(embedding_key)
 
 
 def _write_json_payload(payload: dict[str, Any], output_json: Optional[str]) -> None:

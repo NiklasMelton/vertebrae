@@ -19,9 +19,11 @@ from vertebrae.execution.jobs import (
     EmbeddingMergeJob,
     EmbeddingShardJob,
     ScoringJob,
+    SeparatixJob,
     ShardSpec,
 )
 from vertebrae.extractors.base import EmbeddingOutput
+from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -96,6 +98,12 @@ def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
 
     suffix = "default" if seed is None else f"seed-{seed}"
     return f"{embedding_key}/scores/{suffix}"
+
+
+def separatix_artifact_key(embedding_key: str) -> str:
+    """Build a Separatix diagnostic artifact key."""
+
+    return f"{embedding_key}/diagnostics/separatix"
 
 
 def plan_embedding_shard_jobs(
@@ -258,6 +266,60 @@ def score_embedding_artifact(
         "labels_key": job.labels_key,
         "seed": job.seed,
         "score": score.to_dict(),
+        "embedding_metadata": embedding_metadata,
+        "label_metadata": label_metadata,
+        "resources": asdict(job.resources),
+    }
+    store.put_json(job.output_key, artifact)
+    return artifact
+
+
+def diagnose_embedding_artifact(
+    job: SeparatixJob,
+    store: ArtifactStore,
+) -> dict[str, Any]:
+    """Run Separatix over a persisted embedding artifact and labels."""
+
+    embedding_metadata, label_metadata = validate_embedding_label_artifacts(
+        store,
+        embedding_key=job.embedding_key,
+        labels_key=job.labels_key,
+    )
+    score_artifact = store.get_json(job.score_key)
+    score_data = score_artifact.get("score", {})
+    macro_score = float(score_data.get("macro_score"))
+
+    from vertebrae.config import OverlapScoringConfig, SeparatixConfig
+
+    overlap_config = OverlapScoringConfig()
+    overlap_metadata = score_data.get("metadata", {})
+    if "normalize_embeddings" in overlap_metadata:
+        overlap_config.normalize_embeddings = bool(overlap_metadata["normalize_embeddings"])
+    separatix_config = job.separatix_config or SeparatixConfig()
+    scorer = SeparatixScorer(config=separatix_config, overlap_config=overlap_config)
+
+    if macro_score < separatix_config.overlap_threshold:
+        diagnostic = scorer.skipped_result(
+            reason=(
+                "Skipped Separatix because overlap macro "
+                f"{macro_score:.4f} is below the configured threshold "
+                f"{separatix_config.overlap_threshold:.4f}."
+            ),
+            macro_score=macro_score,
+        )
+    else:
+        embeddings = store.get_array(job.embedding_key)
+        labels = store.get_labels(job.labels_key)
+        diagnostic = scorer.score(embeddings, labels)
+
+    artifact = {
+        "artifact_type": "separatix_diagnostic",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "embedding_key": job.embedding_key,
+        "labels_key": job.labels_key,
+        "score_key": job.score_key,
+        "diagnostic": diagnostic.to_dict(),
         "embedding_metadata": embedding_metadata,
         "label_metadata": label_metadata,
         "resources": asdict(job.resources),
@@ -460,6 +522,7 @@ def benchmark_result_from_artifacts(
     store: ArtifactStore,
     output_key: Optional[str] = None,
     stability_key: Optional[str] = None,
+    separatix_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build and optionally persist a benchmark-style result from artifacts.
 
@@ -485,6 +548,10 @@ def benchmark_result_from_artifacts(
     embedding_metadata = score_artifact.get("embedding_metadata", {})
     label_metadata = score_artifact.get("label_metadata", {})
     stability = store.get_json(stability_key) if stability_key else None
+    separatix_artifact = store.get_json(separatix_key) if separatix_key else None
+    separatix = None
+    if separatix_artifact:
+        separatix = SeparatixResult(**separatix_artifact["diagnostic"])
     weakest_class, weakest_score = _weakest_class(score_data.get("per_class_scores", {}))
     overlap = OverlapScoreResult(
         macro_score=float(score_data["macro_score"]),
@@ -511,6 +578,7 @@ def benchmark_result_from_artifacts(
         overlap=overlap,
         stability=stability,
         probes=None,
+        separatix=separatix,
         embedding_metadata=embedding_metadata,
         compression_metadata=compression_metadata,
         runtime={},
@@ -532,6 +600,7 @@ def benchmark_result_from_artifacts(
             "vertebrae_version": __version__,
             "source_score_key": score_key,
             "source_stability_key": stability_key,
+            "source_separatix_key": separatix_key,
             "distributed_artifacts": True,
         },
     )
@@ -594,6 +663,13 @@ def _score_embedding_artifact_job(
     store_config: ArtifactStoreConfig,
 ) -> dict[str, Any]:
     return score_embedding_artifact(job, create_artifact_store_from_config(store_config))
+
+
+def _diagnose_embedding_artifact_job(
+    job: SeparatixJob,
+    store_config: ArtifactStoreConfig,
+) -> dict[str, Any]:
+    return diagnose_embedding_artifact(job, create_artifact_store_from_config(store_config))
 
 
 def _compress_embedding_artifact_job(

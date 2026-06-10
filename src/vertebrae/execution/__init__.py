@@ -5,6 +5,7 @@ from vertebrae.execution.distributed import (
     benchmark_result_from_artifacts,
     collect_score_artifacts,
     compress_embedding_artifact,
+    diagnose_embedding_artifact,
     embedding_artifact_key,
     embedding_output_key,
     embedding_output_shard_key,
@@ -21,6 +22,7 @@ from vertebrae.execution.distributed import (
     score_embedding_artifact,
     score_embedding_artifacts,
     scoring_artifact_key,
+    separatix_artifact_key,
     validate_embedding_label_artifacts,
 )
 from vertebrae.execution.factory import create_execution_backend
@@ -32,6 +34,7 @@ from vertebrae.execution.jobs import (
     ResourceSpec,
     SampleBatch,
     ScoringJob,
+    SeparatixJob,
     ShardSpec,
 )
 from vertebrae.execution.local import LocalBackend, LocalJobHandle
@@ -41,6 +44,7 @@ __all__ = [
     "CompressionJob",
     "DaskBackend",
     "DaskJobHandle",
+    "diagnose_embedding_artifact",
     "EmbeddingJob",
     "EmbeddingMergeJob",
     "EmbeddingShardJob",
@@ -51,6 +55,7 @@ __all__ = [
     "ResourceSpec",
     "SampleBatch",
     "ScoringJob",
+    "SeparatixJob",
     "ShardSpec",
     "embedding_artifact_key",
     "embedding_output_key",
@@ -71,6 +76,7 @@ __all__ = [
     "score_embedding_artifact",
     "score_embedding_artifacts",
     "scoring_artifact_key",
+    "separatix_artifact_key",
     "validate_embedding_label_artifacts",
     "create_execution_backend",
 ]

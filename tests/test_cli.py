@@ -185,6 +185,137 @@ def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex
     assert result_md.exists()
 
 
+def test_cli_diagnose_complexity_and_benchmark_from_artifacts(
+    tmp_path,
+    capsys,
+    fake_overlapindex,
+):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    assert (
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--shard-index",
+                "0",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    merged = json.loads(capsys.readouterr().out)
+
+    assert (
+        main(
+            [
+                "write-labels",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    score = json.loads(capsys.readouterr().out)
+
+    assert (
+        main(
+            [
+                "diagnose-complexity",
+                "--cache-dir",
+                str(cache_dir),
+                "--embedding-key",
+                merged["output_key"],
+                "--labels-key",
+                plan["labels_key"],
+                "--score-key",
+                score["output_key"],
+            ]
+        )
+        == 0
+    )
+    diagnostic = json.loads(capsys.readouterr().out)
+    assert diagnostic["artifact_type"] == "separatix_diagnostic"
+    assert diagnostic["diagnostic"]["ran"] is True
+
+    assert (
+        main(
+            [
+                "benchmark-from-artifacts",
+                "--cache-dir",
+                str(cache_dir),
+                "--score-key",
+                score["output_key"],
+                "--separatix-key",
+                diagnostic["output_key"],
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["extractor_results"][0]["separatix"]["recommendation"] == (
+        "smooth_nonlinear_recommended"
+    )
+
+
 def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     script_path = tmp_path / "vertebrae_embed.sbatch"

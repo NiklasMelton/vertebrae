@@ -9,8 +9,10 @@ from vertebrae.execution import (
     LocalBackend,
     ResourceSpec,
     ScoringJob,
+    SeparatixJob,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
+    diagnose_embedding_artifact,
     embedding_artifact_key,
     labels_artifact_key,
     materialize_and_merge_embeddings,
@@ -22,6 +24,7 @@ from vertebrae.execution import (
     score_embedding_artifact,
     score_embedding_artifacts,
     scoring_artifact_key,
+    separatix_artifact_key,
 )
 from vertebrae.extractors import CallableExtractor, MultiOutputExtractor
 from vertebrae.extractors.base import EmbeddingOutputSpec
@@ -310,3 +313,57 @@ def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overl
     assert collection["seeds"] == [3, 5, 7]
     assert result["metadata"]["distributed_artifacts"] is True
     assert result["extractor_results"][0]["stability"]["summary"]["mean"] > 0.0
+
+
+def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(
+    tmp_path,
+    fake_overlapindex,
+):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+    )
+    extractor = CallableExtractor(
+        "diagnose_artifact",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            output_key=scoring_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store,
+    )
+
+    diagnostic = diagnose_embedding_artifact(
+        job=SeparatixJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            score_key=score["output_key"],
+            output_key=separatix_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store=store,
+    )
+    result = benchmark_result_from_artifacts(
+        score_key=score["output_key"],
+        store=store,
+        separatix_key=diagnostic["output_key"],
+    )
+
+    assert diagnostic["artifact_type"] == "separatix_diagnostic"
+    assert diagnostic["diagnostic"]["ran"] is True
+    assert result["extractor_results"][0]["separatix"]["recommendation"] == (
+        "smooth_nonlinear_recommended"
+    )

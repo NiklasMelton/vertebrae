@@ -18,6 +18,7 @@ from vertebrae.config import (
     MemoryConfig,
     OverlapScoringConfig,
     ProbeConfig,
+    SeparatixConfig,
     StabilityConfig,
 )
 from vertebrae.datasets import BenchmarkDataset
@@ -33,11 +34,13 @@ from vertebrae.execution import (
     ResourceSpec,
     SampleBatch,
     ScoringJob,
+    SeparatixJob,
     ShardSpec,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
     compress_embedding_artifact,
     create_execution_backend,
+    diagnose_embedding_artifact,
     embedding_artifact_key,
     embedding_output_key,
     embedding_output_shard_key,
@@ -54,6 +57,7 @@ from vertebrae.execution import (
     score_embedding_artifact,
     score_embedding_artifacts,
     scoring_artifact_key,
+    separatix_artifact_key,
     validate_embedding_label_artifacts,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
@@ -66,6 +70,7 @@ __all__ = [
     "CacheConfig",
     "CompressionJob",
     "DaskBackend",
+    "diagnose_embedding_artifact",
     "EmbeddingOutput",
     "EmbeddingOutputSpec",
     "EmbeddingCompressionConfig",
@@ -86,6 +91,8 @@ __all__ = [
     "ResourceSpec",
     "SampleBatch",
     "ScoringJob",
+    "SeparatixConfig",
+    "SeparatixJob",
     "ShardSpec",
     "ArtifactStoreConfig",
     "benchmark_result_from_artifacts",
@@ -111,6 +118,7 @@ __all__ = [
     "score_embedding_artifact",
     "score_embedding_artifacts",
     "scoring_artifact_key",
+    "separatix_artifact_key",
     "validate_embedding_label_artifacts",
     "create_execution_backend",
 ]
