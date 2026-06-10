@@ -74,6 +74,53 @@ def test_from_image_paths_sets_image_modality():
     assert dataset.metadata["source"] == "image_paths"
 
 
+def test_from_audio_arrays_preserves_sampling_rate():
+    dataset = BenchmarkDataset.from_audio_arrays(
+        [
+            np.array([0.0, 0.1, 0.2], dtype=np.float32),
+            np.array([0.2, 0.1, 0.0], dtype=np.float32),
+            np.array([1.0, 0.0, -1.0], dtype=np.float32),
+            np.array([-1.0, 0.0, 1.0], dtype=np.float32),
+        ],
+        ["speech", "speech", "music", "music"],
+        sampling_rate=16_000,
+    )
+
+    assert dataset.modality == "audio"
+    assert dataset.metadata["sampling_rate"] == 16_000
+    assert dataset.X["sampling_rate"].tolist() == [16_000] * 4
+
+
+def test_from_audio_paths_sets_audio_modality():
+    dataset = BenchmarkDataset.from_audio_paths(
+        ["a.wav", "b.wav", "c.wav", "d.wav"],
+        ["speech", "speech", "music", "music"],
+    )
+
+    assert dataset.modality == "audio"
+    assert dataset.metadata["source"] == "audio_paths"
+    assert dataset.X["path"].tolist() == ["a.wav", "b.wav", "c.wav", "d.wav"]
+
+
+def test_from_time_series_preserves_structured_inputs():
+    series = np.arange(24, dtype=float).reshape(4, 3, 2)
+    observed_mask = np.ones((4, 3, 2), dtype=float)
+    time_features = np.arange(24, dtype=float).reshape(4, 3, 2)
+
+    dataset = BenchmarkDataset.from_time_series(
+        series=series,
+        labels=["a", "a", "b", "b"],
+        observed_mask=observed_mask,
+        time_features=time_features,
+    )
+
+    assert dataset.modality == "time_series"
+    assert dataset.metadata["source"] == "time_series"
+    assert dataset.X["series"].shape == (4, 3, 2)
+    assert dataset.X["observed_mask"].shape == (4, 3, 2)
+    assert dataset.X["time_features"].shape == (4, 3, 2)
+
+
 def test_stratified_subsample_indices_preserve_classes():
     dataset = BenchmarkDataset.from_arrays(
         np.arange(24).reshape(12, 2),
@@ -100,3 +147,20 @@ def test_nested_subset_preserves_original_sample_indices():
     second = first.subset([0, 2, 3, 5])
 
     assert second.metadata["sample_indices"] == [1, 3, 7, 9]
+
+
+def test_structured_dataset_subset_and_batches_align_fields():
+    dataset = BenchmarkDataset.from_time_series(
+        series=np.arange(48, dtype=float).reshape(6, 4, 2),
+        labels=["a", "a", "a", "b", "b", "b"],
+        observed_mask=np.ones((6, 4, 2), dtype=float),
+        time_features=np.arange(48, dtype=float).reshape(6, 4, 2),
+    )
+
+    subset = dataset.subset([1, 2, 4, 5])
+    batches = list(subset.iter_batches(batch_size=1))
+
+    assert subset.X["series"].shape == (4, 4, 2)
+    assert subset.metadata["sample_indices"] == [1, 2, 4, 5]
+    assert batches[0].indices.tolist() == [0]
+    assert batches[0].X["series"].shape == (1, 4, 2)
