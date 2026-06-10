@@ -240,8 +240,8 @@ def _load_overlap_index() -> Any:
         from overlapindex import OverlapIndex
     except ImportError as exc:
         raise ImportError(
-            "overlapindex>=0.1.1 is required for scoring. Install dependencies with Poetry "
-            "or install overlapindex directly."
+            "overlapindex>=0.1.2 is required for scoring. Install dependencies with "
+            "Poetry or install overlapindex directly."
         ) from exc
     return OverlapIndex
 
