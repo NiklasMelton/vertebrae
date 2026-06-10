@@ -297,9 +297,7 @@ def test_cli_plan_embed_merge_multi_output_workflow(tmp_path, capsys, fake_overl
     )
     merged_manifest = json.loads(capsys.readouterr().out)
     assert merged_manifest["artifact_type"] == "multi_output_embedding"
-    left = LocalArtifactStore(str(cache_dir)).get_array(
-        merged_manifest["outputs"][0]["output_key"]
-    )
+    left = LocalArtifactStore(str(cache_dir)).get_array(merged_manifest["outputs"][0]["output_key"])
     right = LocalArtifactStore(str(cache_dir)).get_array(
         merged_manifest["outputs"][1]["output_key"]
     )
