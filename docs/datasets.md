@@ -16,6 +16,12 @@ Use the constructor that matches the form of your source data:
   embeddings.
 - `BenchmarkDataset.from_image_paths(...)` for image classification datasets stored
   as filesystem paths.
+- `BenchmarkDataset.from_audio_paths(...)` for audio classification datasets stored
+  as filesystem paths.
+- `BenchmarkDataset.from_audio_arrays(...)` for waveform arrays with a shared
+  sampling rate.
+- `BenchmarkDataset.from_time_series(...)` for aligned time-series arrays with
+  optional masks and time features.
 
 Examples:
 
@@ -74,6 +80,8 @@ Common values are:
 - `"text"`
 - `"tabular"`
 - `"image"`
+- `"audio"`
+- `"time_series"`
 - `"embeddings"`
 
 `metadata` is preserved through benchmarking so reports can retain source context
@@ -81,7 +89,9 @@ such as dataset name, split, backbone provenance, or collection notes.
 
 When using `from_dataframe(...)`, the dataset also records the original column names
 and chosen input columns. When using `from_embeddings(...)`, metadata is tagged with
-`precomputed_embeddings=True`.
+`precomputed_embeddings=True`. Audio-array datasets preserve their shared
+`sampling_rate` in metadata. Time-series datasets preserve structured fields such as
+`observed_mask`, `time_features`, and `timestamps` when provided.
 
 ## Batching and sharding
 

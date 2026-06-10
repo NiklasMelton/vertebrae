@@ -45,6 +45,18 @@ Optional Hugging Face and sentence-transformers support:
 pip install "vertebrae[hf]"
 ```
 
+Optional Hugging Face audio support only:
+
+```bash
+pip install "vertebrae[audio]"
+```
+
+Optional Hugging Face time-series support only:
+
+```bash
+pip install "vertebrae[timeseries]"
+```
+
 Optional local PyTorch model support:
 
 ```bash
@@ -210,6 +222,45 @@ extractor = KerasExtractor(
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
+### Hugging Face audio backbones
+
+```python
+from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae.extractors import HFAudioExtractor
+
+dataset = BenchmarkDataset.from_audio_arrays(
+    audio=waveforms,
+    labels=labels,
+    sampling_rate=16_000,
+)
+extractor = HFAudioExtractor(
+    name="wav2vec2_base",
+    model_id="facebook/wav2vec2-base",
+    pooling="mean",
+)
+
+result = Evaluator(dataset=dataset, extractor=extractor).run()
+```
+
+### Hugging Face time-series backbones
+
+```python
+from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae.extractors import HFTimeSeriesExtractor
+
+dataset = BenchmarkDataset.from_time_series(
+    series=series,
+    labels=labels,
+)
+extractor = HFTimeSeriesExtractor(
+    name="patchtst",
+    model_id="some-local-or-hf-timeseries-model",
+    pooling="mean",
+)
+
+result = Evaluator(dataset=dataset, extractor=extractor).run()
+```
+
 ### Multi-extractor comparison
 
 ```python
@@ -232,6 +283,8 @@ print(result.to_dataframe())
 - NumPy arrays and pandas DataFrames,
 - scikit-learn transformers and pipelines,
 - custom Python callable extractors,
+- Hugging Face audio backbones through `HFAudioExtractor`,
+- Hugging Face time-series backbones through `HFTimeSeriesExtractor`,
 - local PyTorch modules through `TorchExtractor`,
 - local Keras modules through `KerasExtractor`,
 - single-extractor evaluation,
