@@ -9,7 +9,9 @@ Runnable examples live in `examples/`:
   bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare multiple local extractors.
 - `cache_reuse.py`: demonstrate embedding cache reuse.
+- `hf_audio_extractor.py`: demonstrate the Hugging Face audio API.
 - `hf_text_extractor.py`: demonstrate the Hugging Face text API.
+- `hf_time_series_extractor.py`: demonstrate the Hugging Face time-series API.
 - `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
   final-layer, and mid-layer Hugging Face vision embeddings plus a scikit-learn
   image pipeline.

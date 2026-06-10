@@ -134,6 +134,116 @@ class BenchmarkDataset:
         return dataset
 
     @classmethod
+    def from_audio_paths(
+        cls,
+        paths: Any,
+        labels: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Create an audio dataset from filesystem paths.
+
+        Args:
+            paths: Audio file paths.
+            labels: Class labels.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated audio dataset.
+        """
+
+        merged_metadata = {"source": "audio_paths"}
+        merged_metadata.update(metadata or {})
+        dataset = cls(
+            X={"path": np.asarray(paths, dtype=object)},
+            y=np.asarray(labels),
+            modality="audio",
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
+    def from_audio_arrays(
+        cls,
+        audio: Any,
+        labels: Any,
+        sampling_rate: int,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Create an audio dataset from waveform arrays.
+
+        Args:
+            audio: Sequence of 1D or 2D waveform arrays.
+            labels: Class labels.
+            sampling_rate: Shared sampling rate for every sample.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated audio dataset.
+        """
+
+        label_array = np.asarray(labels)
+        merged_metadata = {
+            "source": "audio_arrays",
+            "sampling_rate": int(sampling_rate),
+        }
+        merged_metadata.update(metadata or {})
+        dataset = cls(
+            X={
+                "array": _coerce_object_sequence(audio),
+                "sampling_rate": np.full(len(label_array), int(sampling_rate), dtype=int),
+            },
+            y=label_array,
+            modality="audio",
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
+    def from_time_series(
+        cls,
+        series: Any,
+        labels: Any,
+        observed_mask: Any = None,
+        time_features: Any = None,
+        timestamps: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Create a time-series dataset from aligned sequence inputs.
+
+        Args:
+            series: Sequence array with shape `(n_samples, time)` or
+                `(n_samples, time, channels)`.
+            labels: Class labels.
+            observed_mask: Optional boolean or numeric mask aligned to `series`.
+            time_features: Optional numeric time features aligned to `series`.
+            timestamps: Optional timestamp annotations preserved for reporting.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated time-series dataset.
+        """
+
+        merged_metadata = {"source": "time_series"}
+        merged_metadata.update(metadata or {})
+        payload: Dict[str, Any] = {"series": np.asarray(series)}
+        if observed_mask is not None:
+            payload["observed_mask"] = np.asarray(observed_mask)
+        if time_features is not None:
+            payload["time_features"] = np.asarray(time_features)
+        if timestamps is not None:
+            payload["timestamps"] = np.asarray(timestamps)
+        dataset = cls(
+            X=payload,
+            y=np.asarray(labels),
+            modality="time_series",
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
     def from_embeddings(
         cls,
         embeddings: Any,
@@ -343,12 +453,22 @@ def _has_missing_labels(y: np.ndarray) -> bool:
 
 
 def _num_samples(X: Any) -> int:
+    if isinstance(X, dict):
+        lengths = {key: _num_samples(value) for key, value in X.items()}
+        unique_lengths = set(lengths.values())
+        if not unique_lengths:
+            return 0
+        if len(unique_lengths) != 1:
+            raise ValueError(f"Structured dataset fields must align in length; found {lengths}.")
+        return unique_lengths.pop()
     if is_sparse_matrix(X):
         return int(X.shape[0])
     return len(X)
 
 
 def _take_samples(X: Any, indices: np.ndarray) -> Any:
+    if isinstance(X, dict):
+        return {key: _take_samples(value, indices) for key, value in X.items()}
     if is_sparse_matrix(X):
         return X[indices]
     if hasattr(X, "iloc"):
@@ -363,3 +483,12 @@ def _take_samples(X: Any, indices: np.ndarray) -> Any:
         return X[indices]
     except Exception:
         return [X[int(index)] for index in indices]
+
+
+def _coerce_object_sequence(value: Any) -> np.ndarray:
+    if isinstance(value, np.ndarray) and value.dtype == object:
+        return value
+    try:
+        return np.asarray(list(value), dtype=object)
+    except TypeError as exc:
+        raise ValueError("Expected a sequence of per-sample values.") from exc

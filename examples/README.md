@@ -41,8 +41,12 @@ Each script writes reports to `examples/output/`.
   Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export
   you provide via `VERTABRAE_ONNX_MODEL_PATH`.
+- `hf_audio_extractor.py`: Hugging Face audio backbone API example. Requires optional
+  dependencies and a local or downloadable model.
 - `hf_text_extractor.py`: Hugging Face text backbone API example. Requires optional
   dependencies and a local or downloadable model.
+- `hf_time_series_extractor.py`: Hugging Face time-series backbone API example.
+  Requires optional dependencies and a local or downloadable model.
 - `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
   final-layer, and mid-layer Hugging Face vision embeddings plus a scikit-learn
   image pipeline. Requires optional dependencies and local or downloadable
