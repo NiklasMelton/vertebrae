@@ -48,9 +48,9 @@ Each script writes reports to `examples/output/`.
 - `hf_time_series_extractor.py`: Hugging Face time-series backbone API example.
   Requires optional dependencies and a local or downloadable model.
 - `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
-  final-layer, and mid-layer Hugging Face vision embeddings plus a scikit-learn
-  image pipeline. Requires optional dependencies and local or downloadable
-  data/models.
+  final-layer and mid-layer Hugging Face vision embeddings from one model
+  configuration plus a scikit-learn image pipeline. Requires optional
+  dependencies and local or downloadable data/models.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
 

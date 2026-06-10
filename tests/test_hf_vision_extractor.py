@@ -68,6 +68,7 @@ class FakeProcessor:
 
 class FakeVisionModel:
     last_call_kwargs = None
+    call_count = 0
 
     def to(self, device):
         return self
@@ -77,6 +78,7 @@ class FakeVisionModel:
 
     def __call__(self, **encoded):
         self.__class__.last_call_kwargs = encoded
+        self.__class__.call_count += 1
         batch = encoded["pixel_values"].shape[0]
         hidden = np.arange(batch * 5 * 6, dtype=float).reshape(batch, 5, 6)
         hidden_states = tuple(FakeTensor(hidden + layer * 100) for layer in range(4))
@@ -129,6 +131,7 @@ class FakeImageModule:
 
 @pytest.fixture
 def fake_vision_modules(monkeypatch):
+    FakeVisionModel.call_count = 0
     monkeypatch.setitem(sys.modules, "torch", FakeTorch)
     monkeypatch.setitem(sys.modules, "PIL", types.SimpleNamespace(Image=FakeImageModule))
     monkeypatch.setitem(
@@ -202,6 +205,25 @@ def test_hf_vision_selects_hidden_layer(fake_vision_modules):
         [200.0, 201.0, 202.0, 203.0, 204.0, 205.0],
         [230.0, 231.0, 232.0, 233.0, 234.0, 235.0],
     ]
+    assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
+
+
+def test_hf_vision_transform_many_shares_model_forward(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        outputs=[
+            {"name": "final_cls", "pooling": "cls"},
+            {"name": "mid_cls", "pooling": "cls", "hidden_layer": 2},
+        ],
+        batch_size=2,
+    )
+
+    outputs = extractor.transform_many([np.zeros((4, 4, 3), dtype=np.uint8)] * 3)
+
+    assert [output.name for output in outputs] == ["final_cls", "mid_cls"]
+    assert all(output.embeddings.shape == (3, 6) for output in outputs)
+    assert FakeVisionModel.call_count == 2
     assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
 
 

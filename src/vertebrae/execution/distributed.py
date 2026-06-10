@@ -97,6 +97,8 @@ def plan_embedding_shard_jobs(
         Embedding shard jobs with canonical output keys.
     """
 
+    _reject_multi_output_extractor(extractor)
+
     base_key = embedding_artifact_key(dataset, extractor)
     return [
         EmbeddingShardJob(
@@ -155,6 +157,8 @@ def materialize_and_merge_embeddings(
     Returns:
         Merged embedding manifest.
     """
+
+    _reject_multi_output_extractor(extractor)
 
     jobs = plan_embedding_shard_jobs(
         dataset=dataset,
@@ -603,6 +607,7 @@ def materialize_embedding_shard(
 
     dataset = job.dataset
     extractor = job.extractor
+    _reject_multi_output_extractor(extractor)
     sample_indices = job.shard.indices(len(dataset.y))
     if len(sample_indices) == 0:
         raise ValueError("Embedding shard contains no samples.")
@@ -716,6 +721,19 @@ def _local_embedding_batches(
             )
         indices = np.asarray([local_positions[int(index)] for index in batch.indices], dtype=int)
         yield indices, embeddings
+
+
+def _reject_multi_output_extractor(extractor: Any) -> None:
+    if not callable(getattr(extractor, "transform_many", None)):
+        return
+    if not callable(getattr(extractor, "output_specs", None)):
+        return
+    if len(list(extractor.output_specs())) <= 1:
+        return
+    raise ValueError(
+        "Distributed embedding materialization currently supports single-output extractors only. "
+        "Run the extractor through Benchmark/Evaluator, or materialize one output at a time."
+    )
 
 
 def _validate_shard_manifests(

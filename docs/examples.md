@@ -13,8 +13,8 @@ Runnable examples live in `examples/`:
 - `hf_text_extractor.py`: demonstrate the Hugging Face text API.
 - `hf_time_series_extractor.py`: demonstrate the Hugging Face time-series API.
 - `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
-  final-layer, and mid-layer Hugging Face vision embeddings plus a scikit-learn
-  image pipeline.
+  final-layer, and mid-layer Hugging Face vision embeddings from one model
+  configuration plus a scikit-learn image pipeline.
 - `sentence_transformer_extractor.py`: demonstrate the sentence-transformers API.
 
 Run local examples from the repository root:

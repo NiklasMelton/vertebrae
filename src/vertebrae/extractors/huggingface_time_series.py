@@ -1,8 +1,10 @@
 """Optional Hugging Face time-series embedding extractor."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
+
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 
 
 class HFTimeSeriesExtractor:
@@ -28,6 +30,7 @@ class HFTimeSeriesExtractor:
         model_id: str,
         pooling: str = "mean",
         hidden_layer: Optional[int] = None,
+        outputs: Optional[List[Dict[str, Any]]] = None,
         batch_size: int = 32,
         device: Optional[str] = None,
         revision: Optional[str] = None,
@@ -41,6 +44,11 @@ class HFTimeSeriesExtractor:
         self.model_id = model_id
         self.pooling = pooling
         self.hidden_layer = hidden_layer
+        self._output_specs = _resolve_output_specs(
+            outputs=outputs,
+            default_pooling=pooling,
+            default_hidden_layer=hidden_layer,
+        )
         self.batch_size = batch_size
         self.device = device
         self.revision = revision
@@ -60,32 +68,67 @@ class HFTimeSeriesExtractor:
 
     def transform(self, X: Any) -> np.ndarray:
         """Encode time-series inputs into dense embeddings."""
-
-        model, torch = self._load_model()
-        series_inputs = _normalize_time_series_inputs(X, owner="HFTimeSeriesExtractor")
-        outputs: List[np.ndarray] = []
-        model.eval()
-        with torch.no_grad():
-            for batch in _iter_chunks(series_inputs, self.batch_size):
-                encoded = self._encode_batch(batch, torch)
-                model_output = model(
-                    **encoded,
-                    output_hidden_states=self.hidden_layer is not None,
-                )
-                hidden = self._select_hidden_state(model_output)
-                pooled = self._pool(hidden)
-                outputs.append(pooled.detach().cpu().numpy().astype(np.float32, copy=False))
-        return np.vstack(outputs).astype(np.float32, copy=False) if outputs else np.empty((0, 0))
+        outputs = self.transform_many(X)
+        if len(outputs) != 1:
+            raise ValueError(
+                "HFTimeSeriesExtractor.transform() is only available when exactly one output is "
+                "configured. Use Benchmark/Evaluator or transform_many()."
+            )
+        return outputs[0].embeddings
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
         """Encode time-series inputs into dense embeddings."""
 
         return self.transform(X)
 
+    def output_specs(self) -> List[EmbeddingOutputSpec]:
+        return list(self._output_specs)
+
+    def transform_many(self, X: Any) -> List[EmbeddingOutput]:
+        model, torch = self._load_model()
+        series_inputs = _normalize_time_series_inputs(X, owner="HFTimeSeriesExtractor")
+        collected: Dict[str, List[np.ndarray]] = {spec.name: [] for spec in self._output_specs}
+        model.eval()
+        need_hidden_states = any(spec.hidden_layer is not None for spec in self._output_specs)
+        with torch.no_grad():
+            for batch in _iter_chunks(series_inputs, self.batch_size):
+                encoded = self._encode_batch(batch, torch)
+                model_output = model(
+                    **encoded,
+                    output_hidden_states=need_hidden_states,
+                )
+                for spec in self._output_specs:
+                    hidden = self._select_hidden_state(model_output, spec.hidden_layer)
+                    pooled = self._pool(hidden, cast(str, spec.pooling))
+                    collected[spec.name].append(
+                        pooled.detach().cpu().numpy().astype(np.float32, copy=False)
+                    )
+        outputs: List[EmbeddingOutput] = []
+        for spec in self._output_specs:
+            arrays = collected[spec.name]
+            embeddings = (
+                np.vstack(arrays).astype(np.float32, copy=False) if arrays else np.empty((0, 0))
+            )
+            outputs.append(
+                EmbeddingOutput(
+                    name=spec.name,
+                    embeddings=embeddings,
+                    recipe={
+                        "pooling": spec.pooling,
+                        "hidden_layer": spec.hidden_layer,
+                    },
+                    metadata={
+                        "pooling": spec.pooling,
+                        "hidden_layer": spec.hidden_layer,
+                    },
+                )
+            )
+        return outputs
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable Hugging Face time-series recipe."""
 
-        return {
+        recipe: Dict[str, Any] = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -100,6 +143,9 @@ class HFTimeSeriesExtractor:
             "model_kwargs": self.model_kwargs,
             "streaming_safe": self.streaming_safe,
         }
+        if len(self._output_specs) > 1:
+            recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        return recipe
 
     def _load_model(self) -> Any:
         if self._model is None:
@@ -150,8 +196,8 @@ class HFTimeSeriesExtractor:
             encoded[key] = value.to(self._device(torch)) if hasattr(value, "to") else value
         return encoded
 
-    def _select_hidden_state(self, output: Any) -> Any:
-        if self.hidden_layer is not None:
+    def _select_hidden_state(self, output: Any, hidden_layer: Optional[int]) -> Any:
+        if hidden_layer is not None:
             hidden_states = getattr(output, "hidden_states", None)
             if hidden_states is None:
                 raise ValueError(
@@ -159,10 +205,10 @@ class HFTimeSeriesExtractor:
                     "This model may not support output_hidden_states."
                 )
             try:
-                return hidden_states[self.hidden_layer]
+                return hidden_states[hidden_layer]
             except IndexError as exc:
                 raise ValueError(
-                    f"hidden_layer index {self.hidden_layer} is out of range for "
+                    f"hidden_layer index {hidden_layer} is out of range for "
                     f"{len(hidden_states)} hidden states."
                 ) from exc
         for attr in ("last_hidden_state", "encoder_last_hidden_state"):
@@ -171,10 +217,10 @@ class HFTimeSeriesExtractor:
                 return hidden
         raise ValueError("Model output has no last_hidden_state or encoder_last_hidden_state.")
 
-    def _pool(self, hidden: Any) -> Any:
-        if self.pooling == "last":
+    def _pool(self, hidden: Any, pooling: str) -> Any:
+        if pooling == "last":
             return hidden[:, -1, :]
-        if self.pooling == "flatten":
+        if pooling == "flatten":
             return hidden.flatten(start_dim=1)
         return hidden.mean(dim=1)
 
@@ -222,3 +268,51 @@ def _optional_aligned_sequence(value: Any, size: int, name: str) -> List[Optiona
 def _iter_chunks(items: List[Dict[str, Any]], batch_size: int) -> Any:
     for start in range(0, len(items), batch_size):
         yield items[start : start + batch_size]
+
+
+def _resolve_output_specs(
+    outputs: Optional[List[Dict[str, Any]]],
+    default_pooling: str,
+    default_hidden_layer: Optional[int],
+) -> List[EmbeddingOutputSpec]:
+    if outputs is None:
+        return [
+            EmbeddingOutputSpec(
+                name="default",
+                pooling=default_pooling,
+                hidden_layer=default_hidden_layer,
+            )
+        ]
+    specs = []
+    for raw in outputs:
+        if "name" not in raw:
+            raise ValueError("HFTimeSeriesExtractor output specs must include a name.")
+        pooling = raw.get("pooling", default_pooling)
+        if pooling not in {"mean", "last", "flatten"}:
+            raise ValueError(
+                "HFTimeSeriesExtractor output pooling must be one of: mean, last, flatten."
+            )
+        specs.append(
+            EmbeddingOutputSpec(
+                name=str(raw["name"]),
+                pooling=pooling,
+                hidden_layer=raw.get("hidden_layer"),
+            )
+        )
+    _ensure_unique_names(specs)
+    return specs
+
+
+def _ensure_unique_names(specs: List[EmbeddingOutputSpec]) -> None:
+    names = [spec.name for spec in specs]
+    if len(set(names)) != len(names):
+        raise ValueError("HFTimeSeriesExtractor output names must be unique.")
+
+
+def _spec_to_dict(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
+    return {
+        "name": spec.name,
+        "pooling": spec.pooling,
+        "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
+    }

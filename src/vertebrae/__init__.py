@@ -54,6 +54,7 @@ from vertebrae.execution import (
     scoring_artifact_key,
     validate_embedding_label_artifacts,
 )
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.results import BenchmarkResult, ExtractorResult
 
 __all__ = [
@@ -63,6 +64,8 @@ __all__ = [
     "CacheConfig",
     "CompressionJob",
     "DaskBackend",
+    "EmbeddingOutput",
+    "EmbeddingOutputSpec",
     "EmbeddingCompressionConfig",
     "EmbeddingConfig",
     "EmbeddingJob",

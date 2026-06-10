@@ -23,7 +23,8 @@ from vertebrae.execution import (
     score_embedding_artifacts,
     scoring_artifact_key,
 )
-from vertebrae.extractors import CallableExtractor
+from vertebrae.extractors import CallableExtractor, MultiOutputExtractor
+from vertebrae.extractors.base import EmbeddingOutputSpec
 
 
 def test_resource_spec_validates_bounds():
@@ -154,6 +155,27 @@ def test_merge_embedding_shards_rejects_duplicate_sample_indices(tmp_path):
             ),
             store,
         )
+
+
+def test_plan_embedding_shards_rejects_multi_output_extractors():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(12).reshape(4, 3),
+        ["a", "a", "b", "b"],
+        modality="tabular",
+    )
+    extractor = MultiOutputExtractor(
+        name="multi",
+        output_specs=[EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")],
+        transform_many_fn=lambda batch: {
+            "left": np.asarray(batch)[:, :2],
+            "right": np.asarray(batch)[:, 1:3],
+        },
+        modality="tabular",
+        streaming_safe=True,
+    )
+
+    with pytest.raises(ValueError, match="single-output extractors only"):
+        plan_embedding_shard_jobs(dataset, extractor, total_shards=2, batch_size=2)
 
 
 def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
