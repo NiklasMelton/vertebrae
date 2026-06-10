@@ -475,10 +475,7 @@ class Benchmark:
         recipe = extractor.recipe()
         base_key = f"embeddings/{dataset.fingerprint()}/{fingerprint_extractor_recipe(recipe)}"
         specs = self._output_specs(extractor)
-        cache_keys = {
-            spec.name: self._output_cache_key(base_key, spec.name)
-            for spec in specs
-        }
+        cache_keys = {spec.name: self._output_cache_key(base_key, spec.name) for spec in specs}
         if self.cache_config.enabled and not self.cache_config.force_recompute:
             if all(store.exists(cache_key) for cache_key in cache_keys.values()):
                 variants = []
@@ -691,13 +688,11 @@ class Benchmark:
                 raise ValueError("Reusable embedding probe does not match streaming batch order.")
 
         collected = {
-            output.name: [(first_batch.indices, output.embeddings)]
-            for output in first_outputs
+            output.name: [(first_batch.indices, output.embeddings)] for output in first_outputs
         }
         output_metadata = {output.name: dict(output.metadata) for output in first_outputs}
         output_recipe = {
-            output.name: self._qualified_output_recipe(recipe, output)
-            for output in first_outputs
+            output.name: self._qualified_output_recipe(recipe, output) for output in first_outputs
         }
         for batch in batch_iterator:
             outputs = self._embed_batch_many(extractor, batch)
