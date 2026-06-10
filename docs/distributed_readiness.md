@@ -12,9 +12,9 @@ the same boundaries needed for future HPC, Ray, Dask, and multi-GPU backends:
 - `ExecutionBackend` supports `submit`, `gather`, `status`, and `map`, with only
   the local backend implemented.
 
-Current distributed artifact materialization expects one embedding matrix per
-extractor. Native multi-output extractors are supported in local `Benchmark` /
-`Evaluator` flows first.
+Distributed artifact materialization now supports multi-output extractors by
+writing one embedding artifact per named output. Each output remains a normal 2D
+embedding artifact for downstream scoring and compression.
 
 Distributed backends can shard embedding generation across workers, then submit scoring
 jobs over saved embedding and label artifacts. New extractors should keep deterministic
