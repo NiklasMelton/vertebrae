@@ -250,16 +250,12 @@ def _normalize_audio_mapping(value: Dict[str, Any], owner: str) -> List[Dict[str
         arrays = list(value["array"])
         rates = _broadcast_optional_sequence(value.get("sampling_rate"), len(arrays))
         return [
-            {"audio": array, "sampling_rate": rates[index]}
-            for index, array in enumerate(arrays)
+            {"audio": array, "sampling_rate": rates[index]} for index, array in enumerate(arrays)
         ]
     if "path" in value:
         paths = list(value["path"])
         rates = _broadcast_optional_sequence(value.get("sampling_rate"), len(paths))
-        return [
-            {"audio": path, "sampling_rate": rates[index]}
-            for index, path in enumerate(paths)
-        ]
+        return [{"audio": path, "sampling_rate": rates[index]} for index, path in enumerate(paths)]
     raise ValueError(f"{owner} expects structured audio inputs with 'array' or 'path'.")
 
 
@@ -300,8 +296,7 @@ def _load_audio_input(value: Any) -> Tuple[np.ndarray, Optional[int]]:
         # Average channels to keep the extractor output contract simple.
         return array.mean(axis=1).astype(np.float32, copy=False), None
     raise ValueError(
-        "Audio arrays must be 1D (samples) or 2D (samples, channels); "
-        f"got shape {array.shape}."
+        "Audio arrays must be 1D (samples) or 2D (samples, channels); " f"got shape {array.shape}."
     )
 
 

@@ -135,9 +135,7 @@ class HFTimeSeriesExtractor:
 
     def _encode_batch(self, batch: List[Dict[str, Any]], torch: Any) -> Dict[str, Any]:
         series = np.asarray([sample["series"] for sample in batch], dtype=np.float32)
-        encoded: Dict[str, Any] = {
-            "past_values": torch.as_tensor(series).to(self._device(torch))
-        }
+        encoded: Dict[str, Any] = {"past_values": torch.as_tensor(series).to(self._device(torch))}
         observed_mask = [sample.get("observed_mask") for sample in batch]
         if all(mask is not None for mask in observed_mask):
             encoded["past_observed_mask"] = torch.as_tensor(
@@ -171,9 +169,7 @@ class HFTimeSeriesExtractor:
             hidden = getattr(output, attr, None)
             if hidden is not None:
                 return hidden
-        raise ValueError(
-            "Model output has no last_hidden_state or encoder_last_hidden_state."
-        )
+        raise ValueError("Model output has no last_hidden_state or encoder_last_hidden_state.")
 
     def _pool(self, hidden: Any) -> Any:
         if self.pooling == "last":
