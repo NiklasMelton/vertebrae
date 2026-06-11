@@ -316,8 +316,7 @@ def test_multimodal_dataset_expands_multi_output_results(fake_overlapindex):
         "fusion:fused",
     ]
     assert all(
-        item.embedding_metadata["modality"] == "multimodal"
-        for item in result.extractor_results
+        item.embedding_metadata["modality"] == "multimodal" for item in result.extractor_results
     )
     assert len(fake_overlapindex.calls) == 2
 

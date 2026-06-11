@@ -110,9 +110,7 @@ class HFMultimodalExtractor:
                 encoded = self._prepare_batch(batch, processor, torch, image_module)
                 model_output = model(**encoded)
                 projected = (
-                    self.output_fn(model_output)
-                    if self.output_fn is not None
-                    else model_output
+                    self.output_fn(model_output) if self.output_fn is not None else model_output
                 )
                 for spec in self._output_specs:
                     value = _resolve_named_output(projected, spec, model_output=model_output)
@@ -128,9 +126,7 @@ class HFMultimodalExtractor:
         for spec in self._output_specs:
             arrays = outputs_by_name[spec.name]
             embeddings = (
-                np.vstack(arrays).astype(np.float32, copy=False)
-                if arrays
-                else np.empty((0, 0))
+                np.vstack(arrays).astype(np.float32, copy=False) if arrays else np.empty((0, 0))
             )
             materialized.append(
                 EmbeddingOutput(
@@ -337,10 +333,7 @@ def _sample_at_index(value: Any, index: int) -> Any:
 def _batch_to_inputs(batch: List[Dict[str, Any]]) -> Dict[str, List[Any]]:
     if not batch:
         return {}
-    return {
-        key: [sample[key] for sample in batch]
-        for key in batch[0]
-    }
+    return {key: [sample[key] for sample in batch] for key in batch[0]}
 
 
 def _default_processor_inputs(
