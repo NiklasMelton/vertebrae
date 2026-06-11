@@ -4,6 +4,7 @@ from vertebrae.extractors.callable import CallableExtractor
 from vertebrae.extractors.huggingface_audio import HFAudioExtractor
 from vertebrae.extractors.huggingface_text import HFTextExtractor
 from vertebrae.extractors.huggingface_time_series import HFTimeSeriesExtractor
+from vertebrae.extractors.huggingface_video import HFVideoExtractor
 from vertebrae.extractors.huggingface_vision import HFVisionExtractor
 from vertebrae.extractors.keras import KerasExtractor
 from vertebrae.extractors.multi_output import MultiOutputExtractor
@@ -19,6 +20,7 @@ __all__ = [
     "KerasExtractor",
     "HFTextExtractor",
     "HFTimeSeriesExtractor",
+    "HFVideoExtractor",
     "HFVisionExtractor",
     "MultiOutputExtractor",
     "ONNXExtractor",

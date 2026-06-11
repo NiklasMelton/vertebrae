@@ -12,6 +12,7 @@ Runnable examples live in `examples/`:
 - `hf_audio_extractor.py`: demonstrate the Hugging Face audio API.
 - `hf_text_extractor.py`: demonstrate the Hugging Face text API.
 - `hf_time_series_extractor.py`: demonstrate the Hugging Face time-series API.
+- `hf_video_extractor.py`: demonstrate the Hugging Face video API with predecoded clips.
 - `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
   final-layer, and mid-layer Hugging Face vision embeddings from one model
   configuration plus a scikit-learn image pipeline.
