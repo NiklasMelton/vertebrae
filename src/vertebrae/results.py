@@ -108,6 +108,7 @@ class BenchmarkResult:
                     "overlap_macro": item.overlap.macro_score,
                     "weakest_class": item.weakest_class,
                     "weakest_class_score": item.weakest_class_score,
+                    "probe_accuracy": _best_probe_accuracy(item.probes),
                     "embedding_dim": item.embedding_metadata.get("embedding_dim"),
                     "compression_method": item.compression_metadata.get("method", "none"),
                     "compression_precision": item.compression_metadata.get("precision"),
@@ -146,3 +147,16 @@ class BenchmarkResult:
         from vertebrae.reports.markdown_report import save_markdown_report
 
         save_markdown_report(self, str(Path(path)))
+
+
+def _best_probe_accuracy(probes: Optional[Dict[str, Any]]) -> Optional[float]:
+    if not probes or not probes.get("enabled"):
+        return None
+    accuracies = [
+        float(scores["accuracy"])
+        for scores in probes.get("results", {}).values()
+        if scores.get("accuracy") is not None
+    ]
+    if not accuracies:
+        return None
+    return max(accuracies)

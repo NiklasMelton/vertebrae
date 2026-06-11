@@ -19,7 +19,7 @@ Each extractor contributes an `ExtractorResult` with:
 - extractor identity and type,
 - `OverlapScoreResult`,
 - optional stability summary,
-- optional probe summary,
+- optional native probe summary,
 - optional Separatix complexity diagnostic,
 - embedding metadata,
 - runtime timing metadata,
@@ -70,6 +70,10 @@ At a high level, reports include:
 - warnings,
 - recommendations,
 - reproducibility metadata.
+
+Separatix is the default classifier-complexity diagnostic when the overlap gate
+passes. Native vertebrae probes remain available as an explicit quick-check
+option through `ProbeConfig(enabled=True)`.
 
 ## What recommendations mean
 

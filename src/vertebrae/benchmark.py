@@ -53,7 +53,7 @@ class Benchmark:
         extractors: Optional iterable of extractors to evaluate.
         scoring_config: OverlapIndex scoring configuration.
         stability_config: Stability-analysis configuration.
-        probe_config: Probe-classifier configuration.
+        probe_config: Optional native probe-classifier configuration.
         cache_config: Embedding cache configuration.
         embedding_config: Embedding batching and streaming configuration.
         execution: Local execution backend.

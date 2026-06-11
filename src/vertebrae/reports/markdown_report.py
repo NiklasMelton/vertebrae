@@ -65,7 +65,7 @@ def render_markdown_report(result: Any) -> str:
     for rank, item in enumerate(result.ranked_results(), start=1):
         interval = _format_interval(item.stability)
         weakest = item.weakest_class if item.weakest_class is not None else ""
-        probe_accuracy = _best_probe_accuracy(item.probes)
+        probe_accuracy = _probe_accuracy(item.probes, item.separatix)
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
         compression_method = item.compression_metadata.get("method", "none")
         compressed_dim = item.compression_metadata.get("compressed_dim", embedding_dim)
@@ -231,7 +231,14 @@ def _format_interval(stability: Any) -> str:
     return f"{_format_float(summary.get('lower'))}-{_format_float(summary.get('upper'))}"
 
 
-def _best_probe_accuracy(probes: Any) -> str:
+def _probe_accuracy(probes: Any, separatix: Any) -> str:
+    separatix_accuracy = _separatix_probe_accuracy(separatix)
+    if separatix_accuracy:
+        return separatix_accuracy
+    return _native_probe_accuracy(probes)
+
+
+def _native_probe_accuracy(probes: Any) -> str:
     if not probes or not probes.get("enabled"):
         return ""
     accuracies = [
@@ -242,6 +249,23 @@ def _best_probe_accuracy(probes: Any) -> str:
     if not accuracies:
         return ""
     return f"{max(accuracies):.4f}"
+
+
+def _separatix_probe_accuracy(separatix: Any) -> str:
+    if not separatix or not getattr(separatix, "ran", False):
+        return ""
+    report = getattr(separatix, "report", None) or {}
+    metrics = report.get("metrics", {})
+    baseline = metrics.get("baseline", {})
+    probes = metrics.get("probes", {})
+    best_probe = baseline.get("best_probe")
+    if not best_probe:
+        return ""
+    best_probe_metrics = probes.get(best_probe, {})
+    accuracy = best_probe_metrics.get("accuracy")
+    if accuracy is None:
+        return ""
+    return _format_float(accuracy)
 
 
 def _format_float(value: Any) -> str:

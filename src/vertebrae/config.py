@@ -117,16 +117,16 @@ class StabilityConfig:
 
 @dataclass
 class ProbeConfig:
-    """Configuration for lightweight probe classifiers.
+    """Configuration for optional lightweight probe classifiers.
 
     Attributes:
-        enabled: Whether probe evaluation should run.
+        enabled: Whether native probe evaluation should run.
         test_size: Fraction of samples held out for probe testing.
         random_state: Seed used for train/test splitting.
         methods: Probe classifiers to evaluate.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     test_size: float = 0.2
     random_state: int = 42
     methods: Tuple[str, ...] = ("knn", "logistic_regression")

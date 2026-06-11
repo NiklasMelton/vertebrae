@@ -69,8 +69,37 @@ def _build_fake_separatix_payload(X, y, kwargs):
         "metrics": {
             "audit": {"n_samples": int(X.shape[0]), "n_features": int(X.shape[1])},
             "geometry": {},
-            "probes": {},
-            "baseline": {},
+            "probes": {
+                "dummy": {
+                    "accuracy": 0.50,
+                    "balanced_accuracy": 0.50,
+                    "macro_f1": 0.33,
+                },
+                "linear": {
+                    "accuracy": 0.83,
+                    "balanced_accuracy": 0.82,
+                    "macro_f1": 0.82,
+                },
+                "knn": {
+                    "accuracy": 0.79,
+                    "balanced_accuracy": 0.78,
+                    "macro_f1": 0.78,
+                },
+                "smooth_poly": {
+                    "accuracy": 0.91,
+                    "balanced_accuracy": 0.89,
+                    "macro_f1": 0.89,
+                },
+                "kernel_approx": {
+                    "accuracy": 0.87,
+                    "balanced_accuracy": 0.86,
+                    "macro_f1": 0.86,
+                },
+            },
+            "baseline": {
+                "best_probe": "smooth_poly",
+                "best_probe_score": 0.89,
+            },
             "neighborhood": {},
             "boundary": {},
             "graph": {},

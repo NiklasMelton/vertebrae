@@ -3,7 +3,7 @@
 All overlap scoring in `vertebrae` goes through one internal adapter:
 `OverlapIndexScorer`.
 
-`vertebrae` can also run an auxiliary Separatix complexity diagnostic through the
+`vertebrae` can also run a default Separatix complexity diagnostic through the
 internal `SeparatixScorer` adapter. Separatix does not affect extractor ranking;
 it adds classifier-complexity guidance on top of the overlap result when enabled.
 
@@ -137,6 +137,9 @@ Current behavior:
 Separatix follows the same normalization convention as overlap scoring when
 `normalize_embeddings=True`. Sparse inputs remain sparse at the vertebrae boundary,
 and Separatix uses its own densification policy internally.
+
+Native vertebrae probes are still available through `ProbeConfig`, but they are
+now opt-in quick checks rather than part of the default report path.
 
 ## Practical guidance
 

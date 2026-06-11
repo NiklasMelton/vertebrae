@@ -106,3 +106,32 @@ def test_reports_include_separatix_content(tmp_path, fake_overlapindex):
     assert "Separatix complexity diagnostic" in markdown
     assert "smooth_nonlinear_recommended" in markdown
     assert "Probe signal is strong." in markdown
+    assert "| 0.9100 |" in markdown
+
+
+def test_native_probes_remain_available_when_explicitly_enabled(fake_overlapindex):
+    rng = np.random.default_rng(2)
+    embeddings = np.vstack(
+        [
+            rng.normal(loc=-1.0, scale=0.2, size=(10, 4)),
+            rng.normal(loc=1.0, scale=0.2, size=(10, 4)),
+        ]
+    )
+    labels = np.array(["a"] * 10 + ["b"] * 10)
+    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor(name="dense"),
+        separatix_config=SeparatixConfig(overlap_threshold=0.80),
+        stability_config=StabilityConfig(enabled=False),
+        probe_config=ProbeConfig(enabled=True),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+
+    item = result.extractor_results[0]
+    frame = result.to_dataframe()
+    assert item.probes is not None
+    assert item.probes["enabled"] is True
+    assert set(item.probes["results"]) == {"knn", "logistic_regression"}
+    assert frame.loc[0, "probe_accuracy"] not in ("", None)

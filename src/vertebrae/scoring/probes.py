@@ -1,4 +1,4 @@
-"""Lightweight probe classifier evaluation."""
+"""Optional lightweight native probe classifier evaluation."""
 
 from typing import Any, Dict, List, Optional
 
