@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "vertebrae"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Benchmark feature extractors and transfer-learning backbones using OverlapIndex."
 authors = [{ name = "Niklas Melton", email = "niklasmelton@gmail.com" }]
 readme = "README.md"
