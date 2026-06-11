@@ -6836,14 +6836,14 @@ train = ["accelerate (>=0.20.3)", "datasets"]
 
 [[package]]
 name = "separatix"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Diagnostic profiling of labeled embeddings for classification model complexity guidance."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "separatix-0.1.0a1-py3-none-any.whl", hash = "sha256:b20af5da79e20bf08dbe3d91d92a9135531c72b82fa8bd95b1e981f0464cb32e"},
-    {file = "separatix-0.1.0a1.tar.gz", hash = "sha256:8af2251748a9b46b21169f4a578329f199b9b2fd8877686f2db8a4c5048ced5b"},
+    {file = "separatix-0.1.0a2-py3-none-any.whl", hash = "sha256:ba57a665b69cbe8e8a59b574e8d0a4f3dcf37f38f940f5704567928811e4f3c9"},
+    {file = "separatix-0.1.0a2.tar.gz", hash = "sha256:68a386cdc2e4e2ac6d6a1311fd06747b6c3891d31995b084403bc1eb6cf55f56"},
 ]
 
 [package.dependencies]
@@ -8600,4 +8600,4 @@ video = ["av", "pytorchvideo", "torch", "transformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-content-hash = "18e46304f0997b8372d9173fc3ef6b5e904678ca4e76a99359b0884ee4ee7191"
+content-hash = "177cc8452281a45a1c82887905d5007dfa238625740b2378c476e224c6413ac3"
