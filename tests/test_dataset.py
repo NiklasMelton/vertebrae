@@ -102,6 +102,37 @@ def test_from_audio_paths_sets_audio_modality():
     assert dataset.X["path"].tolist() == ["a.wav", "b.wav", "c.wav", "d.wav"]
 
 
+def test_from_video_paths_sets_video_modality():
+    dataset = BenchmarkDataset.from_video_paths(
+        ["a.mp4", "b.mp4", "c.mp4", "d.mp4"],
+        ["cat", "cat", "dog", "dog"],
+    )
+
+    assert dataset.modality == "video"
+    assert dataset.metadata["source"] == "video_paths"
+    assert dataset.X["path"].tolist() == ["a.mp4", "b.mp4", "c.mp4", "d.mp4"]
+
+
+def test_from_video_arrays_preserves_frame_rate():
+    clips = [
+        np.zeros((3, 2, 2, 3), dtype=np.uint8),
+        np.ones((4, 2, 2, 3), dtype=np.uint8),
+        np.full((5, 2, 2, 3), 2, dtype=np.uint8),
+        np.full((6, 2, 2, 3), 3, dtype=np.uint8),
+    ]
+
+    dataset = BenchmarkDataset.from_video_arrays(
+        clips,
+        ["left", "left", "right", "right"],
+        frame_rate=24.0,
+    )
+
+    assert dataset.modality == "video"
+    assert dataset.metadata["source"] == "video_arrays"
+    assert dataset.metadata["frame_rate"] == 24.0
+    assert dataset.X["frame_rate"].tolist() == [24.0] * 4
+
+
 def test_from_time_series_preserves_structured_inputs():
     series = np.arange(24, dtype=float).reshape(4, 3, 2)
     observed_mask = np.ones((4, 3, 2), dtype=float)
@@ -164,6 +195,23 @@ def test_structured_dataset_subset_and_batches_align_fields():
     assert subset.metadata["sample_indices"] == [1, 2, 4, 5]
     assert batches[0].indices.tolist() == [0]
     assert batches[0].X["series"].shape == (1, 4, 2)
+
+
+def test_video_dataset_subset_and_batches_align_fields():
+    dataset = BenchmarkDataset.from_video_arrays(
+        [np.full((3, 2, 2, 3), fill_value=index, dtype=np.uint8) for index in range(6)],
+        labels=["a", "a", "a", "b", "b", "b"],
+        frame_rate=12.0,
+    )
+
+    subset = dataset.subset([1, 2, 4, 5])
+    batches = list(subset.iter_batches(batch_size=2))
+
+    assert subset.X["frames"].shape == (4,)
+    assert subset.X["frame_rate"].tolist() == [12.0] * 4
+    assert subset.metadata["sample_indices"] == [1, 2, 4, 5]
+    assert batches[0].indices.tolist() == [0, 1]
+    assert len(batches[0].X["frames"]) == 2
 
 
 def test_with_label_hierarchy_preserves_primary_labels_and_summary():

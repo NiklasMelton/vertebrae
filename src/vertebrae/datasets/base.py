@@ -1,7 +1,7 @@
 """Dataset abstraction for benchmark inputs."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Iterator, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, Optional, Union, cast
 
 import numpy as np
 
@@ -202,6 +202,75 @@ class BenchmarkDataset:
             },
             y=label_array,
             modality="audio",
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
+    def from_video_paths(
+        cls,
+        paths: Any,
+        labels: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Create a video dataset from filesystem paths.
+
+        Args:
+            paths: Video file paths.
+            labels: Class labels.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated video dataset.
+        """
+
+        merged_metadata = {"source": "video_paths"}
+        merged_metadata.update(metadata or {})
+        dataset = cls(
+            X={"path": np.asarray(paths, dtype=object)},
+            y=np.asarray(labels),
+            modality="video",
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
+    def from_video_arrays(
+        cls,
+        frames: Any,
+        labels: Any,
+        frame_rate: Optional[Any] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Create a video dataset from predecoded frame arrays.
+
+        Args:
+            frames: Sequence of per-sample clip arrays, typically `(time, height, width, channels)`.
+            labels: Class labels.
+            frame_rate: Optional shared frame rate or sequence aligned to `frames`.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated video dataset.
+        """
+
+        label_array = np.asarray(labels)
+        merged_metadata: Dict[str, Any] = {"source": "video_arrays"}
+        payload: Dict[str, Any] = {"frames": _coerce_object_sequence(frames)}
+        if frame_rate is not None:
+            if np.isscalar(frame_rate):
+                resolved_rate = float(cast(Any, frame_rate))
+                payload["frame_rate"] = np.full(len(label_array), resolved_rate, dtype=float)
+                merged_metadata["frame_rate"] = resolved_rate
+            else:
+                payload["frame_rate"] = np.asarray(frame_rate, dtype=float)
+        merged_metadata.update(metadata or {})
+        dataset = cls(
+            X=payload,
+            y=label_array,
+            modality="video",
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -569,6 +638,9 @@ def _coerce_object_sequence(value: Any) -> np.ndarray:
     if isinstance(value, np.ndarray) and value.dtype == object:
         return value
     try:
-        return np.asarray(list(value), dtype=object)
+        items = list(value)
     except TypeError as exc:
         raise ValueError("Expected a sequence of per-sample values.") from exc
+    result = np.empty(len(items), dtype=object)
+    result[:] = items
+    return result

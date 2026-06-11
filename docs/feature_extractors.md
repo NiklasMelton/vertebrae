@@ -11,6 +11,7 @@
 - `HFTextExtractor`: lazy-loads Hugging Face text backbones with explicit pooling.
 - `HFAudioExtractor`: lazy-loads Hugging Face audio backbones with explicit pooling.
 - `HFTimeSeriesExtractor`: lazy-loads Hugging Face time-series backbones with explicit pooling.
+- `HFVideoExtractor`: lazy-loads Hugging Face video backbones with explicit pooling.
 - `HFVisionExtractor`: lazy-loads Hugging Face vision backbones when optional
   dependencies are installed.
 
@@ -31,6 +32,7 @@ Native multi-output support is available for:
 - `HFTextExtractor`
 - `HFAudioExtractor`
 - `HFTimeSeriesExtractor`
+- `HFVideoExtractor`
 - `HFVisionExtractor`
 - `MultiOutputExtractor`
 
@@ -60,6 +62,7 @@ poetry install -E torch
 poetry install -E hf
 poetry install -E audio
 poetry install -E timeseries
+poetry install -E video
 poetry install -E onnx
 ```
 
@@ -75,9 +78,11 @@ or selection from multi-input/multi-output sessions.
 Text extractors validate that inputs are sequences of strings. Vision extractors accept
 PIL images, NumPy image arrays, or image paths. Audio extractors accept waveform
 arrays, audio paths, or structured dictionaries containing `array` / `path` and
-`sampling_rate`. Time-series extractors accept dense arrays with shape `(n, time)` or
-`(n, time, channels)`, plus optional structured fields such as `observed_mask` and
-`time_features`.
+`sampling_rate`. Video extractors accept video paths, predecoded frame arrays with
+shape `(time, height, width, channels)`, or structured dictionaries containing
+`frames` / `path`. Time-series extractors accept dense arrays with shape `(n, time)`
+or `(n, time, channels)`, plus optional structured fields such as
+`observed_mask` and `time_features`.
 
 Streaming-safe extractors, including Hugging Face backbones and precomputed embeddings,
 can be embedded batch-by-batch through `EmbeddingConfig(batch_size=...)`. This is
