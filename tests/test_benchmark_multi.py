@@ -38,12 +38,7 @@ def test_multi_extractor_benchmark(fake_overlapindex):
 
 def test_hierarchy_label_views_produce_separate_result_variants(fake_overlapindex):
     X = np.arange(72, dtype=float).reshape(24, 3)
-    y = np.array(
-        ["husky"] * 6
-        + ["pug"] * 6
-        + ["sedan"] * 6
-        + ["suv"] * 6
-    )
+    y = np.array(["husky"] * 6 + ["pug"] * 6 + ["sedan"] * 6 + ["suv"] * 6)
     dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular").with_label_hierarchy(
         [
             ("animal", "dog", "husky"),

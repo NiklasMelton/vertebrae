@@ -272,22 +272,26 @@ def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
 
 
 def test_label_artifact_preserves_active_label_view_metadata(tmp_path):
-    dataset = BenchmarkDataset.from_embeddings(
-        np.arange(24).reshape(8, 3),
-        ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
-    ).with_label_hierarchy(
-        [
-            ("animal", "dog", "husky"),
-            ("animal", "dog", "husky"),
-            ("animal", "dog", "pug"),
-            ("animal", "dog", "pug"),
-            ("vehicle", "car", "sedan"),
-            ("vehicle", "car", "sedan"),
-            ("vehicle", "car", "suv"),
-            ("vehicle", "car", "suv"),
-        ],
-        level_names=("domain", "family", "leaf"),
-    ).label_view("family")
+    dataset = (
+        BenchmarkDataset.from_embeddings(
+            np.arange(24).reshape(8, 3),
+            ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+        )
+        .with_label_hierarchy(
+            [
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "pug"),
+                ("animal", "dog", "pug"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "suv"),
+                ("vehicle", "car", "suv"),
+            ],
+            level_names=("domain", "family", "leaf"),
+        )
+        .label_view("family")
+    )
     store = LocalArtifactStore(str(tmp_path))
 
     manifest = materialize_label_artifact(dataset, store)
@@ -341,22 +345,26 @@ def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overl
 
 
 def test_benchmark_from_artifacts_carries_label_view_metadata(tmp_path, fake_overlapindex):
-    dataset = BenchmarkDataset.from_embeddings(
-        np.arange(24).reshape(8, 3),
-        ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
-    ).with_label_hierarchy(
-        [
-            ("animal", "dog", "husky"),
-            ("animal", "dog", "husky"),
-            ("animal", "dog", "pug"),
-            ("animal", "dog", "pug"),
-            ("vehicle", "car", "sedan"),
-            ("vehicle", "car", "sedan"),
-            ("vehicle", "car", "suv"),
-            ("vehicle", "car", "suv"),
-        ],
-        level_names=("domain", "family", "leaf"),
-    ).label_view("family")
+    dataset = (
+        BenchmarkDataset.from_embeddings(
+            np.arange(24).reshape(8, 3),
+            ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+        )
+        .with_label_hierarchy(
+            [
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "pug"),
+                ("animal", "dog", "pug"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "suv"),
+                ("vehicle", "car", "suv"),
+            ],
+            level_names=("domain", "family", "leaf"),
+        )
+        .label_view("family")
+    )
     extractor = CallableExtractor(
         "artifact_family",
         lambda batch: np.asarray(batch),

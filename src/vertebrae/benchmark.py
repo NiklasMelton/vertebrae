@@ -492,8 +492,7 @@ class Benchmark:
         unknown = sorted(set(self.label_view_config.output_levels) - output_names)
         if unknown:
             raise ValueError(
-                "LabelViewConfig.output_levels contains unknown output names: "
-                f"{unknown}."
+                "LabelViewConfig.output_levels contains unknown output names: " f"{unknown}."
             )
 
     def _mapped_output_dataset(

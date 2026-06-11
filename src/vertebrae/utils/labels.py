@@ -58,13 +58,11 @@ def normalize_label_paths(label_paths: Any, n_samples: int) -> Tuple[Tuple[Any, 
         values = tuple(_normalize_scalar(value) for value in path)
         if not values:
             raise ValueError(
-                "Each label path must contain at least one label; "
-                f"sample {index} is empty."
+                "Each label path must contain at least one label; " f"sample {index} is empty."
             )
         if any(_is_missing_label(value) for value in values):
             raise ValueError(
-                "Label paths must be non-missing; "
-                f"sample {index} contains a missing value."
+                "Label paths must be non-missing; " f"sample {index} contains a missing value."
             )
         normalized.append(values)
     return tuple(normalized)
@@ -111,8 +109,7 @@ def label_view_from_paths(
     missing = [index for index, path in enumerate(label_paths) if len(path) <= resolved_level]
     if missing:
         raise ValueError(
-            "Hierarchy level "
-            f"{display_label(level)} is missing for {len(missing)} samples."
+            "Hierarchy level " f"{display_label(level)} is missing for {len(missing)} samples."
         )
     labels = np.asarray(
         [_format_label_prefix(path[: resolved_level + 1]) for path in label_paths],
@@ -150,9 +147,7 @@ def resolve_hierarchy_level(
     if resolved < 0:
         resolved += max_depth
     if resolved < 0 or resolved >= max_depth:
-        raise ValueError(
-            f"Hierarchy level {level!r} is out of range for depth {max_depth}."
-        )
+        raise ValueError(f"Hierarchy level {level!r} is out of range for depth {max_depth}.")
     return resolved
 
 
