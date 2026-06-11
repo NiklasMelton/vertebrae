@@ -15,6 +15,7 @@ from vertebrae.config import (
     CacheConfig,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
+    LabelViewConfig,
     MemoryConfig,
     OverlapScoringConfig,
     ProbeConfig,
@@ -33,6 +34,7 @@ from vertebrae.scoring.overlap import OverlapIndexScorer
 from vertebrae.scoring.probes import run_probes
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
+from vertebrae.utils.labels import label_view_suffix
 from vertebrae.utils.memory import (
     EmbeddingMemoryEstimate,
     assert_within_memory,
@@ -66,6 +68,7 @@ class Benchmark:
         scoring_config: Optional[OverlapScoringConfig] = None,
         stability_config: Optional[StabilityConfig] = None,
         probe_config: Optional[ProbeConfig] = None,
+        label_view_config: Optional[LabelViewConfig] = None,
         separatix_config: Optional[SeparatixConfig] = None,
         cache_config: Optional[CacheConfig] = None,
         compression_config: Optional[EmbeddingCompressionConfig] = None,
@@ -79,6 +82,7 @@ class Benchmark:
         self.scoring_config = scoring_config or OverlapScoringConfig()
         self.stability_config = stability_config or StabilityConfig()
         self.probe_config = probe_config or ProbeConfig()
+        self.label_view_config = label_view_config or LabelViewConfig()
         self.separatix_config = separatix_config or SeparatixConfig()
         self.cache_config = cache_config or CacheConfig()
         if compression_config is not None and compression_configs is not None:
@@ -120,9 +124,11 @@ class Benchmark:
         if not self.extractors:
             raise ValueError("At least one extractor must be provided.")
 
+        evaluation_datasets, label_view_warnings = self._evaluation_datasets()
+        self._validate_output_level_mapping()
         extractor_results: List[ExtractorResult] = []
         for extractor in self.extractors:
-            result = self._run_extractor(extractor)
+            result = self._run_extractor(extractor, evaluation_datasets, label_view_warnings)
             if isinstance(result, list):
                 extractor_results.extend(result)
             else:
@@ -138,20 +144,101 @@ class Benchmark:
                 "scoring_config": asdict(self.scoring_config),
                 "stability_config": asdict(self.stability_config),
                 "probe_config": asdict(self.probe_config),
+                "label_view_config": asdict(self.label_view_config),
                 "separatix_config": asdict(self.separatix_config),
                 "cache_config": asdict(self.cache_config),
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
                 "memory_config": asdict(self.memory_config),
+                "label_view_warnings": label_view_warnings,
             },
         )
 
-    def _run_extractor(self, extractor: Any) -> Union[ExtractorResult, List[ExtractorResult]]:
+    def _run_extractor(
+        self,
+        extractor: Any,
+        evaluation_datasets: List[Any],
+        label_view_warnings: List[str],
+    ) -> Union[ExtractorResult, List[ExtractorResult]]:
+        if self.label_view_config.output_levels and self._supports_transform_many(extractor):
+            return self._run_extractor_with_output_label_views(extractor, label_view_warnings)
+        results: List[ExtractorResult] = []
+        for dataset in evaluation_datasets:
+            result = self._run_extractor_on_dataset(extractor, dataset)
+            if isinstance(result, list):
+                results.extend(result)
+            else:
+                results.append(result)
+        if len(results) == 1:
+            return results[0]
+        return results
+
+    def _run_extractor_with_output_label_views(
+        self,
+        extractor: Any,
+        label_view_warnings: List[str],
+    ) -> Union[ExtractorResult, List[ExtractorResult]]:
         warnings: List[str] = []
         runtime = {}
         start = perf_counter()
         dataset, subsampling_warnings, subsampling_metadata, probe_plan = (
-            self._prepare_dataset_for_extractor(extractor)
+            self._prepare_dataset_for_extractor(extractor, self.dataset)
+        )
+        warnings.extend(subsampling_warnings)
+        store = create_artifact_store(
+            self.cache_config.cache_dir,
+            **self.cache_config.storage_options,
+        )
+        variants = self._get_or_compute_embedding_variants(
+            extractor,
+            dataset,
+            store,
+            subsampling_metadata,
+            probe_plan,
+        )
+        runtime["embedding_seconds"] = perf_counter() - start
+        results: List[ExtractorResult] = []
+        mapped_outputs = 0
+        for variant in variants:
+            output_name = variant["metadata"].get("output_name")
+            if output_name not in self.label_view_config.output_levels:
+                continue
+            mapped_outputs += 1
+            scoring_dataset = self._mapped_output_dataset(
+                dataset=dataset,
+                output_name=output_name,
+                label_view_warnings=label_view_warnings,
+            )
+            if scoring_dataset is None:
+                continue
+            results.extend(
+                self._score_embedding_variant(
+                    extractor=extractor,
+                    variant=variant,
+                    dataset=scoring_dataset,
+                    store=store,
+                    warnings=warnings,
+                    runtime=runtime,
+                )
+            )
+        if mapped_outputs == 0:
+            return []
+        if not results:
+            raise ValueError("No valid mapped hierarchy label views were available for scoring.")
+        if len(results) == 1:
+            return results[0]
+        return results
+
+    def _run_extractor_on_dataset(
+        self,
+        extractor: Any,
+        evaluation_dataset: Any,
+    ) -> Union[ExtractorResult, List[ExtractorResult]]:
+        warnings: List[str] = []
+        runtime = {}
+        start = perf_counter()
+        dataset, subsampling_warnings, subsampling_metadata, probe_plan = (
+            self._prepare_dataset_for_extractor(extractor, evaluation_dataset)
         )
         warnings.extend(subsampling_warnings)
         store = create_artifact_store(
@@ -168,102 +255,129 @@ class Benchmark:
         runtime["embedding_seconds"] = perf_counter() - start
         results: List[ExtractorResult] = []
         for variant in variants:
-            embeddings = variant["embeddings"]
-            embedding_metadata = variant["metadata"]
-            for compression_config in self.compression_configs:
-                variant_warnings = list(warnings)
-                variant_runtime = dict(runtime)
-                compression_start = perf_counter()
-                compressed_embeddings, compression_metadata = (
-                    self._get_or_compute_compressed_embeddings(
-                        embeddings=embeddings,
-                        embedding_metadata=embedding_metadata,
-                        labels=dataset.y,
-                        store=store,
-                        config=compression_config,
-                    )
+            results.extend(
+                self._score_embedding_variant(
+                    extractor=extractor,
+                    variant=variant,
+                    dataset=dataset,
+                    store=store,
+                    warnings=warnings,
+                    runtime=runtime,
                 )
-                variant_runtime["compression_seconds"] = perf_counter() - compression_start
-                variant_warnings.extend(compression_metadata.get("warnings", []))
-
-                score_start = perf_counter()
-                scoring_metadata = dict(embedding_metadata)
-                scoring_metadata["embedding_dim"] = compression_metadata.get(
-                    "compressed_dim",
-                    embedding_metadata.get("embedding_dim"),
-                )
-                scoring_metadata["shape"] = [
-                    embedding_metadata.get("n_samples"),
-                    scoring_metadata["embedding_dim"],
-                ]
-                scoring_metadata["sparse"] = compression_metadata.get(
-                    "output_sparse",
-                    embedding_metadata.get("sparse"),
-                )
-                self._admit_scoring_memory(scoring_metadata)
-                overlap = OverlapIndexScorer(self.scoring_config).score(
-                    compressed_embeddings,
-                    dataset.y,
-                )
-                variant_runtime["scoring_seconds"] = perf_counter() - score_start
-                variant_warnings.extend(overlap.warnings)
-
-                separatix_start = perf_counter()
-                separatix = self._run_separatix_diagnostic(
-                    compressed_embeddings,
-                    dataset.y,
-                    overlap.macro_score,
-                )
-                variant_runtime["separatix_seconds"] = perf_counter() - separatix_start
-                if separatix:
-                    variant_warnings.extend(separatix.warnings)
-
-                stability_start = perf_counter()
-                stability = run_stability_analysis(
-                    compressed_embeddings,
-                    dataset.y,
-                    self.scoring_config,
-                    self.stability_config,
-                )
-                variant_runtime["stability_seconds"] = perf_counter() - stability_start
-                if stability:
-                    variant_warnings.extend(stability.get("warnings", []))
-
-                probe_start = perf_counter()
-                probes = run_probes(compressed_embeddings, dataset.y, self.probe_config)
-                variant_runtime["probe_seconds"] = perf_counter() - probe_start
-                if probes:
-                    variant_warnings.extend(probes.get("warnings", []))
-
-                weakest_class, weakest_score = _weakest_class(overlap.per_class_scores)
-                recommendation = recommendation_for_extractor(
-                    overlap.macro_score,
-                    stability,
-                    weakest_score,
-                )
-                result_name = embedding_metadata.get("extractor_name", extractor.name)
-                results.append(
-                    ExtractorResult(
-                        name=_variant_extractor_name(result_name, compression_metadata),
-                        extractor_type=embedding_metadata.get(
-                            "extractor_type",
-                            getattr(extractor, "extractor_type", "unknown"),
-                        ),
-                        overlap=overlap,
-                        stability=stability,
-                        probes=probes,
-                        separatix=separatix,
-                        embedding_metadata=embedding_metadata,
-                        compression_metadata=compression_metadata,
-                        runtime=variant_runtime,
-                        warnings=sorted(set(variant_warnings)),
-                        weakest_class=weakest_class,
-                        weakest_class_score=weakest_score,
-                        recommendation=recommendation,
-                    )
-                )
+            )
         if len(results) == 1:
             return results[0]
+        return results
+
+    def _score_embedding_variant(
+        self,
+        extractor: Any,
+        variant: dict,
+        dataset: Any,
+        store: ArtifactStore,
+        warnings: List[str],
+        runtime: dict,
+    ) -> List[ExtractorResult]:
+        embeddings = variant["embeddings"]
+        embedding_metadata = dict(variant["metadata"])
+        embedding_metadata["label_view"] = dataset.active_label_view()
+        results: List[ExtractorResult] = []
+        for compression_config in self.compression_configs:
+            variant_warnings = list(warnings)
+            variant_runtime = dict(runtime)
+            compression_start = perf_counter()
+            compressed_embeddings, compression_metadata = (
+                self._get_or_compute_compressed_embeddings(
+                    embeddings=embeddings,
+                    embedding_metadata=embedding_metadata,
+                    labels=dataset.y,
+                    store=store,
+                    config=compression_config,
+                )
+            )
+            variant_runtime["compression_seconds"] = perf_counter() - compression_start
+            variant_warnings.extend(compression_metadata.get("warnings", []))
+
+            score_start = perf_counter()
+            scoring_metadata = dict(embedding_metadata)
+            scoring_metadata["embedding_dim"] = compression_metadata.get(
+                "compressed_dim",
+                embedding_metadata.get("embedding_dim"),
+            )
+            scoring_metadata["shape"] = [
+                embedding_metadata.get("n_samples"),
+                scoring_metadata["embedding_dim"],
+            ]
+            scoring_metadata["sparse"] = compression_metadata.get(
+                "output_sparse",
+                embedding_metadata.get("sparse"),
+            )
+            self._admit_scoring_memory(scoring_metadata)
+            overlap = OverlapIndexScorer(self.scoring_config).score(
+                compressed_embeddings,
+                dataset.y,
+            )
+            variant_runtime["scoring_seconds"] = perf_counter() - score_start
+            variant_warnings.extend(overlap.warnings)
+
+            separatix_start = perf_counter()
+            separatix = self._run_separatix_diagnostic(
+                compressed_embeddings,
+                dataset.y,
+                overlap.macro_score,
+            )
+            variant_runtime["separatix_seconds"] = perf_counter() - separatix_start
+            if separatix:
+                variant_warnings.extend(separatix.warnings)
+
+            stability_start = perf_counter()
+            stability = run_stability_analysis(
+                compressed_embeddings,
+                dataset.y,
+                self.scoring_config,
+                self.stability_config,
+            )
+            variant_runtime["stability_seconds"] = perf_counter() - stability_start
+            if stability:
+                variant_warnings.extend(stability.get("warnings", []))
+
+            probe_start = perf_counter()
+            probes = run_probes(compressed_embeddings, dataset.y, self.probe_config)
+            variant_runtime["probe_seconds"] = perf_counter() - probe_start
+            if probes:
+                variant_warnings.extend(probes.get("warnings", []))
+
+            weakest_class, weakest_score = _weakest_class(overlap.per_class_scores)
+            recommendation = recommendation_for_extractor(
+                overlap.macro_score,
+                stability,
+                weakest_score,
+            )
+            result_name = _qualified_label_view_name(
+                embedding_metadata.get("extractor_name", extractor.name),
+                dataset.active_label_view(),
+            )
+            results.append(
+                ExtractorResult(
+                    name=_variant_extractor_name(result_name, compression_metadata),
+                    extractor_type=embedding_metadata.get(
+                        "extractor_type",
+                        getattr(extractor, "extractor_type", "unknown"),
+                    ),
+                    overlap=overlap,
+                    stability=stability,
+                    probes=probes,
+                    separatix=separatix,
+                    embedding_metadata=embedding_metadata,
+                    compression_metadata=compression_metadata,
+                    runtime=variant_runtime,
+                    warnings=sorted(set(variant_warnings)),
+                    label_view=dataset.active_label_view(),
+                    weakest_class=weakest_class,
+                    weakest_class_score=weakest_score,
+                    recommendation=recommendation,
+                )
+            )
         return results
 
     def _run_separatix_diagnostic(
@@ -292,8 +406,8 @@ class Benchmark:
     def _prepare_dataset_for_extractor(
         self,
         extractor: Any,
+        dataset: Any,
     ) -> Tuple[Any, List[str], dict, Optional[Tuple[SampleBatch, Any, Any]]]:
-        dataset = self.dataset
         warnings: List[str] = []
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None
         metadata: dict[str, Any] = {
@@ -329,6 +443,75 @@ class Benchmark:
                 probe_plan = None
 
         return dataset, warnings, metadata, probe_plan
+
+    def _evaluation_datasets(self) -> Tuple[List[Any], List[str]]:
+        if not self.label_view_config.enabled and not self.label_view_config.output_levels:
+            return [self.dataset], []
+        if (
+            self._requires_label_hierarchy()
+            and self.dataset.metadata.get("label_hierarchy") is None
+        ):
+            raise ValueError(
+                "LabelViewConfig requires dataset label hierarchy metadata. "
+                "Use BenchmarkDataset.with_label_hierarchy(...)."
+            )
+        if not self.label_view_config.enabled:
+            return [self.dataset], []
+        warnings: List[str] = []
+        datasets = []
+        seen = set()
+        for level in self.label_view_config.hierarchy_levels:
+            try:
+                dataset = self.dataset.label_view(level)
+            except ValueError as exc:
+                if not self.label_view_config.skip_invalid_levels:
+                    raise
+                warnings.append(f"Skipped hierarchy level {level!r}: {exc}")
+                continue
+            view_key = dataset.active_label_view().get("key")
+            if view_key in seen:
+                continue
+            seen.add(view_key)
+            datasets.append(dataset)
+        if not datasets:
+            raise ValueError("No valid hierarchy label views were available for benchmarking.")
+        return datasets, warnings
+
+    def _requires_label_hierarchy(self) -> bool:
+        return bool(self.label_view_config.enabled or self.label_view_config.output_levels)
+
+    def _validate_output_level_mapping(self) -> None:
+        if not self.label_view_config.output_levels:
+            return
+        output_names = {
+            spec.name
+            for extractor in self.extractors
+            if self._supports_transform_many(extractor)
+            for spec in self._output_specs(extractor)
+        }
+        unknown = sorted(set(self.label_view_config.output_levels) - output_names)
+        if unknown:
+            raise ValueError(
+                "LabelViewConfig.output_levels contains unknown output names: "
+                f"{unknown}."
+            )
+
+    def _mapped_output_dataset(
+        self,
+        dataset: Any,
+        output_name: str,
+        label_view_warnings: List[str],
+    ) -> Optional[Any]:
+        level = self.label_view_config.output_levels[output_name]
+        try:
+            return dataset.label_view(level)
+        except ValueError as exc:
+            if not self.label_view_config.skip_invalid_levels:
+                raise
+            label_view_warnings.append(
+                f"Skipped output {output_name!r} hierarchy level {level!r}: {exc}"
+            )
+            return None
 
     def _subsample_dataset(self, dataset: Any, rate: float, reason: str) -> Tuple[Any, dict, str]:
         indices = dataset.stratified_subsample_indices(
@@ -833,6 +1016,7 @@ class Benchmark:
             "recipe": recipe,
             "extractor_recipe": extractor_recipe or recipe,
             "output_metadata": output_metadata or {},
+            "label_view": dataset.active_label_view(),
         }
 
     def _admit_embedding_plan(self, estimate: EmbeddingMemoryEstimate) -> None:
@@ -1032,6 +1216,10 @@ def _variant_extractor_name(name: str, compression_metadata: dict) -> str:
     if compressed_dim is None:
         return f"{name}[{method}]"
     return f"{name}[{method}_{compressed_dim}]"
+
+
+def _qualified_label_view_name(name: str, label_view: Optional[dict]) -> str:
+    return f"{name}{label_view_suffix(label_view)}"
 
 
 def _qualified_output_name(parent_name: str, output_name: str) -> str:

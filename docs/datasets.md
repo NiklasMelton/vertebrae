@@ -93,6 +93,55 @@ and chosen input columns. When using `from_embeddings(...)`, metadata is tagged 
 `sampling_rate` in metadata. Time-series datasets preserve structured fields such as
 `observed_mask`, `time_features`, and `timestamps` when provided.
 
+## Hierarchical label views
+
+When a dataset has a category hierarchy, keep your primary labels in `y` and attach
+the hierarchy separately:
+
+```python
+dataset = BenchmarkDataset.from_arrays(
+    X=samples,
+    y=leaf_labels,
+    modality="text",
+).with_label_hierarchy(
+    label_paths=[
+        ("support", "billing", "refund"),
+        ("support", "billing", "invoice"),
+        ("support", "technical", "latency"),
+    ],
+    level_names=("domain", "group", "leaf"),
+)
+```
+
+You can then project the dataset to a single hierarchy level with
+`BenchmarkDataset.label_view(...)`:
+
+```python
+group_dataset = dataset.label_view("group")
+```
+
+Derived label views behave like ordinary benchmark datasets. They preserve the same
+inputs, carry label-view metadata into reports and artifacts, and still use the
+standard dataset validation rules for class counts and minimum samples per class.
+
+For multi-output extractors, `LabelViewConfig.output_levels` can route different
+embedding outputs to different hierarchy levels during benchmarking:
+
+```python
+from vertebrae import Benchmark, LabelViewConfig
+
+result = Benchmark(
+    dataset=dataset,
+    extractors=[extractor],
+    label_view_config=LabelViewConfig(
+        output_levels={"layer_6": "group", "final": "leaf"},
+    ),
+).run()
+```
+
+In this mode, embeddings are materialized from the base dataset and each mapped
+output is scored against its configured label view.
+
 ## Batching and sharding
 
 `BenchmarkDataset.iter_batches(...)` yields deterministic sample batches. This is

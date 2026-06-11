@@ -800,6 +800,7 @@ def _benchmark_result_from_dict(
                 runtime=item.get("runtime", {}),
                 warnings=item.get("warnings", []),
                 recommendation=item.get("recommendation", ""),
+                label_view=item.get("label_view"),
                 weakest_class=item.get("weakest_class"),
                 weakest_class_score=item.get("weakest_class_score"),
             )

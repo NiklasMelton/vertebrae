@@ -44,6 +44,8 @@ def render_markdown_report(result: Any) -> str:
     )
     for item in data.get("recommendations", []):
         lines.append(f"- {item}")
+    for warning in data.get("metadata", {}).get("label_view_warnings", []):
+        lines.append(f"- {warning}")
     top_ranked = result.ranked_results()[0] if result.extractor_results else None
     if top_ranked and top_ranked.separatix and top_ranked.separatix.ran:
         lines.append(
@@ -54,19 +56,20 @@ def render_markdown_report(result: Any) -> str:
         )
     lines.extend(["", "## Ranking", ""])
     lines.append(
-        "| rank | extractor | extractor_type | overlap_macro | stability_interval | "
+        "| rank | extractor | extractor_type | label_view | overlap_macro | stability_interval | "
         "weakest_class | probe_accuracy | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
+        "| --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(result.ranked_results(), start=1):
         interval = _format_interval(item.stability)
         weakest = item.weakest_class if item.weakest_class is not None else ""
         probe_accuracy = _probe_accuracy(item.probes, item.separatix)
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
+        label_view = (item.label_view or {}).get("name", "primary")
         compression_method = item.compression_metadata.get("method", "none")
         compressed_dim = item.compression_metadata.get("compressed_dim", embedding_dim)
         separatix_recommendation = ""
@@ -76,7 +79,7 @@ def render_markdown_report(result: Any) -> str:
             separatix_confidence = item.separatix.confidence or ""
         lines.append(
             f"| {rank} | {item.name} | {item.extractor_type} | "
-            f"{item.overlap.macro_score:.4f} | {interval} | {weakest} | "
+            f"{label_view} | {item.overlap.macro_score:.4f} | {interval} | {weakest} | "
             f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
             f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
             f"{separatix_confidence} |"
@@ -90,6 +93,7 @@ def render_markdown_report(result: Any) -> str:
                 "",
                 f"- Extractor type: {item.extractor_type}",
                 f"- Extractor family: {_extractor_family(item.extractor_type)}",
+                f"- Label view: {(item.label_view or {}).get('name', 'primary')}",
                 f"- Modality: {item.embedding_metadata.get('modality', '')}",
                 f"- Embedding dimension: {item.embedding_metadata.get('embedding_dim', '')}",
                 f"- Compression method: {item.compression_metadata.get('method', 'none')}",

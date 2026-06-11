@@ -1,13 +1,20 @@
 """Dataset abstraction for benchmark inputs."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, Optional, Union
 
 import numpy as np
 
 from vertebrae.cache.fingerprint import fingerprint_array_like
 from vertebrae.execution.jobs import SampleBatch, ShardSpec
-from vertebrae.utils.labels import class_counts
+from vertebrae.utils.labels import (
+    class_counts,
+    default_label_view_metadata,
+    hierarchy_depth,
+    label_view_from_paths,
+    normalize_label_paths,
+    normalize_level_names,
+)
 from vertebrae.utils.validation import is_sparse_matrix
 
 
@@ -307,6 +314,71 @@ class BenchmarkDataset:
 
         return class_counts(np.asarray(self.y))
 
+    def with_label_hierarchy(
+        self,
+        label_paths: Any,
+        level_names: Optional[Iterable[Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Return a dataset annotated with hierarchical label paths."""
+
+        normalized_paths = normalize_label_paths(label_paths, n_samples=len(self.y))
+        max_depth = hierarchy_depth(normalized_paths)
+        normalized_level_names = normalize_level_names(level_names, max_depth=max_depth)
+        hierarchy_metadata = {
+            "paths": [list(path) for path in normalized_paths],
+            "max_depth": int(max_depth),
+            "level_names": (
+                list(normalized_level_names) if normalized_level_names is not None else None
+            ),
+        }
+        metadata = dict(self.metadata)
+        metadata["label_hierarchy"] = hierarchy_metadata
+        dataset = BenchmarkDataset(
+            X=self.X,
+            y=np.asarray(self.y),
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            metadata=metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    def label_view(self, level: Any, name: Optional[str] = None) -> "BenchmarkDataset":
+        """Project hierarchical labels to a single requested level."""
+
+        hierarchy = self.metadata.get("label_hierarchy")
+        if hierarchy is None:
+            raise ValueError("label_view(...) requires label hierarchy metadata on the dataset.")
+        labels, view_metadata = label_view_from_paths(
+            hierarchy["paths"],
+            level=level,
+            level_names=hierarchy.get("level_names"),
+        )
+        if name is not None:
+            view_metadata["name"] = str(name)
+            view_metadata["key"] = f"hierarchy:{view_metadata['level']}:{view_metadata['name']}"
+        metadata = dict(self.metadata)
+        metadata["label_view"] = view_metadata
+        dataset = BenchmarkDataset(
+            X=self.X,
+            y=labels,
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            metadata=metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    def active_label_view(self) -> Dict[str, Any]:
+        """Return metadata describing the active dataset label view."""
+
+        view = self.metadata.get("label_view")
+        if view is None:
+            return default_label_view_metadata()
+        return dict(view)
+
     def iter_batches(
         self,
         batch_size: int,
@@ -393,6 +465,13 @@ class BenchmarkDataset:
                 "sample_indices": sample_indices,
             }
         )
+        hierarchy = merged_metadata.get("label_hierarchy")
+        if hierarchy is not None:
+            paths = hierarchy.get("paths")
+            if paths is not None:
+                hierarchy = dict(hierarchy)
+                hierarchy["paths"] = np.asarray(paths, dtype=object)[index_array].tolist()
+                merged_metadata["label_hierarchy"] = hierarchy
         merged_metadata.update(metadata or {})
         dataset = BenchmarkDataset(
             X=_take_samples(self.X, index_array),
@@ -419,6 +498,7 @@ class BenchmarkDataset:
             "modality": self.modality,
             "input_col": self.input_col,
             "label_col": self.label_col,
+            "label_view": self.active_label_view(),
             "metadata": self.metadata,
         }
 

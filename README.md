@@ -286,13 +286,23 @@ print(result.to_dataframe())
 
 You can also benchmark multiple embedding outputs from the same backbone without
 duplicating extractor classes. This is useful for comparing intermediate layers,
-pooling strategies, or multi-head outputs from one model:
+pooling strategies, or multi-head outputs from one model. When the dataset has
+hierarchy metadata from `with_label_hierarchy(...)`, outputs can be routed to
+different hierarchy levels:
 
 ```python
-from vertebrae import Benchmark
+from vertebrae import Benchmark, LabelViewConfig
 from vertebrae.extractors import HFVisionExtractor
 
-benchmark = Benchmark(dataset)
+benchmark = Benchmark(
+    dataset,
+    label_view_config=LabelViewConfig(
+        output_levels={
+            "mid_cls": "family",
+            "final_cls": "leaf",
+        },
+    ),
+)
 benchmark.add_extractor(
     HFVisionExtractor(
         name="mnist_vit",
@@ -307,14 +317,14 @@ benchmark.add_extractor(
 )
 
 result = benchmark.run()
-print(result.to_dataframe()[["name", "overlap_macro"]])
+print(result.to_dataframe()[["extractor", "label_view", "overlap_macro"]])
 ```
 
 Each configured output is scored as its own result variant, so this run produces
-rows named `mnist_vit:final_cls` and `mnist_vit:mid_cls`. See
-`examples/hf_vision_mnist.py` for a fuller example that compares multi-output
-Hugging Face vision embeddings alongside a classical scikit-learn image
-baseline.
+rows such as `mnist_vit:mid_cls[level=family]` and
+`mnist_vit:final_cls[level=leaf]`. See `examples/hf_vision_mnist.py` for a fuller
+example that compares multi-output Hugging Face vision embeddings alongside a
+classical scikit-learn image baseline.
 
 ## Supported Workflows
 
