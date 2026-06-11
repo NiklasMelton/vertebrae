@@ -9,8 +9,8 @@ the same boundaries needed for future HPC, Ray, Dask, and multi-GPU backends:
   embeddings without keeping the full raw dataset in memory.
 - Scoring consumes embeddings and labels through `OverlapIndexScorer`.
 - Reports render from serialized result data.
-- `ExecutionBackend` supports `submit`, `gather`, `status`, and `map`, with only
-  the local backend implemented.
+- `ExecutionBackend` supports `submit`, `gather`, `status`, and `map`, with local,
+  Ray, and Dask implementations available.
 
 Distributed artifact materialization now supports multi-output extractors by
 writing one embedding artifact per named output. Each output remains a normal 2D
@@ -144,7 +144,6 @@ vertebrae score-repeats \
   --repeats 20 \
   --backend dask \
   --dask-address tcp://scheduler:8786
-```
 ```
 
 For SLURM, generate an array script:

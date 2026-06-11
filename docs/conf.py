@@ -19,7 +19,7 @@ author = "Niklas Melton"
 with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as pyproject_file:
     pyproject = tomllib.load(pyproject_file)
 
-release = pyproject["tool"]["poetry"]["version"]
+release = pyproject.get("project", {}).get("version") or pyproject["tool"]["poetry"]["version"]
 version = release
 
 extensions = [

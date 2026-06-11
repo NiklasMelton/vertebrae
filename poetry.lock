@@ -8600,4 +8600,4 @@ video = ["av", "pytorchvideo", "torch", "transformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-content-hash = "177cc8452281a45a1c82887905d5007dfa238625740b2378c476e224c6413ac3"
+content-hash = "cffbb54883167ba1b7b008fcb2b4878d5a4eea148422009aba89f658fe1a2ffd"
