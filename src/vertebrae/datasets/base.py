@@ -320,6 +320,69 @@ class BenchmarkDataset:
         return dataset
 
     @classmethod
+    def from_multimodal(
+        cls,
+        inputs: Dict[str, Any],
+        labels: Any,
+        modalities: Dict[str, str],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Create a dataset from aligned multi-modal sample fields.
+
+        Args:
+            inputs: Mapping from field name to aligned per-sample values.
+            labels: Class labels.
+            modalities: Mapping from field name to modality string.
+            metadata: Optional metadata to preserve.
+
+        Returns:
+            Validated multi-modal dataset.
+        """
+
+        if not isinstance(inputs, dict):
+            raise ValueError("inputs must be a dict mapping field names to aligned sample data.")
+        if not isinstance(modalities, dict):
+            raise ValueError("modalities must be a dict mapping field names to modality names.")
+        if not inputs:
+            raise ValueError("inputs must not be empty.")
+        input_keys = list(inputs.keys())
+        modality_keys = list(modalities.keys())
+        if set(input_keys) != set(modality_keys):
+            raise ValueError(
+                "inputs and modalities must contain the same field names; "
+                f"got {sorted(input_keys)} and {sorted(modality_keys)}."
+            )
+
+        label_array = np.asarray(labels)
+        normalized_inputs: Dict[str, Any] = {}
+        for field_name in input_keys:
+            normalized_inputs[field_name] = _normalize_multimodal_field(
+                inputs[field_name],
+                n_samples=len(label_array),
+                field_name=field_name,
+            )
+            if _field_has_missing_top_level_values(normalized_inputs[field_name]):
+                raise ValueError(
+                    "Multi-modal inputs must include a non-missing value for every sample; "
+                    f"field '{field_name}' contains missing values."
+                )
+
+        merged_metadata: Dict[str, Any] = {
+            "source": "multimodal",
+            "input_fields": input_keys,
+            "modalities": {key: str(modalities[key]) for key in input_keys},
+        }
+        merged_metadata.update(metadata or {})
+        dataset = cls(
+            X=normalized_inputs,
+            y=label_array,
+            modality="multimodal",
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
     def from_embeddings(
         cls,
         embeddings: Any,
@@ -644,3 +707,55 @@ def _coerce_object_sequence(value: Any) -> np.ndarray:
     result = np.empty(len(items), dtype=object)
     result[:] = items
     return result
+
+
+def _normalize_multimodal_field(value: Any, n_samples: int, field_name: str) -> Any:
+    if is_sparse_matrix(value):
+        normalized = value
+    elif hasattr(value, "iloc"):
+        normalized = value
+    elif isinstance(value, np.ndarray):
+        normalized = value
+    else:
+        normalized = _coerce_object_sequence(value)
+    actual_n_samples = _num_samples(normalized)
+    if actual_n_samples != n_samples:
+        raise ValueError(
+            f"Multi-modal field '{field_name}' must have {n_samples} samples; "
+            f"got {actual_n_samples}."
+        )
+    return normalized
+
+
+def _field_has_missing_top_level_values(value: Any) -> bool:
+    if is_sparse_matrix(value):
+        return False
+    if hasattr(value, "isna"):
+        try:
+            return bool(value.isna().any())
+        except Exception:
+            pass
+    if isinstance(value, np.ndarray):
+        if value.ndim > 1 and value.dtype != object:
+            return False
+        items = value.tolist() if value.ndim == 1 else list(value)
+        return any(_is_missing_scalar(item) for item in items)
+    if isinstance(value, (list, tuple)):
+        return any(_is_missing_scalar(item) for item in value)
+    return False
+
+
+def _is_missing_scalar(value: Any) -> bool:
+    try:
+        import pandas as pd
+
+        result = pd.isna(value)
+        if isinstance(result, (bool, np.bool_)):
+            return bool(result)
+    except ImportError:
+        pass
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return bool(np.isnan(value))
+    return False

@@ -31,6 +31,10 @@ Multi-output extractors contribute one `ExtractorResult` per named output. Resul
 names use the form `parent_name:output_name`, and embedding metadata preserves
 `parent_extractor_name` and `output_name`.
 
+For multi-modal workflows, dataset summaries preserve the aligned field and
+per-field modality metadata, and embedding metadata can also preserve
+per-output source details such as `image`, `text`, or `fused`.
+
 Hierarchy-level benchmarks contribute one `ExtractorResult` per evaluated label
 view. Those results preserve `label_view` metadata and qualify extractor names with
 suffixes such as `extractor[level=family]`.
@@ -68,11 +72,13 @@ is aimed at practical review and sharing.
 At a high level, reports include:
 
 - dataset summary,
+- multi-modal dataset field and modality metadata when available,
 - extractor summary,
 - label-view metadata when hierarchy-derived views are benchmarked,
 - overlap configuration,
 - ranked comparison table for multi-extractor runs,
 - global and per-class scores,
+- per-output branch or fused source metadata when available,
 - Separatix recommendation and confidence when available,
 - weakest class,
 - stability summary,

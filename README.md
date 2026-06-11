@@ -257,6 +257,32 @@ extractor = HFAudioExtractor(
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
+### Hugging Face multi-modal models
+
+```python
+from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae.extractors import HFMultimodalExtractor
+
+dataset = BenchmarkDataset.from_multimodal(
+    inputs={"image": images, "caption": captions},
+    labels=labels,
+    modalities={"image": "image", "caption": "text"},
+)
+
+extractor = HFMultimodalExtractor(
+    name="clip_like",
+    model_id="openai/clip-vit-base-patch32",
+    input_modalities={"image": "image", "caption": "text"},
+    outputs=[
+        {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
+        {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
+        {"name": "fused", "source": "fused", "model_output": "pooler_output"},
+    ],
+)
+
+result = Evaluator(dataset=dataset, extractor=extractor).run()
+```
+
 ### Hugging Face time-series backbones
 
 ```python
@@ -362,6 +388,8 @@ classical scikit-learn image baseline.
 - scikit-learn transformers and pipelines,
 - custom Python callable extractors,
 - Hugging Face audio backbones through `HFAudioExtractor`,
+- Hugging Face image-text and other structured multi-modal backbones through
+  `HFMultimodalExtractor`,
 - Hugging Face video backbones through `HFVideoExtractor`,
 - Hugging Face time-series backbones through `HFTimeSeriesExtractor`,
 - local PyTorch modules through `TorchExtractor`,

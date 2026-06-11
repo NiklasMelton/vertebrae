@@ -16,6 +16,11 @@ Distributed artifact materialization now supports multi-output extractors by
 writing one embedding artifact per named output. Each output remains a normal 2D
 embedding artifact for downstream scoring and compression.
 
+The same artifact flow works for aligned multi-modal datasets because dataset
+pickles preserve structured fields and multi-output extractors still materialize
+ordinary per-output embedding artifacts. Missing modalities are not supported in
+v1; workers should receive complete aligned samples.
+
 Distributed backends can shard embedding generation across workers, then submit scoring
 jobs over saved embedding and label artifacts. New extractors should keep deterministic
 row order, avoid hidden global state, and include all model/preprocessing settings in

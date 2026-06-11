@@ -10,6 +10,8 @@
 - `SentenceTransformerExtractor`: lazy-loads sentence-transformers models.
 - `HFTextExtractor`: lazy-loads Hugging Face text backbones with explicit pooling.
 - `HFAudioExtractor`: lazy-loads Hugging Face audio backbones with explicit pooling.
+- `HFMultimodalExtractor`: lazy-loads Hugging Face multi-modal backbones with
+  explicit branch and fused output selection.
 - `HFTimeSeriesExtractor`: lazy-loads Hugging Face time-series backbones with explicit pooling.
 - `HFVideoExtractor`: lazy-loads Hugging Face video backbones with explicit pooling.
 - `HFVisionExtractor`: lazy-loads Hugging Face vision backbones when optional
@@ -31,6 +33,7 @@ Native multi-output support is available for:
 
 - `HFTextExtractor`
 - `HFAudioExtractor`
+- `HFMultimodalExtractor`
 - `HFTimeSeriesExtractor`
 - `HFVideoExtractor`
 - `HFVisionExtractor`
@@ -45,6 +48,31 @@ extractor = HFVisionExtractor(
     outputs=[
         {"name": "final_cls", "pooling": "cls"},
         {"name": "mid_cls", "pooling": "cls", "hidden_layer": 6},
+    ],
+)
+```
+
+For paired image-text models, `HFMultimodalExtractor` works with aligned
+structured dataset inputs and explicit named branch or fused outputs:
+
+```python
+from vertebrae import BenchmarkDataset
+from vertebrae.extractors import HFMultimodalExtractor
+
+dataset = BenchmarkDataset.from_multimodal(
+    inputs={"image": images, "caption": captions},
+    labels=labels,
+    modalities={"image": "image", "caption": "text"},
+)
+
+extractor = HFMultimodalExtractor(
+    name="clip_like",
+    model_id="openai/clip-vit-base-patch32",
+    input_modalities={"image": "image", "caption": "text"},
+    outputs=[
+        {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
+        {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
+        {"name": "fused", "source": "fused", "model_output": "pooler_output"},
     ],
 )
 ```
@@ -83,6 +111,12 @@ shape `(time, height, width, channels)`, or structured dictionaries containing
 `frames` / `path`. Time-series extractors accept dense arrays with shape `(n, time)`
 or `(n, time, channels)`, plus optional structured fields such as
 `observed_mask` and `time_features`.
+
+`HFMultimodalExtractor` accepts dict inputs keyed by declared field names. For
+common image-text models it maps image fields to processor `images` and text
+fields to processor `text` by default. Use `input_map` or `input_fn` for custom
+processor shapes, and `output_fn` when model outputs need explicit projection
+before named output validation.
 
 Streaming-safe extractors, including Hugging Face backbones and precomputed embeddings,
 can be embedded batch-by-batch through `EmbeddingConfig(batch_size=...)`. This is

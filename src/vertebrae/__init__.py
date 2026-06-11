@@ -62,6 +62,7 @@ from vertebrae.execution import (
     validate_embedding_label_artifacts,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.huggingface_multimodal import HFMultimodalExtractor
 from vertebrae.results import BenchmarkResult, ExtractorResult
 
 __all__ = [
@@ -81,6 +82,7 @@ __all__ = [
     "EmbeddingShardJob",
     "Evaluator",
     "ExtractorResult",
+    "HFMultimodalExtractor",
     "GCSArtifactStore",
     "LocalArtifactStore",
     "LocalBackend",
