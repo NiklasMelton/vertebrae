@@ -19,7 +19,8 @@ Each extractor contributes an `ExtractorResult` with:
 - extractor identity and type,
 - `OverlapScoreResult`,
 - optional stability summary,
-- optional probe summary,
+- optional native probe summary,
+- optional Separatix complexity diagnostic,
 - embedding metadata,
 - runtime timing metadata,
 - warnings,
@@ -63,11 +64,16 @@ At a high level, reports include:
 - overlap configuration,
 - ranked comparison table for multi-extractor runs,
 - global and per-class scores,
+- Separatix recommendation and confidence when available,
 - weakest class,
 - stability summary,
 - warnings,
 - recommendations,
 - reproducibility metadata.
+
+Separatix is the default classifier-complexity diagnostic when the overlap gate
+passes. Native vertebrae probes remain available as an explicit quick-check
+option through `ProbeConfig(enabled=True)`.
 
 ## What recommendations mean
 
@@ -79,6 +85,10 @@ Use them as a triage aid:
 - shortlist strong frozen representations,
 - flag weak classes for inspection,
 - compare multiple candidate extractors under the same benchmark setup.
+
+Separatix recommendations are complementary. They describe the apparent classifier
+complexity of the labeled embedding space and do not replace vertebrae's overlap-based
+ranking or existing benchmark recommendation label.
 
 ## Reproducibility mindset
 

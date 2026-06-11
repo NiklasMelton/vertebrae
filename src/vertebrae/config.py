@@ -46,6 +46,42 @@ class OverlapScoringConfig:
 
 
 @dataclass
+class SeparatixConfig:
+    """Configuration for optional Separatix complexity diagnostics.
+
+    Attributes:
+        enabled: Whether Separatix diagnostics should run.
+        overlap_threshold: Minimum overlap macro score required to run.
+        random_state: Seed forwarded to Separatix.
+        budget: Optional Separatix diagnostic budget.
+        max_samples: Optional Separatix sample cap.
+        max_dense_bytes: Optional sparse densification memory limit in bytes.
+        n_jobs: Optional parallelism hint forwarded to Separatix.
+    """
+
+    enabled: bool = True
+    overlap_threshold: float = 0.80
+    random_state: Optional[int] = 42
+    budget: Optional[str] = None
+    max_samples: Optional[int] = None
+    max_dense_bytes: Optional[int] = None
+    n_jobs: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        allowed_budgets = {"fast", "standard", "extended"}
+        if not 0.0 <= self.overlap_threshold <= 1.0:
+            raise ValueError("SeparatixConfig.overlap_threshold must be between 0 and 1.")
+        if self.budget is not None and self.budget not in allowed_budgets:
+            raise ValueError(f"SeparatixConfig.budget must be one of {sorted(allowed_budgets)}.")
+        if self.max_samples is not None and self.max_samples < 1:
+            raise ValueError("SeparatixConfig.max_samples must be >= 1 when provided.")
+        if self.max_dense_bytes is not None and self.max_dense_bytes < 1:
+            raise ValueError("SeparatixConfig.max_dense_bytes must be >= 1 when provided.")
+        if self.n_jobs is not None and self.n_jobs < 1:
+            raise ValueError("SeparatixConfig.n_jobs must be >= 1 when provided.")
+
+
+@dataclass
 class StabilityConfig:
     """Configuration for prototype or subsample stability analysis.
 
@@ -81,16 +117,16 @@ class StabilityConfig:
 
 @dataclass
 class ProbeConfig:
-    """Configuration for lightweight probe classifiers.
+    """Configuration for optional lightweight probe classifiers.
 
     Attributes:
-        enabled: Whether probe evaluation should run.
+        enabled: Whether native probe evaluation should run.
         test_size: Fraction of samples held out for probe testing.
         random_state: Seed used for train/test splitting.
         methods: Probe classifiers to evaluate.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     test_size: float = 0.2
     random_state: int = 42
     methods: Tuple[str, ...] = ("knn", "logistic_regression")

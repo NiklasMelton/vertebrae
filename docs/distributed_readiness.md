@@ -178,3 +178,9 @@ and CPU-distributed analysis workflows from overcommitting memory.
 
 The metric backend remains fixed: all scoring goes through MiniBatchKMeans-backed
 `overlapindex.OverlapIndex` via the internal `OverlapIndexScorer` adapter.
+
+Artifact-backed workflows can also attach a Separatix diagnostic artifact after
+overlap scoring. Use the CLI `diagnose-complexity` command with an embedding key,
+labels key, and score key. The score artifact provides the overlap macro used to
+gate Separatix execution, and `benchmark-from-artifacts --separatix-key ...` can
+fold that diagnostic back into the final benchmark-style JSON or Markdown report.

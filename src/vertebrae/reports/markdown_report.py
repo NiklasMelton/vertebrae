@@ -44,25 +44,42 @@ def render_markdown_report(result: Any) -> str:
     )
     for item in data.get("recommendations", []):
         lines.append(f"- {item}")
+    top_ranked = result.ranked_results()[0] if result.extractor_results else None
+    if top_ranked and top_ranked.separatix and top_ranked.separatix.ran:
+        lines.append(
+            "- "
+            f"Separatix complexity guidance for the top representation: "
+            f"{top_ranked.separatix.recommendation or ''} "
+            f"({top_ranked.separatix.confidence or ''} confidence).".strip()
+        )
     lines.extend(["", "## Ranking", ""])
     lines.append(
         "| rank | extractor | extractor_type | overlap_macro | stability_interval | "
         "weakest_class | probe_accuracy | embedding_dim | compression | "
-        "compressed_dim | recommendation |"
+        "compressed_dim | recommendation | separatix_recommendation | "
+        "separatix_confidence |"
     )
-    lines.append("| --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | --- |")
+    lines.append(
+        "| --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
+    )
     for rank, item in enumerate(result.ranked_results(), start=1):
         interval = _format_interval(item.stability)
         weakest = item.weakest_class if item.weakest_class is not None else ""
-        probe_accuracy = _best_probe_accuracy(item.probes)
+        probe_accuracy = _probe_accuracy(item.probes, item.separatix)
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
         compression_method = item.compression_metadata.get("method", "none")
         compressed_dim = item.compression_metadata.get("compressed_dim", embedding_dim)
+        separatix_recommendation = ""
+        separatix_confidence = ""
+        if item.separatix:
+            separatix_recommendation = item.separatix.recommendation or ""
+            separatix_confidence = item.separatix.confidence or ""
         lines.append(
             f"| {rank} | {item.name} | {item.extractor_type} | "
             f"{item.overlap.macro_score:.4f} | {interval} | {weakest} | "
             f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
-            f"{compressed_dim} | {item.recommendation} |"
+            f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
+            f"{separatix_confidence} |"
         )
 
     lines.extend(["", "## Per-extractor details", ""])
@@ -157,6 +174,37 @@ def render_markdown_report(result: Any) -> str:
             lines.append("Probe evaluation was not run.")
         lines.append("")
 
+        lines.extend(["#### Separatix complexity diagnostic", ""])
+        if item.separatix is None:
+            lines.append("Separatix diagnostics were disabled.")
+        elif not item.separatix.ran:
+            lines.append(f"- Skipped: {item.separatix.skipped_reason or ''}")
+        else:
+            lines.append(f"- Recommendation: {item.separatix.recommendation or ''}")
+            lines.append(f"- Confidence: {item.separatix.confidence or ''}")
+            lines.append(f"- Summary: {(item.separatix.recommendation_text or '').strip()}")
+            if item.separatix.decision_path:
+                lines.append("- Decision path:")
+                for step in item.separatix.decision_path:
+                    lines.append(f"  - {step}")
+            if item.separatix.scores:
+                lines.append("")
+                lines.append("| score | value |")
+                lines.append("| --- | ---: |")
+                for key, value in item.separatix.scores.items():
+                    lines.append(f"| {key} | {_format_float(value)} |")
+            if item.separatix.skipped_diagnostics:
+                lines.append("")
+                lines.append("- Skipped diagnostics:")
+                for entry in item.separatix.skipped_diagnostics:
+                    lines.append(f"  - {entry.get('name', '')}: {entry.get('reason', '')}")
+            if item.separatix.warnings:
+                lines.append("")
+                lines.append("- Warnings:")
+                for warning in item.separatix.warnings:
+                    lines.append(f"  - {warning}")
+        lines.append("")
+
         warnings = item.warnings
         if warnings:
             lines.extend(["#### Warnings", ""])
@@ -183,7 +231,14 @@ def _format_interval(stability: Any) -> str:
     return f"{_format_float(summary.get('lower'))}-{_format_float(summary.get('upper'))}"
 
 
-def _best_probe_accuracy(probes: Any) -> str:
+def _probe_accuracy(probes: Any, separatix: Any) -> str:
+    separatix_accuracy = _separatix_probe_accuracy(separatix)
+    if separatix_accuracy:
+        return separatix_accuracy
+    return _native_probe_accuracy(probes)
+
+
+def _native_probe_accuracy(probes: Any) -> str:
     if not probes or not probes.get("enabled"):
         return ""
     accuracies = [
@@ -194,6 +249,23 @@ def _best_probe_accuracy(probes: Any) -> str:
     if not accuracies:
         return ""
     return f"{max(accuracies):.4f}"
+
+
+def _separatix_probe_accuracy(separatix: Any) -> str:
+    if not separatix or not getattr(separatix, "ran", False):
+        return ""
+    report = getattr(separatix, "report", None) or {}
+    metrics = report.get("metrics", {})
+    baseline = metrics.get("baseline", {})
+    probes = metrics.get("probes", {})
+    best_probe = baseline.get("best_probe")
+    if not best_probe:
+        return ""
+    best_probe_metrics = probes.get(best_probe, {})
+    accuracy = best_probe_metrics.get("accuracy")
+    if accuracy is None:
+        return ""
+    return _format_float(accuracy)
 
 
 def _format_float(value: Any) -> str:

@@ -18,6 +18,7 @@ from vertebrae.config import (
     MemoryConfig,
     OverlapScoringConfig,
     ProbeConfig,
+    SeparatixConfig,
     StabilityConfig,
 )
 from vertebrae.execution.jobs import SampleBatch
@@ -30,6 +31,7 @@ from vertebrae.reports.recommendations import (
 from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.overlap import OverlapIndexScorer
 from vertebrae.scoring.probes import run_probes
+from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
 from vertebrae.utils.memory import (
     EmbeddingMemoryEstimate,
@@ -51,7 +53,7 @@ class Benchmark:
         extractors: Optional iterable of extractors to evaluate.
         scoring_config: OverlapIndex scoring configuration.
         stability_config: Stability-analysis configuration.
-        probe_config: Probe-classifier configuration.
+        probe_config: Optional native probe-classifier configuration.
         cache_config: Embedding cache configuration.
         embedding_config: Embedding batching and streaming configuration.
         execution: Local execution backend.
@@ -64,6 +66,7 @@ class Benchmark:
         scoring_config: Optional[OverlapScoringConfig] = None,
         stability_config: Optional[StabilityConfig] = None,
         probe_config: Optional[ProbeConfig] = None,
+        separatix_config: Optional[SeparatixConfig] = None,
         cache_config: Optional[CacheConfig] = None,
         compression_config: Optional[EmbeddingCompressionConfig] = None,
         compression_configs: Optional[Iterable[EmbeddingCompressionConfig]] = None,
@@ -76,6 +79,7 @@ class Benchmark:
         self.scoring_config = scoring_config or OverlapScoringConfig()
         self.stability_config = stability_config or StabilityConfig()
         self.probe_config = probe_config or ProbeConfig()
+        self.separatix_config = separatix_config or SeparatixConfig()
         self.cache_config = cache_config or CacheConfig()
         if compression_config is not None and compression_configs is not None:
             raise ValueError("Provide compression_config or compression_configs, not both.")
@@ -134,6 +138,7 @@ class Benchmark:
                 "scoring_config": asdict(self.scoring_config),
                 "stability_config": asdict(self.stability_config),
                 "probe_config": asdict(self.probe_config),
+                "separatix_config": asdict(self.separatix_config),
                 "cache_config": asdict(self.cache_config),
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
@@ -203,6 +208,16 @@ class Benchmark:
                 variant_runtime["scoring_seconds"] = perf_counter() - score_start
                 variant_warnings.extend(overlap.warnings)
 
+                separatix_start = perf_counter()
+                separatix = self._run_separatix_diagnostic(
+                    compressed_embeddings,
+                    dataset.y,
+                    overlap.macro_score,
+                )
+                variant_runtime["separatix_seconds"] = perf_counter() - separatix_start
+                if separatix:
+                    variant_warnings.extend(separatix.warnings)
+
                 stability_start = perf_counter()
                 stability = run_stability_analysis(
                     compressed_embeddings,
@@ -237,6 +252,7 @@ class Benchmark:
                         overlap=overlap,
                         stability=stability,
                         probes=probes,
+                        separatix=separatix,
                         embedding_metadata=embedding_metadata,
                         compression_metadata=compression_metadata,
                         runtime=variant_runtime,
@@ -249,6 +265,29 @@ class Benchmark:
         if len(results) == 1:
             return results[0]
         return results
+
+    def _run_separatix_diagnostic(
+        self,
+        embeddings: Any,
+        labels: Any,
+        macro_score: float,
+    ) -> Optional[SeparatixResult]:
+        if not self.separatix_config.enabled:
+            return None
+        scorer = SeparatixScorer(
+            config=self.separatix_config,
+            overlap_config=self.scoring_config,
+        )
+        if macro_score < self.separatix_config.overlap_threshold:
+            return scorer.skipped_result(
+                reason=(
+                    "Skipped Separatix because overlap macro "
+                    f"{macro_score:.4f} is below the configured threshold "
+                    f"{self.separatix_config.overlap_threshold:.4f}."
+                ),
+                macro_score=macro_score,
+            )
+        return scorer.score(embeddings, labels)
 
     def _prepare_dataset_for_extractor(
         self,

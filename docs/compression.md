@@ -1,7 +1,8 @@
 # embedding compression
 
 `vertebrae` can apply an optional embedding-compression step after feature
-extraction and before OverlapIndex scoring, stability analysis, and probes.
+extraction and before OverlapIndex scoring, stability analysis, Separatix
+diagnostics, and any opt-in native probes.
 This is useful when you want to:
 
 - compare raw embeddings against compressed variants,
@@ -20,7 +21,7 @@ Use `EmbeddingCompressionConfig` with `Evaluator` or `Benchmark`:
 
 ```python
 from vertebrae import BenchmarkDataset, EmbeddingCompressionConfig, Evaluator
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
 dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y)
@@ -36,7 +37,6 @@ result = Evaluator(
     extractor=PrecomputedExtractor(name="baseline"),
     compression_config=compression,
     stability_config=StabilityConfig(enabled=False),
-    probe_config=ProbeConfig(enabled=False),
     cache_config=CacheConfig(cache_dir=".vertebrae_cache"),
 ).run()
 ```

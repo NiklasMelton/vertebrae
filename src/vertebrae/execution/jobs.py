@@ -221,3 +221,15 @@ class ScoringJob:
     scoring_config: Any = None
     seed: Optional[int] = None
     resources: ResourceSpec = ResourceSpec()
+
+
+@dataclass(frozen=True)
+class SeparatixJob:
+    """Description of a Separatix diagnostic job over persisted embeddings."""
+
+    embedding_key: str
+    labels_key: str
+    score_key: str
+    output_key: str
+    separatix_config: Any = None
+    resources: ResourceSpec = ResourceSpec()

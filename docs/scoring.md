@@ -3,6 +3,10 @@
 All overlap scoring in `vertebrae` goes through one internal adapter:
 `OverlapIndexScorer`.
 
+`vertebrae` can also run a default Separatix complexity diagnostic through the
+internal `SeparatixScorer` adapter. Separatix does not affect extractor ranking;
+it adds classifier-complexity guidance on top of the overlap result when enabled.
+
 ## Fixed metric backend
 
 `vertebrae` depends on the external `overlapindex` package and does not reimplement
@@ -107,6 +111,35 @@ stability = StabilityConfig(mode="prototype", repeats=20, interval_level=0.95)
 `vertebrae` reports these as stability summaries and stability intervals. They are
 not formal confidence intervals unless a different statistical protocol is added
 explicitly in a future release.
+
+## Separatix diagnostics
+
+Use `SeparatixConfig` to control the optional complexity diagnostic stage:
+
+```python
+from vertebrae import SeparatixConfig
+
+config = SeparatixConfig(
+    enabled=True,
+    overlap_threshold=0.80,
+    random_state=42,
+)
+```
+
+Current behavior:
+
+- Separatix runs on the same evaluated embedding variant that overlap scores.
+- It runs after compression and after the main overlap score is available.
+- By default it only runs when `overlap.macro_score >= 0.80`.
+- The full Separatix report is preserved in JSON outputs, while Markdown reports
+  show a compact recommendation, confidence, decision path, key scores, and skips.
+
+Separatix follows the same normalization convention as overlap scoring when
+`normalize_embeddings=True`. Sparse inputs remain sparse at the vertebrae boundary,
+and Separatix uses its own densification policy internally.
+
+Native vertebrae probes are still available through `ProbeConfig`, but they are
+now opt-in quick checks rather than part of the default report path.
 
 ## Practical guidance
 

@@ -34,3 +34,20 @@ def test_precomputed_single_extractor_workflow_writes_reports(tmp_path, fake_ove
     assert payload["extractor_results"][0]["name"] == "embeddings"
     assert "Ranking" in markdown_path.read_text(encoding="utf-8")
     assert len(fake_overlapindex.calls) == 4
+
+
+def test_native_probes_are_disabled_by_default(fake_overlapindex):
+    embeddings = np.arange(48, dtype=float).reshape(16, 3)
+    labels = np.array(["left"] * 8 + ["right"] * 8)
+    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor(name="embeddings"),
+        stability_config=StabilityConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+
+    item = result.extractor_results[0]
+    assert item.probes is None
+    assert result.metadata["probe_config"]["enabled"] is False

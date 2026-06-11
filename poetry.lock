@@ -4140,14 +4140,14 @@ torch = ["torch"]
 
 [[package]]
 name = "overlapindex"
-version = "0.1.2"
+version = "0.1.3a1"
 description = "OverlapIndex (OI), an Incremental Cluster Validity index for identifying the degree of overlap of data classes."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "overlapindex-0.1.2-py3-none-any.whl", hash = "sha256:185e4b30dc9950747431f54b06f47d94ab4dcb3f20183c3da7aed9afda35c38a"},
-    {file = "overlapindex-0.1.2.tar.gz", hash = "sha256:aa61f7cc545a3e5280c66c91df48dbb836e239e0ef27fca7dd85407937eba1fb"},
+    {file = "overlapindex-0.1.3a1-py3-none-any.whl", hash = "sha256:de84d4b8952464eda3aae35aff9c8ff5e01bf0348df1252fc9b2c37ff17d5939"},
+    {file = "overlapindex-0.1.3a1.tar.gz", hash = "sha256:48b44501b9fef38aa23225cb0eb7da15df63b2968b949ed28d5273e7c8009d66"},
 ]
 
 [package.dependencies]
@@ -6636,6 +6636,28 @@ openvino = ["optimum-intel[openvino] (>=1.20.0)"]
 train = ["accelerate (>=0.20.3)", "datasets"]
 
 [[package]]
+name = "separatix"
+version = "0.1.0a1"
+description = "Diagnostic profiling of labeled embeddings for classification model complexity guidance."
+optional = false
+python-versions = "<3.15,>=3.9"
+groups = ["main"]
+files = [
+    {file = "separatix-0.1.0a1-py3-none-any.whl", hash = "sha256:b20af5da79e20bf08dbe3d91d92a9135531c72b82fa8bd95b1e981f0464cb32e"},
+    {file = "separatix-0.1.0a1.tar.gz", hash = "sha256:8af2251748a9b46b21169f4a578329f199b9b2fd8877686f2db8a4c5048ced5b"},
+]
+
+[package.dependencies]
+numpy = ">=1.23"
+scikit-learn = ">=1.2"
+scipy = ">=1.9"
+
+[package.extras]
+examples = ["matplotlib (>=3.6)", "pandas (>=1.5)"]
+pandas = ["pandas (>=1.5)"]
+tda = ["ripser (>=0.6)"]
+
+[[package]]
 name = "setuptools"
 version = "81.0.0"
 description = "Easily download, build, install, upgrade, and uninstall Python packages"
@@ -8329,4 +8351,4 @@ torch = ["torch"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-content-hash = "88f8dc0a94cd2a681f48169ab7de85a8a2a06af4fff0605feb6737b5d070f0dd"
+content-hash = "d5bf9ea3c595ed976b54d0ef664279bbba60af1855087828a149d8ae19841cb1"
