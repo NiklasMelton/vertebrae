@@ -31,6 +31,14 @@ Multi-output extractors contribute one `ExtractorResult` per named output. Resul
 names use the form `parent_name:output_name`, and embedding metadata preserves
 `parent_extractor_name` and `output_name`.
 
+Hierarchy-level benchmarks contribute one `ExtractorResult` per evaluated label
+view. Those results preserve `label_view` metadata and qualify extractor names with
+suffixes such as `extractor[level=family]`.
+
+When named extractor outputs are mapped to hierarchy levels, result names preserve
+both dimensions, such as `extractor:layer_6[level=family]`. Embedding metadata keeps
+the original `output_name`, and result metadata keeps the active `label_view`.
+
 ## Ranking and tabular views
 
 `BenchmarkResult.ranked_results()` sorts extractors by descending macro overlap
@@ -61,6 +69,7 @@ At a high level, reports include:
 
 - dataset summary,
 - extractor summary,
+- label-view metadata when hierarchy-derived views are benchmarked,
 - overlap configuration,
 - ranked comparison table for multi-extractor runs,
 - global and per-class scores,

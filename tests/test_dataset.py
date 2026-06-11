@@ -164,3 +164,95 @@ def test_structured_dataset_subset_and_batches_align_fields():
     assert subset.metadata["sample_indices"] == [1, 2, 4, 5]
     assert batches[0].indices.tolist() == [0]
     assert batches[0].X["series"].shape == (1, 4, 2)
+
+
+def test_with_label_hierarchy_preserves_primary_labels_and_summary():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(8, 3),
+        ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+        modality="tabular",
+    ).with_label_hierarchy(
+        [
+            ("animal", "dog", "husky"),
+            ("animal", "dog", "husky"),
+            ("animal", "dog", "pug"),
+            ("animal", "dog", "pug"),
+            ("vehicle", "car", "sedan"),
+            ("vehicle", "car", "sedan"),
+            ("vehicle", "car", "suv"),
+            ("vehicle", "car", "suv"),
+        ],
+        level_names=("domain", "family", "leaf"),
+    )
+
+    assert dataset.class_counts() == {"husky": 2, "pug": 2, "sedan": 2, "suv": 2}
+    assert dataset.summary()["label_view"]["name"] == "primary"
+    assert dataset.metadata["label_hierarchy"]["level_names"] == ["domain", "family", "leaf"]
+
+
+def test_label_view_projects_named_hierarchy_level():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(8, 3),
+        ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+        modality="tabular",
+    ).with_label_hierarchy(
+        [
+            ("animal", "dog", "husky"),
+            ("animal", "dog", "husky"),
+            ("animal", "dog", "pug"),
+            ("animal", "dog", "pug"),
+            ("vehicle", "car", "sedan"),
+            ("vehicle", "car", "sedan"),
+            ("vehicle", "car", "suv"),
+            ("vehicle", "car", "suv"),
+        ],
+        level_names=("domain", "family", "leaf"),
+    )
+
+    family_view = dataset.label_view("family")
+
+    assert family_view.active_label_view()["name"] == "family"
+    assert family_view.class_counts() == {"animal > dog": 4, "vehicle > car": 4}
+    assert family_view.summary()["label_view"]["level"] == 1
+
+
+def test_label_view_subset_preserves_hierarchy_alignment():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(8, 3),
+        ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+        modality="tabular",
+    ).with_label_hierarchy(
+        [
+            ("animal", "dog", "husky"),
+            ("animal", "dog", "husky"),
+            ("animal", "dog", "pug"),
+            ("animal", "dog", "pug"),
+            ("vehicle", "car", "sedan"),
+            ("vehicle", "car", "sedan"),
+            ("vehicle", "car", "suv"),
+            ("vehicle", "car", "suv"),
+        ],
+        level_names=("domain", "family", "leaf"),
+    )
+
+    subset = dataset.subset([0, 1, 4, 5])
+    family_view = subset.label_view("family")
+
+    assert family_view.class_counts() == {"animal > dog": 2, "vehicle > car": 2}
+    assert subset.metadata["label_hierarchy"]["paths"] == [
+        ["animal", "dog", "husky"],
+        ["animal", "dog", "husky"],
+        ["vehicle", "car", "sedan"],
+        ["vehicle", "car", "sedan"],
+    ]
+
+
+def test_with_label_hierarchy_validates_alignment():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(12).reshape(4, 3),
+        ["a", "a", "b", "b"],
+        modality="tabular",
+    )
+
+    with pytest.raises(ValueError, match="same length as the dataset"):
+        dataset.with_label_hierarchy([("root", "a"), ("root", "a")])

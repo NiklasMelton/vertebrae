@@ -141,6 +141,35 @@ class ProbeConfig:
 
 
 @dataclass
+class LabelViewConfig:
+    """Configuration for optional hierarchical label-view benchmarking.
+
+    Attributes:
+        enabled: Whether hierarchy-derived label views should be evaluated.
+        hierarchy_levels: Sequence of hierarchy levels to evaluate. Each level
+            may be an integer index or a named level present in dataset metadata.
+        output_levels: Mapping from extractor output names to hierarchy levels.
+        skip_invalid_levels: Whether invalid or unavailable levels should be
+            skipped with a warning instead of raising.
+    """
+
+    enabled: bool = False
+    hierarchy_levels: Tuple[Union[int, str], ...] = (-1,)
+    output_levels: Dict[str, Union[int, str]] = field(default_factory=dict)
+    skip_invalid_levels: bool = True
+
+    def __post_init__(self) -> None:
+        if self.enabled and not self.hierarchy_levels:
+            raise ValueError("LabelViewConfig.hierarchy_levels must not be empty when enabled.")
+        if any(not isinstance(level, (int, str)) for level in self.hierarchy_levels):
+            raise ValueError("LabelViewConfig.hierarchy_levels entries must be ints or strs.")
+        if any(not isinstance(name, str) for name in self.output_levels):
+            raise ValueError("LabelViewConfig.output_levels keys must be output-name strings.")
+        if any(not isinstance(level, (int, str)) for level in self.output_levels.values()):
+            raise ValueError("LabelViewConfig.output_levels values must be ints or strs.")
+
+
+@dataclass
 class CacheConfig:
     """Artifact cache settings.
 

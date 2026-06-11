@@ -24,6 +24,7 @@ from vertebrae.execution.jobs import (
 )
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
+from vertebrae.utils.labels import label_view_suffix
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -227,6 +228,7 @@ def materialize_label_artifact(
         "n_samples": int(len(dataset.y)),
         "dtype": str(np.asarray(dataset.y).dtype),
         "class_counts": make_json_safe(dataset.class_counts()),
+        "label_view": make_json_safe(dataset.active_label_view()),
     }
     store.put_json(output_key, manifest)
     return manifest
@@ -569,8 +571,12 @@ def benchmark_result_from_artifacts(
         "name",
         embedding_metadata.get("extractor_name", "artifact"),
     )
+    label_view = label_metadata.get("label_view", embedding_metadata.get("label_view"))
     extractor_result = ExtractorResult(
-        name=_variant_extractor_name(base_name, compression_metadata),
+        name=_variant_extractor_name(
+            f"{base_name}{label_view_suffix(label_view)}",
+            compression_metadata,
+        ),
         extractor_type=embedding_metadata.get("extractor_recipe", {}).get(
             "extractor_type",
             embedding_metadata.get("extractor_type", "artifact"),
@@ -583,6 +589,7 @@ def benchmark_result_from_artifacts(
         compression_metadata=compression_metadata,
         runtime={},
         warnings=sorted(set(score_data.get("warnings", []))),
+        label_view=label_view,
         weakest_class=weakest_class,
         weakest_class_score=weakest_score,
         recommendation=recommendation,
@@ -593,6 +600,7 @@ def benchmark_result_from_artifacts(
             "n_classes": len(label_metadata.get("class_counts", {})),
             "class_counts": label_metadata.get("class_counts", {}),
             "modality": embedding_metadata.get("modality", "artifact"),
+            "label_view": label_metadata.get("label_view"),
         },
         extractor_results=[extractor_result],
         recommendations=recommendations_for_benchmark([extractor_result]),

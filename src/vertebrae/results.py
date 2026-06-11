@@ -23,6 +23,7 @@ class ExtractorResult:
         runtime: Runtime timing metadata by benchmark stage.
         warnings: Warnings produced during evaluation.
         recommendation: Recommendation label for this extractor.
+        label_view: Label-view metadata for the scoring target.
         weakest_class: Class with the lowest per-class score when available.
         weakest_class_score: Score for `weakest_class` when available.
     """
@@ -38,6 +39,7 @@ class ExtractorResult:
     runtime: Dict[str, Any]
     warnings: List[str]
     recommendation: str
+    label_view: Optional[Dict[str, Any]] = None
     weakest_class: Optional[str] = None
     weakest_class_score: Optional[float] = None
 
@@ -106,6 +108,7 @@ class BenchmarkResult:
                     "extractor": item.name,
                     "extractor_type": item.extractor_type,
                     "overlap_macro": item.overlap.macro_score,
+                    "label_view": (item.label_view or {}).get("name"),
                     "weakest_class": item.weakest_class,
                     "weakest_class_score": item.weakest_class_score,
                     "probe_accuracy": _best_probe_accuracy(item.probes),

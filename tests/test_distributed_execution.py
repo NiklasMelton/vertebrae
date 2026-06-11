@@ -271,6 +271,35 @@ def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
     assert store.get_json(score["output_key"])["score"]["metadata"]["backend"] == "MiniBatchKMeans"
 
 
+def test_label_artifact_preserves_active_label_view_metadata(tmp_path):
+    dataset = (
+        BenchmarkDataset.from_embeddings(
+            np.arange(24).reshape(8, 3),
+            ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+        )
+        .with_label_hierarchy(
+            [
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "pug"),
+                ("animal", "dog", "pug"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "suv"),
+                ("vehicle", "car", "suv"),
+            ],
+            level_names=("domain", "family", "leaf"),
+        )
+        .label_view("family")
+    )
+    store = LocalArtifactStore(str(tmp_path))
+
+    manifest = materialize_label_artifact(dataset, store)
+
+    assert manifest["label_view"]["name"] == "family"
+    assert store.get_json(manifest["output_key"])["label_view"]["level"] == 1
+
+
 def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overlapindex):
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
@@ -313,6 +342,57 @@ def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overl
     assert collection["seeds"] == [3, 5, 7]
     assert result["metadata"]["distributed_artifacts"] is True
     assert result["extractor_results"][0]["stability"]["summary"]["mean"] > 0.0
+
+
+def test_benchmark_from_artifacts_carries_label_view_metadata(tmp_path, fake_overlapindex):
+    dataset = (
+        BenchmarkDataset.from_embeddings(
+            np.arange(24).reshape(8, 3),
+            ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+        )
+        .with_label_hierarchy(
+            [
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "husky"),
+                ("animal", "dog", "pug"),
+                ("animal", "dog", "pug"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "sedan"),
+                ("vehicle", "car", "suv"),
+                ("vehicle", "car", "suv"),
+            ],
+            level_names=("domain", "family", "leaf"),
+        )
+        .label_view("family")
+    )
+    extractor = CallableExtractor(
+        "artifact_family",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            output_key=scoring_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store,
+    )
+
+    result = benchmark_result_from_artifacts(score_key=score["output_key"], store=store)
+
+    assert result["dataset_summary"]["label_view"]["name"] == "family"
+    assert result["extractor_results"][0]["label_view"]["name"] == "family"
 
 
 def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(
