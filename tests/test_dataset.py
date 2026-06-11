@@ -199,10 +199,7 @@ def test_structured_dataset_subset_and_batches_align_fields():
 
 def test_video_dataset_subset_and_batches_align_fields():
     dataset = BenchmarkDataset.from_video_arrays(
-        [
-            np.full((3, 2, 2, 3), fill_value=index, dtype=np.uint8)
-            for index in range(6)
-        ],
+        [np.full((3, 2, 2, 3), fill_value=index, dtype=np.uint8) for index in range(6)],
         labels=["a", "a", "a", "b", "b", "b"],
         frame_rate=12.0,
     )
