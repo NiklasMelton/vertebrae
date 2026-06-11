@@ -61,6 +61,12 @@ Optional Hugging Face time-series support only:
 pip install "vertebrae[timeseries]"
 ```
 
+Optional Hugging Face video support only:
+
+```bash
+pip install "vertebrae[video]"
+```
+
 Optional local PyTorch model support:
 
 ```bash
@@ -270,6 +276,27 @@ extractor = HFTimeSeriesExtractor(
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
+### Hugging Face video backbones
+
+```python
+from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae.extractors import HFVideoExtractor
+
+dataset = BenchmarkDataset.from_video_arrays(
+    frames=clips,
+    labels=labels,
+    frame_rate=24.0,
+)
+extractor = HFVideoExtractor(
+    name="videomae_base",
+    model_id="MCG-NJU/videomae-base",
+    pooling="mean",
+    num_frames=16,
+)
+
+result = Evaluator(dataset=dataset, extractor=extractor).run()
+```
+
 ### Multi-extractor comparison
 
 ```python
@@ -335,6 +362,7 @@ classical scikit-learn image baseline.
 - scikit-learn transformers and pipelines,
 - custom Python callable extractors,
 - Hugging Face audio backbones through `HFAudioExtractor`,
+- Hugging Face video backbones through `HFVideoExtractor`,
 - Hugging Face time-series backbones through `HFTimeSeriesExtractor`,
 - local PyTorch modules through `TorchExtractor`,
 - local Keras modules through `KerasExtractor`,
