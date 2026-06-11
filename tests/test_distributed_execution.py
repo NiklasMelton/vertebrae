@@ -231,6 +231,52 @@ def test_materialize_and_merge_embeddings_supports_multi_output(tmp_path):
     assert np.array_equal(store.get_array(right_key), dataset.X[:, 1:3] + 1)
 
 
+def test_multimodal_multi_output_shards_preserve_row_order(tmp_path):
+    dataset = BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"],
+            "caption": ["one", "two", "three", "four", "five", "six"],
+        },
+        labels=["a", "a", "a", "b", "b", "b"],
+        modalities={"image": "image", "caption": "text"},
+    )
+    extractor = MultiOutputExtractor(
+        name="fusion",
+        output_specs=[EmbeddingOutputSpec("image_branch"), EmbeddingOutputSpec("fused")],
+        transform_many_fn=lambda batch: {
+            "image_branch": np.asarray([[len(item)] for item in batch["image"]], dtype=float),
+            "fused": np.asarray(
+                [[len(image), len(text)] for image, text in zip(batch["image"], batch["caption"])],
+                dtype=float,
+            ),
+        },
+        modality="multimodal",
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+
+    manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=3,
+        batch_size=1,
+    )
+
+    image_branch = store.get_array(manifest["outputs"][0]["output_key"])
+    fused = store.get_array(manifest["outputs"][1]["output_key"])
+    assert image_branch.tolist() == [[5.0], [5.0], [5.0], [5.0], [5.0], [5.0]]
+    assert fused.tolist() == [
+        [5.0, 3.0],
+        [5.0, 3.0],
+        [5.0, 5.0],
+        [5.0, 4.0],
+        [5.0, 4.0],
+        [5.0, 3.0],
+    ]
+
+
 def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
     tmp_path,
     fake_overlapindex,

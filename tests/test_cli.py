@@ -19,6 +19,16 @@ def _multi_output_transform(batch):
     }
 
 
+def _multimodal_multi_output_transform(batch):
+    return {
+        "image_branch": np.asarray([[len(item)] for item in batch["image"]], dtype=float),
+        "fused": np.asarray(
+            [[len(image), len(text)] for image, text in zip(batch["image"], batch["caption"])],
+            dtype=float,
+        ),
+    }
+
+
 def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     cache_dir = tmp_path / "cache"
@@ -478,6 +488,86 @@ def test_cli_plan_embed_merge_multi_output_workflow(tmp_path, capsys, fake_overl
         )
 
 
+def test_cli_plan_multimodal_multi_output_workflow(tmp_path, capsys):
+    dataset_path, extractor_path = _write_pickled_multimodal_multi_output_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "2",
+                "--batch-size",
+                "1",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert [output["name"] for output in plan["outputs"]] == ["image_branch", "fused"]
+
+    for shard_index in range(2):
+        assert (
+            main(
+                [
+                    "embed-shard",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--cache-dir",
+                    str(cache_dir),
+                    "--total-shards",
+                    "2",
+                    "--shard-index",
+                    str(shard_index),
+                    "--batch-size",
+                    "1",
+                ]
+            )
+            == 0
+        )
+        manifest = json.loads(capsys.readouterr().out)
+        assert manifest["artifact_type"] == "multi_output_embedding_shard"
+
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    merged = json.loads(capsys.readouterr().out)
+    store = LocalArtifactStore(str(cache_dir))
+    assert store.get_array(merged["outputs"][0]["output_key"]).tolist() == [
+        [5.0],
+        [5.0],
+        [5.0],
+        [5.0],
+    ]
+    assert store.get_array(merged["outputs"][1]["output_key"]).tolist() == [
+        [5.0, 3.0],
+        [5.0, 3.0],
+        [5.0, 5.0],
+        [5.0, 4.0],
+    ]
+
+
 def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     cache_dir = tmp_path / "cache"
@@ -747,6 +837,31 @@ def _write_pickled_multi_output_inputs(tmp_path):
     )
     dataset_path = tmp_path / "dataset.pkl"
     extractor_path = tmp_path / "extractor.pkl"
+    with dataset_path.open("wb") as f:
+        pickle.dump(dataset, f)
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+    return dataset_path, extractor_path
+
+
+def _write_pickled_multimodal_multi_output_inputs(tmp_path):
+    dataset = BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": ["a.png", "b.png", "c.png", "d.png"],
+            "caption": ["one", "two", "three", "four"],
+        },
+        labels=["a", "a", "b", "b"],
+        modalities={"image": "image", "caption": "text"},
+    )
+    extractor = MultiOutputExtractor(
+        name="fusion",
+        output_specs=[EmbeddingOutputSpec("image_branch"), EmbeddingOutputSpec("fused")],
+        transform_many_fn=_multimodal_multi_output_transform,
+        modality="multimodal",
+        streaming_safe=True,
+    )
+    dataset_path = tmp_path / "multimodal_dataset.pkl"
+    extractor_path = tmp_path / "multimodal_extractor.pkl"
     with dataset_path.open("wb") as f:
         pickle.dump(dataset, f)
     with extractor_path.open("wb") as f:

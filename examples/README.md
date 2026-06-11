@@ -17,6 +17,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/cache_reuse.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
 ```
 
 Each script writes reports to `examples/output/`.
@@ -43,6 +44,9 @@ Each script writes reports to `examples/output/`.
   you provide via `VERTABRAE_ONNX_MODEL_PATH`.
 - `hf_audio_extractor.py`: Hugging Face audio backbone API example. Requires optional
   dependencies and a local or downloadable model.
+- `hf_multimodal_image_text.py`: aligned image-text benchmarking example with
+  image, text, and fused Hugging Face outputs. Requires optional dependencies and
+  a local or downloadable model.
 - `hf_text_extractor.py`: Hugging Face text backbone API example. Requires optional
   dependencies and a local or downloadable model.
 - `hf_time_series_extractor.py`: Hugging Face time-series backbone API example.

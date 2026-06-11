@@ -152,6 +152,86 @@ def test_from_time_series_preserves_structured_inputs():
     assert dataset.X["time_features"].shape == (4, 3, 2)
 
 
+def test_from_multimodal_preserves_fields_and_modalities():
+    dataset = BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": ["a.png", "b.png", "c.png", "d.png"],
+            "caption": ["sun", "moon", "cat", "dog"],
+        },
+        labels=["left", "left", "right", "right"],
+        modalities={"image": "image", "caption": "text"},
+    )
+
+    assert dataset.modality == "multimodal"
+    assert dataset.metadata["source"] == "multimodal"
+    assert dataset.metadata["input_fields"] == ["image", "caption"]
+    assert dataset.metadata["modalities"] == {"image": "image", "caption": "text"}
+    assert dataset.summary()["modality"] == "multimodal"
+
+
+def test_from_multimodal_rejects_invalid_fields():
+    with pytest.raises(ValueError, match="must not be empty"):
+        BenchmarkDataset.from_multimodal(
+            inputs={},
+            labels=["a", "a", "b", "b"],
+            modalities={},
+        )
+
+    with pytest.raises(ValueError, match="same field names"):
+        BenchmarkDataset.from_multimodal(
+            inputs={"image": ["a.png", "b.png", "c.png", "d.png"]},
+            labels=["a", "a", "b", "b"],
+            modalities={"caption": "text"},
+        )
+
+    with pytest.raises(ValueError, match="must have 4 samples"):
+        BenchmarkDataset.from_multimodal(
+            inputs={
+                "image": ["a.png", "b.png", "c.png"],
+                "caption": ["one", "two", "three", "four"],
+            },
+            labels=["a", "a", "b", "b"],
+            modalities={"image": "image", "caption": "text"},
+        )
+
+    with pytest.raises(ValueError, match="contains missing values"):
+        BenchmarkDataset.from_multimodal(
+            inputs={
+                "image": ["a.png", None, "c.png", "d.png"],
+                "caption": ["one", "two", "three", "four"],
+            },
+            labels=["a", "a", "b", "b"],
+            modalities={"image": "image", "caption": "text"},
+        )
+
+
+def test_multimodal_subset_batches_and_fingerprint_are_stable():
+    dataset = BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"],
+            "caption": ["one", "two", "three", "four", "five", "six"],
+        },
+        labels=["a", "a", "a", "b", "b", "b"],
+        modalities={"image": "image", "caption": "text"},
+    )
+
+    subset = dataset.subset([1, 2, 4, 5])
+    batches = list(subset.iter_batches(batch_size=2))
+    changed = BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"],
+            "caption": ["one", "two", "THREE", "four", "five", "six"],
+        },
+        labels=["a", "a", "a", "b", "b", "b"],
+        modalities={"image": "image", "caption": "text"},
+    )
+
+    assert subset.metadata["sample_indices"] == [1, 2, 4, 5]
+    assert batches[0].X["image"].tolist() == ["b.png", "c.png"]
+    assert batches[1].X["caption"].tolist() == ["five", "six"]
+    assert dataset.fingerprint() != changed.fingerprint()
+
+
 def test_stratified_subsample_indices_preserve_classes():
     dataset = BenchmarkDataset.from_arrays(
         np.arange(24).reshape(12, 2),

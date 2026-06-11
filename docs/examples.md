@@ -10,6 +10,8 @@ Runnable examples live in `examples/`:
 - `multi_extractor_comparison.py`: compare multiple local extractors.
 - `cache_reuse.py`: demonstrate embedding cache reuse.
 - `hf_audio_extractor.py`: demonstrate the Hugging Face audio API.
+- `hf_multimodal_image_text.py`: demonstrate aligned image-text benchmarking with
+  branch and fused Hugging Face outputs.
 - `hf_text_extractor.py`: demonstrate the Hugging Face text API.
 - `hf_time_series_extractor.py`: demonstrate the Hugging Face time-series API.
 - `hf_video_extractor.py`: demonstrate the Hugging Face video API with predecoded clips.

@@ -678,7 +678,18 @@ class Benchmark:
                 f"Extractor '{extractor.name}' returned {embeddings.shape[0]} embeddings "
                 f"for {len(dataset.y)} labels."
             )
-        metadata = self._embedding_metadata(extractor, dataset, embeddings, cache_key, recipe)
+        single_output_spec = self._single_output_spec(extractor)
+        metadata = self._embedding_metadata(
+            extractor=extractor,
+            dataset=dataset,
+            embeddings=embeddings,
+            cache_key=cache_key,
+            recipe=recipe,
+            output_name=single_output_spec.name if single_output_spec is not None else None,
+            output_metadata=(
+                dict(single_output_spec.metadata) if single_output_spec is not None else None
+            ),
+        )
         metadata.update(subsampling_metadata or {})
         if self.cache_config.enabled:
             store.put_array(cache_key, embeddings)
@@ -863,7 +874,18 @@ class Benchmark:
                 batch_pairs,
                 n_samples=n_samples,
             )
-        metadata = self._embedding_metadata(extractor, dataset, embeddings, cache_key, recipe)
+        single_output_spec = self._single_output_spec(extractor)
+        metadata = self._embedding_metadata(
+            extractor=extractor,
+            dataset=dataset,
+            embeddings=embeddings,
+            cache_key=cache_key,
+            recipe=recipe,
+            output_name=single_output_spec.name if single_output_spec is not None else None,
+            output_metadata=(
+                dict(single_output_spec.metadata) if single_output_spec is not None else None
+            ),
+        )
         metadata["streamed"] = True
         metadata["stream_batch_size"] = self.embedding_config.batch_size
         metadata["memory_estimate"] = memory_estimate.to_dict()
@@ -1081,6 +1103,14 @@ class Benchmark:
         if not callable(getattr(extractor, "output_specs", None)):
             return False
         return len(list(extractor.output_specs())) > 1
+
+    def _single_output_spec(self, extractor: Any) -> Optional[Any]:
+        if not callable(getattr(extractor, "output_specs", None)):
+            return None
+        specs = list(extractor.output_specs())
+        if len(specs) != 1:
+            return None
+        return specs[0]
 
     def _output_specs(self, extractor: Any) -> List[Any]:
         specs = list(extractor.output_specs())

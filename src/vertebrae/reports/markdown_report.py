@@ -37,6 +37,15 @@ def render_markdown_report(result: Any) -> str:
             f"- Samples: {dataset['n_samples']}",
             f"- Classes: {dataset['n_classes']}",
             f"- Modality: {dataset['modality']}",
+        ]
+    )
+    dataset_metadata = dataset.get("metadata", {})
+    if dataset_metadata.get("modalities"):
+        lines.append(f"- Modalities: {dataset_metadata['modalities']}")
+    if dataset_metadata.get("input_fields"):
+        lines.append(f"- Input fields: {dataset_metadata['input_fields']}")
+    lines.extend(
+        [
             "",
             "## Executive summary",
             "",
@@ -95,6 +104,10 @@ def render_markdown_report(result: Any) -> str:
                 f"- Extractor family: {_extractor_family(item.extractor_type)}",
                 f"- Label view: {(item.label_view or {}).get('name', 'primary')}",
                 f"- Modality: {item.embedding_metadata.get('modality', '')}",
+                (
+                    "- Output source: "
+                    f"{item.embedding_metadata.get('output_metadata', {}).get('source', '')}"
+                ),
                 f"- Embedding dimension: {item.embedding_metadata.get('embedding_dim', '')}",
                 f"- Compression method: {item.compression_metadata.get('method', 'none')}",
                 f"- Compression precision: {item.compression_metadata.get('precision', '')}",

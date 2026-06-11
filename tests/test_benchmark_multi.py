@@ -278,6 +278,49 @@ def test_output_levels_reuse_base_embedding_cache(tmp_path, fake_overlapindex):
     assert all(item.embedding_metadata["cache_hit"] for item in second.extractor_results)
 
 
+def test_multimodal_dataset_expands_multi_output_results(fake_overlapindex):
+    dataset = BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": ["a.png", "b.png", "c.png", "d.png"],
+            "caption": ["one", "two", "three", "four"],
+        },
+        labels=["left", "left", "right", "right"],
+        modalities={"image": "image", "caption": "text"},
+    )
+    extractor = MultiOutputExtractor(
+        name="fusion",
+        output_specs=[
+            EmbeddingOutputSpec("image_branch"),
+            EmbeddingOutputSpec("fused"),
+        ],
+        transform_many_fn=lambda value: {
+            "image_branch": np.arange(len(value["image"]) * 2, dtype=float).reshape(-1, 2),
+            "fused": np.arange(len(value["caption"]) * 3, dtype=float).reshape(-1, 3),
+        },
+        modality="multimodal",
+        streaming_safe=True,
+    )
+
+    result = Benchmark(
+        dataset=dataset,
+        extractors=[extractor],
+        stability_config=StabilityConfig(enabled=False),
+        probe_config=ProbeConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+
+    assert result.dataset_summary["modality"] == "multimodal"
+    assert [item.name for item in result.extractor_results] == [
+        "fusion:image_branch",
+        "fusion:fused",
+    ]
+    assert all(
+        item.embedding_metadata["modality"] == "multimodal" for item in result.extractor_results
+    )
+    assert len(fake_overlapindex.calls) == 2
+
+
 def _hierarchical_vehicle_dataset():
     X = np.arange(72, dtype=float).reshape(24, 3)
     y = np.array(["husky"] * 6 + ["pug"] * 6 + ["sedan"] * 6 + ["suv"] * 6)

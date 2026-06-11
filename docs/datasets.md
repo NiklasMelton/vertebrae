@@ -26,6 +26,8 @@ Use the constructor that matches the form of your source data:
   optional shared frame rate.
 - `BenchmarkDataset.from_time_series(...)` for aligned time-series arrays with
   optional masks and time features.
+- `BenchmarkDataset.from_multimodal(...)` for aligned multi-modal sample fields
+  such as image-text or audio-text classification datasets.
 
 Examples:
 
@@ -88,9 +90,37 @@ Common values are:
 - `"video"`
 - `"time_series"`
 - `"embeddings"`
+- `"multimodal"`
 
 `metadata` is preserved through benchmarking so reports can retain source context
 such as dataset name, split, backbone provenance, or collection notes.
+
+Multi-modal datasets also preserve:
+
+- `input_fields`: the declared aligned fields, such as `["image", "caption"]`,
+- `modalities`: the per-field modality mapping, such as
+  `{"image": "image", "caption": "text"}`.
+
+Example:
+
+```python
+from vertebrae import BenchmarkDataset
+
+dataset = BenchmarkDataset.from_multimodal(
+    inputs={
+        "image": image_paths,
+        "caption": captions,
+    },
+    labels=labels,
+    modalities={
+        "image": "image",
+        "caption": "text",
+    },
+)
+```
+
+V1 requires every declared modality to be present for every sample. Filter or
+impute missing modalities before constructing the dataset.
 
 When using `from_dataframe(...)`, the dataset also records the original column names
 and chosen input columns. When using `from_embeddings(...)`, metadata is tagged with
