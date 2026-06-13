@@ -18,6 +18,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/caltech101_vision_foundation_models.py
 ```
 
 Each script writes reports to `examples/output/`.
@@ -57,6 +58,10 @@ Each script writes reports to `examples/output/`.
   final-layer and mid-layer Hugging Face vision embeddings from one model
   configuration plus a scikit-learn image pipeline. Requires optional
   dependencies and local or downloadable data/models.
+- `caltech101_vision_foundation_models.py`: compare a laptop-sized Caltech-101
+  subset with related category pairs using DINOv2, a tiny supervised ViT baseline,
+  and an optional gated DINOv3 extractor. Downloads the dataset archive when it
+  is not already present locally.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
 
@@ -68,4 +73,9 @@ Run the Hugging Face vision example after installing optional dependencies:
 ```bash
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E hf
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_mnist.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/caltech101_vision_foundation_models.py
 ```
+
+To include DINOv3 in the Caltech-101 example, accept the model terms on Hugging
+Face and set `VERTABRAE_INCLUDE_DINOV3=1`.
+Override `VERTABRAE_CALTECH101_CLASSES` to make the slice easier or harder.
