@@ -6,6 +6,7 @@
 .vertebrae_cache/
 examples/.matplotlib_cache/
 examples/.vertebrae_cache/
+examples/data/
 examples/output/
 docs/_build/
 __pycache__/

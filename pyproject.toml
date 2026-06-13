@@ -17,6 +17,7 @@ keywords = [
     "model-evaluation",
     "transfer-learning",
     "overlapindex",
+    "separatix"
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

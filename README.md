@@ -378,6 +378,10 @@ rows such as `mnist_vit:mid_cls[level=family]` and
 `mnist_vit:final_cls[level=leaf]`. See `examples/hf_vision_mnist.py` for a fuller
 example that compares multi-output Hugging Face vision embeddings alongside a
 classical scikit-learn image baseline.
+For a more realistic image workflow, `examples/caltech101_vision_foundation_models.py`
+downloads a laptop-sized Caltech-101 subset with a few related category pairs,
+compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
+embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 
 ## Supported Workflows
 
@@ -501,6 +505,9 @@ See `examples/onnx_extractor.py` for a local ONNX export workflow.
 See `examples/hf_vision_mnist.py` for a laptop-friendly comparison that runs
 MNIST handwritten digit data through final and mid-layer Hugging Face vision
 embeddings, and
+`examples/caltech101_vision_foundation_models.py` for a single-label Caltech-101
+workflow with automatic local data reuse/downloads and a less trivial default
+class slice. See
 `examples/sklearn_wine_pipeline.py` for a network-free real-data scikit-learn
 pipeline comparison.
 See the compression guide in `docs/compression.md` for compression options and guidance.
