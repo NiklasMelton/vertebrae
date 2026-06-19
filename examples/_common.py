@@ -42,6 +42,12 @@ def make_separated_blobs(
 
 def print_ranking(result: object) -> None:
     frame = result.to_dataframe()
-    columns = ["rank", "extractor", "overlap_macro", "weakest_class",
-               "recommendation", "separatix_recommendation"]
+    columns = [
+        "rank",
+        "extractor",
+        "overlap_macro",
+        "weakest_class",
+        "recommendation",
+        "separatix_recommendation",
+    ]
     print(frame[columns].to_string(index=False))

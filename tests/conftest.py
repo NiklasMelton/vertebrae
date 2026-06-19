@@ -154,9 +154,7 @@ def _fake_class_summary(y):
         return {
             "n_classes": int(y_arr.shape[1]),
             "classes": labels,
-            "class_counts": {
-                label: int(count) for label, count in zip(labels, counts.tolist())
-            },
+            "class_counts": {label: int(count) for label, count in zip(labels, counts.tolist())},
             "imbalance_ratio": 1.0,
             "min_class_count": int(counts.min()) if counts.size else 0,
             "max_class_count": int(counts.max()) if counts.size else 0,

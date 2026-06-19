@@ -42,8 +42,7 @@ def render_markdown_report(result: Any) -> str:
     )
     if dataset.get("target_type") == "multi_label":
         lines.append(
-            "- "
-            f"Mean label cardinality: {_format_float(dataset.get('mean_label_cardinality'))}"
+            "- " f"Mean label cardinality: {_format_float(dataset.get('mean_label_cardinality'))}"
         )
         lines.append(f"- Label density: {_format_float(dataset.get('label_density'))}")
     dataset_metadata = dataset.get("metadata", {})

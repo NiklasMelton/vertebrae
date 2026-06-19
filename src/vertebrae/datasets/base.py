@@ -120,9 +120,7 @@ class BenchmarkDataset:
         merged_metadata = _metadata_with_label_names(merged_metadata, resolved_label_names)
         X = df[input_col].to_numpy() if isinstance(input_col, str) else df[input_cols].copy()
         labels = (
-            df[label_col].to_numpy()
-            if isinstance(label_col, str)
-            else df[label_cols].to_numpy()
+            df[label_col].to_numpy() if isinstance(label_col, str) else df[label_cols].to_numpy()
         )
         dataset = cls(
             X=X,

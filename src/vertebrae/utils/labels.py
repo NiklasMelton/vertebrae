@@ -485,9 +485,7 @@ def _normalize_label_sequences(
             raise ValueError(f"Multi-label sample {row_index} must contain at least one label.")
         normalized_values = tuple(_normalize_scalar(value) for value in values)
         if any(_is_missing_label(value) for value in normalized_values):
-            raise ValueError(
-                f"Multi-label sample {row_index} contains a missing label value."
-            )
+            raise ValueError(f"Multi-label sample {row_index} contains a missing label value.")
         if len(set(normalized_values)) != len(normalized_values):
             raise ValueError(f"Multi-label sample {row_index} contains duplicate labels.")
         if allowed is not None:
@@ -533,9 +531,8 @@ def _is_sequence_label_array(labels: np.ndarray) -> bool:
 
 
 def _is_label_sequence(value: Any) -> bool:
-    return (
-        not isinstance(value, (str, bytes))
-        and isinstance(value, (Sequence, set, frozenset, np.ndarray))
+    return not isinstance(value, (str, bytes)) and isinstance(
+        value, (Sequence, set, frozenset, np.ndarray)
     )
 
 
