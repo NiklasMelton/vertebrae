@@ -36,9 +36,16 @@ def render_markdown_report(result: Any) -> str:
             "",
             f"- Samples: {dataset['n_samples']}",
             f"- Classes: {dataset['n_classes']}",
+            f"- Target type: {dataset.get('target_type', 'single_label')}",
             f"- Modality: {dataset['modality']}",
         ]
     )
+    if dataset.get("target_type") == "multi_label":
+        lines.append(
+            "- "
+            f"Mean label cardinality: {_format_float(dataset.get('mean_label_cardinality'))}"
+        )
+        lines.append(f"- Label density: {_format_float(dataset.get('label_density'))}")
     dataset_metadata = dataset.get("metadata", {})
     if dataset_metadata.get("modalities"):
         lines.append(f"- Modalities: {dataset_metadata['modalities']}")
@@ -102,6 +109,7 @@ def render_markdown_report(result: Any) -> str:
                 "",
                 f"- Extractor type: {item.extractor_type}",
                 f"- Extractor family: {_extractor_family(item.extractor_type)}",
+                f"- Target type: {item.overlap.metadata.get('target_type', 'single_label')}",
                 f"- Label view: {(item.label_view or {}).get('name', 'primary')}",
                 f"- Modality: {item.embedding_metadata.get('modality', '')}",
                 (
@@ -189,6 +197,9 @@ def render_markdown_report(result: Any) -> str:
                 )
         else:
             lines.append("Probe evaluation was not run.")
+            if item.probes and item.probes.get("warnings"):
+                for warning in item.probes.get("warnings", []):
+                    lines.append(f"- warning: {warning}")
         lines.append("")
 
         lines.extend(["#### Separatix complexity diagnostic", ""])

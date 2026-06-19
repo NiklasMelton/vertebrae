@@ -127,6 +127,29 @@ evaluated embedding reaches `overlap_macro >= 0.80`. That extra diagnostic does
 not affect ranking. It adds report guidance about what kind of downstream
 classifier complexity the labeled geometry appears to need.
 
+Multi-label classification datasets are supported through the same constructors.
+Use per-sample label sequences or a binary indicator matrix with `label_names`:
+
+```python
+dataset = BenchmarkDataset.from_embeddings(
+    embeddings=Z,
+    labels=[
+        ("outdoor", "vehicle"),
+        ("outdoor", "vehicle"),
+        ("indoor",),
+        ("indoor",),
+        ("outdoor", "animal"),
+        ("animal",),
+    ],
+)
+
+result = Evaluator(dataset=dataset, extractor=PrecomputedExtractor()).run()
+```
+
+OverlapIndex receives a dense multi-label indicator target internally, and
+Separatix runs with `target_mode="multilabel"`. Native vertebrae probes are
+currently single-label only and are skipped with a warning on multi-label data.
+
 ### Optional embedding compression
 
 ```python

@@ -7,6 +7,7 @@ from typing import Any, Iterable, Tuple
 import numpy as np
 
 from vertebrae.cache.artifact_store import ArtifactStoreConfig
+from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import is_sparse_matrix
 
@@ -142,7 +143,12 @@ class LocalArtifactStore:
         path.mkdir(parents=True, exist_ok=True)
         target = path / "labels.json"
         with target.open("w", encoding="utf-8") as f:
-            json.dump(make_json_safe(list(np.asarray(labels))), f, indent=2, sort_keys=True)
+            json.dump(
+                make_json_safe(labels_to_jsonable(labels)),
+                f,
+                indent=2,
+                sort_keys=True,
+            )
         return str(target)
 
     def get_labels(self, key: str) -> np.ndarray:
@@ -155,8 +161,14 @@ class LocalArtifactStore:
             One-dimensional label array.
         """
 
-        with (self._path(key) / "labels.json").open("r", encoding="utf-8") as f:
-            return np.asarray(json.load(f))
+        path = self._path(key)
+        label_names = None
+        metadata_path = path / "metadata.json"
+        if metadata_path.exists():
+            with metadata_path.open("r", encoding="utf-8") as f:
+                label_names = json.load(f).get("label_names")
+        with (path / "labels.json").open("r", encoding="utf-8") as f:
+            return labels_from_jsonable(json.load(f), label_names=label_names)
 
     def put_json(self, key: str, obj: dict) -> str:
         """Store JSON metadata for an artifact key.

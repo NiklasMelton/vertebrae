@@ -108,6 +108,7 @@ class BenchmarkResult:
                     "extractor": item.name,
                     "extractor_type": item.extractor_type,
                     "overlap_macro": item.overlap.macro_score,
+                    "target_type": item.overlap.metadata.get("target_type", "single_label"),
                     "label_view": (item.label_view or {}).get("name"),
                     "weakest_class": item.weakest_class,
                     "weakest_class_score": item.weakest_class_score,

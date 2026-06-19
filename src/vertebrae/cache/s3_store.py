@@ -10,6 +10,7 @@ import numpy as np
 
 from vertebrae.cache.artifact_store import ArtifactStoreConfig
 from vertebrae.cache.local_store import LocalArtifactStore
+from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import is_sparse_matrix
 
@@ -136,7 +137,7 @@ class S3ArtifactStore:
         """Store labels as JSON."""
 
         payload = json.dumps(
-            make_json_safe(list(np.asarray(labels))),
+            make_json_safe(labels_to_jsonable(labels)),
             indent=2,
             sort_keys=True,
         ).encode("utf-8")
@@ -148,7 +149,12 @@ class S3ArtifactStore:
         """Load labels from JSON."""
 
         payload = self._get_bytes(self._artifact_object_key(key, "labels.json"))
-        return np.asarray(json.loads(payload.decode("utf-8")))
+        label_names = None
+        metadata_key = self._artifact_object_key(key, "metadata.json")
+        if self._object_exists(metadata_key):
+            metadata_payload = self._get_bytes(metadata_key)
+            label_names = json.loads(metadata_payload.decode("utf-8")).get("label_names")
+        return labels_from_jsonable(json.loads(payload.decode("utf-8")), label_names=label_names)
 
     def put_json(self, key: str, obj: dict) -> str:
         """Store JSON metadata for an artifact key."""

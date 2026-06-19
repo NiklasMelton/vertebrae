@@ -1,42 +1,246 @@
 """Label helpers."""
 
-from typing import Any, Dict, Iterable, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
 LABEL_PATH_DELIMITER = " > "
+LABEL_SET_DELIMITER = " + "
+SINGLE_LABEL_TARGET = "single_label"
+MULTI_LABEL_TARGET = "multi_label"
 
 
-def class_counts(y: np.ndarray) -> Dict[Any, int]:
-    """Count labels while preserving scalar label values.
+def coerce_label_input(labels: Any) -> np.ndarray:
+    """Coerce user-provided labels without breaking ragged multi-label rows."""
 
-    Args:
-        y: One-dimensional label array.
+    if isinstance(labels, np.ndarray):
+        return labels
+    try:
+        return np.asarray(labels)
+    except ValueError:
+        items = list(labels)
+        result = np.empty(len(items), dtype=object)
+        result[:] = items
+        return result
 
-    Returns:
-        Mapping from label values to sample counts.
+
+def normalize_targets(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Normalize single-label or multi-label targets.
+
+    Single-label targets are returned as a one-dimensional array. Multi-label
+    targets are returned as a one-dimensional object array where each element is
+    a tuple of labels ordered by the resolved label names.
     """
 
-    labels, counts = np.unique(y, return_counts=True)
+    labels = coerce_label_input(y)
+    names = normalize_label_names(label_names)
+    if _is_indicator_matrix(labels):
+        normalized = _labels_from_indicator(labels, names)
+        resolved_names = names if names is not None else tuple(range(labels.shape[1]))
+        return normalized, _target_metadata(
+            MULTI_LABEL_TARGET,
+            normalized,
+            label_names=resolved_names,
+        )
+    if labels.ndim == 2 and names is not None and labels.dtype.kind in {"b", "i", "u", "f"}:
+        raise ValueError("Indicator labels must contain only 0/1 or boolean values.")
+    if labels.ndim == 2:
+        normalized, resolved_names = _normalize_label_sequences(
+            [row for row in labels],
+            label_names=names,
+        )
+        return normalized, _target_metadata(
+            MULTI_LABEL_TARGET,
+            normalized,
+            label_names=resolved_names,
+        )
+    if labels.ndim != 1:
+        raise ValueError("Labels must be one-dimensional or a two-dimensional multilabel target.")
+    if _is_sequence_label_array(labels):
+        normalized, resolved_names = _normalize_label_sequences(
+            list(labels),
+            label_names=names,
+        )
+        return normalized, _target_metadata(
+            MULTI_LABEL_TARGET,
+            normalized,
+            label_names=resolved_names,
+        )
+    if names is not None:
+        raise ValueError("label_names can only be provided for multi-label targets.")
+    normalized_single = np.asarray([_normalize_scalar(label) for label in labels], dtype=object)
+    if _has_missing_single_labels(normalized_single):
+        raise ValueError("Labels must be non-missing.")
+    return normalized_single, _target_metadata(SINGLE_LABEL_TARGET, normalized_single)
+
+
+def target_type(y: Any, label_names: Optional[Iterable[Any]] = None) -> str:
+    """Return the target type for labels."""
+
+    _, metadata = normalize_targets(y, label_names=label_names)
+    return str(metadata["target_type"])
+
+
+def class_counts(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[Any, int]:
+    """Count labels while preserving scalar label values.
+
+    For multi-label targets, counts are per-label occurrence counts.
+    """
+
+    labels, metadata = normalize_targets(y, label_names=label_names)
+    if metadata["target_type"] == MULTI_LABEL_TARGET:
+        return _multi_label_counts(labels, tuple(metadata["label_names"]))
+
+    unique, counts = np.unique(labels, return_counts=True)
     return {
         label.item() if hasattr(label, "item") else label: int(count)
-        for label, count in zip(labels, counts)
+        for label, count in zip(unique, counts)
     }
 
 
+def labelset_counts(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[str, int]:
+    """Count exact label combinations for a multi-label target."""
+
+    labels, metadata = normalize_targets(y, label_names=label_names)
+    if metadata["target_type"] != MULTI_LABEL_TARGET:
+        return {}
+    return _labelset_counts_normalized(labels)
+
+
+def target_summary(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[str, Any]:
+    """Return JSON-friendly target summary metadata."""
+
+    labels, metadata = normalize_targets(y, label_names=label_names)
+    summary = {
+        "target_type": metadata["target_type"],
+        "n_classes": metadata["n_classes"],
+        "class_counts": class_counts(labels, label_names=metadata.get("label_names")),
+    }
+    if metadata["target_type"] == MULTI_LABEL_TARGET:
+        summary.update(
+            {
+                "label_names": list(metadata["label_names"]),
+                "labelset_counts": labelset_counts(
+                    labels,
+                    label_names=metadata["label_names"],
+                ),
+                "mean_label_cardinality": metadata["mean_label_cardinality"],
+                "label_density": metadata["label_density"],
+            }
+        )
+    return summary
+
+
+def metric_labels(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Return labels in the shape expected by metric libraries."""
+
+    labels, metadata = normalize_targets(y, label_names=label_names)
+    if metadata["target_type"] == MULTI_LABEL_TARGET:
+        return multilabel_indicator(labels, metadata["label_names"]), metadata
+    return labels, metadata
+
+
+def labels_to_jsonable(y: Any, label_names: Optional[Iterable[Any]] = None) -> Any:
+    """Serialize labels in the canonical artifact shape."""
+
+    labels, metadata = normalize_targets(y, label_names=label_names)
+    if metadata["target_type"] == MULTI_LABEL_TARGET:
+        return [list(labelset) for labelset in labels]
+    return labels.tolist()
+
+
+def labels_from_jsonable(
+    payload: Any,
+    label_names: Optional[Iterable[Any]] = None,
+) -> np.ndarray:
+    """Load labels from an artifact JSON payload."""
+
+    if label_names is not None and isinstance(payload, list):
+        rows = np.empty(len(payload), dtype=object)
+        rows[:] = payload
+        labels, _ = normalize_targets(rows, label_names=label_names)
+        return labels
+    labels, _ = normalize_targets(payload, label_names=label_names)
+    return labels
+
+
+def multilabel_indicator(y: Any, label_names: Optional[Iterable[Any]] = None) -> np.ndarray:
+    """Convert a multi-label target to a dense binary indicator matrix."""
+
+    labels, metadata = normalize_targets(y, label_names=label_names)
+    if metadata["target_type"] != MULTI_LABEL_TARGET:
+        raise ValueError("multilabel_indicator requires a multi-label target.")
+    resolved_names = tuple(metadata["label_names"])
+    positions = {label: index for index, label in enumerate(resolved_names)}
+    indicator = np.zeros((len(labels), len(resolved_names)), dtype=int)
+    for row_index, labelset in enumerate(labels):
+        for label in labelset:
+            indicator[row_index, positions[label]] = 1
+    return indicator
+
+
+def stratified_label_indices(
+    y: Any,
+    rate: float,
+    random_state: int = 42,
+    min_samples_per_class: int = 2,
+    label_names: Optional[Iterable[Any]] = None,
+) -> np.ndarray:
+    """Select deterministic label-aware sample indices."""
+
+    if not 0.0 < rate <= 1.0:
+        raise ValueError("subsample rate must be in (0, 1].")
+    labels, metadata = normalize_targets(y, label_names=label_names)
+    if rate >= 1.0:
+        return np.arange(len(labels), dtype=int)
+    rng = np.random.default_rng(random_state)
+    if metadata["target_type"] != MULTI_LABEL_TARGET:
+        return _single_label_subsample_indices(
+            labels,
+            rate=rate,
+            rng=rng,
+            min_samples_per_class=min_samples_per_class,
+        )
+    indicator = multilabel_indicator(labels, metadata["label_names"])
+    selected: set[int] = set()
+    for column in range(indicator.shape[1]):
+        class_indices = np.flatnonzero(indicator[:, column] == 1)
+        if len(class_indices) == 0:
+            continue
+        target = int(np.floor(len(class_indices) * rate))
+        if len(class_indices) >= min_samples_per_class:
+            target = max(min_samples_per_class, target)
+        target = max(1, min(len(class_indices), target))
+        already = [index for index in class_indices.tolist() if index in selected]
+        if len(already) >= target:
+            continue
+        remaining = np.asarray(
+            [index for index in class_indices.tolist() if index not in selected],
+            dtype=int,
+        )
+        needed = min(len(remaining), target - len(already))
+        selected.update(rng.choice(remaining, size=needed, replace=False).tolist())
+    return np.asarray(sorted(selected), dtype=int)
+
+
 def display_label(label: Any) -> str:
-    """Convert a label value to display text.
-
-    Args:
-        label: Label value.
-
-    Returns:
-        Human-readable label string.
-    """
+    """Convert a label value to display text."""
 
     if hasattr(label, "item"):
         label = label.item()
     return str(label)
+
+
+def display_labelset(labelset: Any) -> str:
+    """Convert a multi-label labelset to display text."""
+
+    return LABEL_SET_DELIMITER.join(display_label(label) for label in tuple(labelset))
 
 
 def normalize_label_paths(label_paths: Any, n_samples: int) -> Tuple[Tuple[Any, ...], ...]:
@@ -84,6 +288,21 @@ def normalize_level_names(
         )
     if len(set(normalized)) != len(normalized):
         raise ValueError("level_names must be unique.")
+    return normalized
+
+
+def normalize_label_names(label_names: Optional[Iterable[Any]]) -> Optional[Tuple[Any, ...]]:
+    """Validate optional multi-label names."""
+
+    if label_names is None:
+        return None
+    normalized = tuple(_normalize_scalar(name) for name in label_names)
+    if not normalized:
+        raise ValueError("label_names must not be empty.")
+    if any(_is_missing_label(name) for name in normalized):
+        raise ValueError("label_names must be non-missing.")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("label_names must be unique.")
     return normalized
 
 
@@ -163,6 +382,189 @@ def label_view_suffix(label_view: Optional[Dict[str, Any]]) -> str:
     if not label_view or label_view.get("kind") == "primary":
         return ""
     return f"[level={label_view.get('name', 'view')}]"
+
+
+def _target_metadata(
+    target_type_value: str,
+    labels: np.ndarray,
+    label_names: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    if target_type_value == MULTI_LABEL_TARGET:
+        if label_names is None:
+            raise ValueError("Multi-label metadata requires label_names.")
+        counts = _multi_label_counts(labels, tuple(label_names))
+        cardinalities = [len(tuple(labelset)) for labelset in labels]
+        return {
+            "target_type": MULTI_LABEL_TARGET,
+            "label_names": tuple(label_names),
+            "n_classes": int(len(label_names)),
+            "class_counts": counts,
+            "labelset_counts": _labelset_counts_normalized(labels),
+            "mean_label_cardinality": float(np.mean(cardinalities)) if cardinalities else 0.0,
+            "label_density": (
+                float(np.mean(cardinalities) / len(label_names)) if label_names else 0.0
+            ),
+        }
+    counts = _single_label_counts(labels)
+    return {
+        "target_type": SINGLE_LABEL_TARGET,
+        "n_classes": int(len(counts)),
+        "class_counts": counts,
+    }
+
+
+def _single_label_counts(labels: np.ndarray) -> Dict[Any, int]:
+    unique, counts = np.unique(labels, return_counts=True)
+    return {
+        label.item() if hasattr(label, "item") else label: int(count)
+        for label, count in zip(unique, counts)
+    }
+
+
+def _multi_label_counts(labels: np.ndarray, label_names: Sequence[Any]) -> Dict[Any, int]:
+    counts = {label: 0 for label in label_names}
+    for labelset in labels:
+        for label in tuple(labelset):
+            counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _labelset_counts_normalized(labels: np.ndarray) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for labelset in labels:
+        key = display_labelset(labelset)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _labels_from_indicator(
+    labels: np.ndarray,
+    label_names: Optional[Sequence[Any]],
+) -> np.ndarray:
+    if labels.ndim != 2:
+        raise ValueError("Indicator labels must be two-dimensional.")
+    resolved_names = label_names if label_names is not None else tuple(range(labels.shape[1]))
+    if len(resolved_names) != labels.shape[1]:
+        raise ValueError(
+            "label_names length must match the indicator label columns; "
+            f"got {len(resolved_names)} names for {labels.shape[1]} columns."
+        )
+    indicator = _validate_indicator_matrix(labels)
+    normalized = np.empty(indicator.shape[0], dtype=object)
+    rows: List[Tuple[Any, ...]] = []
+    for row_index, row in enumerate(indicator):
+        active = tuple(resolved_names[index] for index in np.flatnonzero(row))
+        if not active:
+            raise ValueError(f"Multi-label sample {row_index} must contain at least one label.")
+        rows.append(active)
+    normalized[:] = rows
+    return normalized
+
+
+def _normalize_label_sequences(
+    rows: Iterable[Any],
+    label_names: Optional[Sequence[Any]],
+) -> Tuple[np.ndarray, Tuple[Any, ...]]:
+    raw_labelsets: List[Tuple[Any, ...]] = []
+    observed: List[Any] = []
+    observed_set: set[Any] = set()
+    allowed = set(label_names) if label_names is not None else None
+    for row_index, row in enumerate(rows):
+        if isinstance(row, np.ndarray):
+            values = row.tolist()
+        elif isinstance(row, (set, frozenset)):
+            values = sorted(row, key=display_label)
+        elif isinstance(row, (str, bytes)) or not isinstance(row, Sequence):
+            raise ValueError(
+                "Multi-label targets must contain non-string label sequences; "
+                f"sample {row_index} has {type(row).__name__}."
+            )
+        else:
+            values = list(row)
+        if not values:
+            raise ValueError(f"Multi-label sample {row_index} must contain at least one label.")
+        normalized_values = tuple(_normalize_scalar(value) for value in values)
+        if any(_is_missing_label(value) for value in normalized_values):
+            raise ValueError(
+                f"Multi-label sample {row_index} contains a missing label value."
+            )
+        if len(set(normalized_values)) != len(normalized_values):
+            raise ValueError(f"Multi-label sample {row_index} contains duplicate labels.")
+        if allowed is not None:
+            unknown = [value for value in normalized_values if value not in allowed]
+            if unknown:
+                raise ValueError(
+                    f"Multi-label sample {row_index} contains labels not present "
+                    f"in label_names: {unknown}."
+                )
+        for value in normalized_values:
+            if value not in observed_set:
+                observed.append(value)
+                observed_set.add(value)
+        raw_labelsets.append(normalized_values)
+    resolved_names = tuple(label_names) if label_names is not None else tuple(observed)
+    positions = {label: index for index, label in enumerate(resolved_names)}
+    normalized = np.empty(len(raw_labelsets), dtype=object)
+    normalized[:] = [
+        tuple(sorted(labelset, key=lambda label: positions[label])) for labelset in raw_labelsets
+    ]
+    return normalized, resolved_names
+
+
+def _is_indicator_matrix(labels: np.ndarray) -> bool:
+    if labels.ndim != 2:
+        return False
+    if labels.dtype.kind not in {"b", "i", "u", "f"}:
+        return False
+    values = np.asarray(labels)
+    if values.size == 0:
+        return True
+    return bool(np.all((values == 0) | (values == 1)))
+
+
+def _validate_indicator_matrix(labels: np.ndarray) -> np.ndarray:
+    if not _is_indicator_matrix(labels):
+        raise ValueError("Indicator labels must contain only 0/1 or boolean values.")
+    return np.asarray(labels, dtype=int)
+
+
+def _is_sequence_label_array(labels: np.ndarray) -> bool:
+    return any(_is_label_sequence(label) for label in labels)
+
+
+def _is_label_sequence(value: Any) -> bool:
+    return (
+        not isinstance(value, (str, bytes))
+        and isinstance(value, (Sequence, set, frozenset, np.ndarray))
+    )
+
+
+def _has_missing_single_labels(labels: np.ndarray) -> bool:
+    try:
+        import pandas as pd
+
+        return bool(pd.isna(labels).any())
+    except ImportError:
+        if labels.dtype.kind in {"f", "c"}:
+            return bool(np.isnan(labels).any())
+        return any(_is_missing_label(label) for label in labels)
+
+
+def _single_label_subsample_indices(
+    labels: np.ndarray,
+    rate: float,
+    rng: np.random.Generator,
+    min_samples_per_class: int,
+) -> np.ndarray:
+    selected = []
+    for label in np.unique(labels):
+        class_indices = np.flatnonzero(labels == label)
+        target = int(np.floor(len(class_indices) * rate))
+        if len(class_indices) >= min_samples_per_class:
+            target = max(min_samples_per_class, target)
+        target = max(1, min(len(class_indices), target))
+        selected.extend(rng.choice(class_indices, size=target, replace=False).tolist())
+    return np.asarray(sorted(selected), dtype=int)
 
 
 def _format_label_prefix(prefix: Sequence[Any]) -> str:

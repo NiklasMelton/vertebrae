@@ -26,6 +26,12 @@ jobs over saved embedding and label artifacts. New extractors should keep determ
 row order, avoid hidden global state, and include all model/preprocessing settings in
 `recipe()`.
 
+Label artifacts support both single-label and multi-label classification targets.
+Multi-label artifacts store one JSON list of labels per sample and preserve
+`target_type`, `label_names`, per-label `class_counts`, labelset counts, mean label
+cardinality, and label density in the manifest. CLI commands still use the same
+`--labels-key` arguments for both target types.
+
 The concrete local distributed flow is:
 
 ```python

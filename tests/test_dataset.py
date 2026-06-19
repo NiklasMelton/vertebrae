@@ -64,6 +64,122 @@ def test_from_dataframe_accepts_tabular_column_list():
     assert dataset.metadata["input_columns"] == ["age", "income", "state"]
 
 
+def test_from_arrays_accepts_multilabel_sequences_and_summarizes_targets():
+    labels = [
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+    ]
+
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(12).reshape(6, 2),
+        labels,
+        modality="tabular",
+    )
+    summary = dataset.summary()
+
+    assert dataset.metadata["target_type"] == "multi_label"
+    assert dataset.metadata["label_names"] == ["red", "round", "sweet"]
+    assert dataset.y.tolist() == labels
+    assert dataset.class_counts() == {"red": 3, "round": 3, "sweet": 3}
+    assert summary["target_type"] == "multi_label"
+    assert summary["labelset_counts"]["red + round"] == 1
+    assert summary["mean_label_cardinality"] == 1.5
+    assert summary["label_density"] == 0.5
+
+
+def test_from_arrays_accepts_indicator_multilabel_targets_with_names():
+    indicator = np.array(
+        [
+            [1, 1, 0],
+            [1, 0, 0],
+            [0, 1, 0],
+            [1, 0, 1],
+            [0, 1, 1],
+            [0, 0, 1],
+        ]
+    )
+
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(12).reshape(6, 2),
+        indicator,
+        modality="tabular",
+        label_names=["red", "round", "sweet"],
+    )
+
+    assert dataset.y.tolist() == [
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+    ]
+    assert dataset.class_counts() == {"red": 3, "round": 3, "sweet": 3}
+
+
+def test_from_dataframe_accepts_multilabel_indicator_columns():
+    df = pd.DataFrame(
+        {
+            "x": [0, 1, 2, 3, 4, 5],
+            "red": [1, 1, 0, 1, 0, 0],
+            "round": [1, 0, 1, 0, 1, 0],
+            "sweet": [0, 0, 0, 1, 1, 1],
+        }
+    )
+
+    dataset = BenchmarkDataset.from_dataframe(
+        df,
+        input_col="x",
+        label_col=["red", "round", "sweet"],
+        modality="tabular",
+    )
+
+    assert dataset.label_col == ["red", "round", "sweet"]
+    assert dataset.metadata["label_names"] == ["red", "round", "sweet"]
+    assert dataset.summary()["target_type"] == "multi_label"
+
+
+def test_multilabel_validation_rejects_invalid_targets():
+    X = np.arange(12).reshape(6, 2)
+
+    with pytest.raises(ValueError, match="at least one label"):
+        BenchmarkDataset.from_arrays(
+            X,
+            [("a",), ("a",), ("b",), ("b",), ("a", "b"), ()],
+            modality="tabular",
+        )
+    with pytest.raises(ValueError, match="missing label"):
+        BenchmarkDataset.from_arrays(
+            X,
+            [("a",), ("a",), ("b",), ("b",), ("a", "b"), (None,)],
+            modality="tabular",
+        )
+    with pytest.raises(ValueError, match="duplicate labels"):
+        BenchmarkDataset.from_arrays(
+            X,
+            [("a",), ("a",), ("b",), ("b",), ("a", "b"), ("a", "a")],
+            modality="tabular",
+        )
+    with pytest.raises(ValueError, match="0/1"):
+        BenchmarkDataset.from_arrays(
+            X,
+            np.array([[1, 0], [1, 0], [0, 1], [0, 1], [2, 0], [0, 1]]),
+            modality="tabular",
+            label_names=["a", "b"],
+        )
+    with pytest.raises(ValueError, match="label_names length"):
+        BenchmarkDataset.from_arrays(
+            X,
+            np.ones((6, 3), dtype=int),
+            modality="tabular",
+            label_names=["a", "b"],
+        )
+
+
 def test_from_image_paths_sets_image_modality():
     dataset = BenchmarkDataset.from_image_paths(
         ["a.png", "b.png", "c.png", "d.png"],
@@ -244,6 +360,34 @@ def test_stratified_subsample_indices_preserve_classes():
 
     assert len(indices) == 7
     assert subset.class_counts() == {"a": 3, "b": 2, "c": 2}
+    assert subset.metadata["sample_indices"] == indices.tolist()
+
+
+def test_multilabel_stratified_subsample_indices_preserve_label_counts():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(12, 2),
+        [
+            ("a", "b"),
+            ("a",),
+            ("a", "c"),
+            ("a",),
+            ("b",),
+            ("b", "c"),
+            ("b",),
+            ("c",),
+            ("c",),
+            ("a", "b"),
+            ("a", "c"),
+            ("b", "c"),
+        ],
+        modality="tabular",
+    )
+
+    indices = dataset.stratified_subsample_indices(rate=0.4, random_state=1)
+    subset = dataset.subset(indices)
+
+    assert all(count >= 2 for count in subset.class_counts().values())
+    assert subset.summary()["target_type"] == "multi_label"
     assert subset.metadata["sample_indices"] == indices.tolist()
 
 

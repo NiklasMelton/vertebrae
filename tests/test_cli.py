@@ -649,6 +649,83 @@ def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
     assert payload["compression_metadata"]["compressed_dim"] == 2
 
 
+def test_cli_scores_multilabel_dataset_from_artifacts(tmp_path, capsys, fake_overlapindex):
+    dataset_path, extractor_path = _write_pickled_multilabel_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--shard-index",
+                "0",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "write-labels",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
+    label_manifest = json.loads(capsys.readouterr().out)
+
+    assert main(["score", "--cache-dir", str(cache_dir), "--plan-json", str(plan_path)]) == 0
+    score = json.loads(capsys.readouterr().out)
+
+    assert label_manifest["target_type"] == "multi_label"
+    assert score["score"]["metadata"]["target_type"] == "multi_label"
+    assert fake_overlapindex.calls[-1]["fit_y_shape"] == [12, 3]
+
+
 def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     plan_path = tmp_path / "plan.json"
@@ -837,6 +914,34 @@ def _write_pickled_multi_output_inputs(tmp_path):
     )
     dataset_path = tmp_path / "dataset.pkl"
     extractor_path = tmp_path / "extractor.pkl"
+    with dataset_path.open("wb") as f:
+        pickle.dump(dataset, f)
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+    return dataset_path, extractor_path
+
+
+def _write_pickled_multilabel_inputs(tmp_path):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(36).reshape(12, 3),
+        [
+            ("red", "round"),
+            ("red",),
+            ("round",),
+            ("red", "sweet"),
+            ("round", "sweet"),
+            ("sweet",),
+            ("red", "round"),
+            ("red",),
+            ("round",),
+            ("red", "sweet"),
+            ("round", "sweet"),
+            ("sweet",),
+        ],
+    )
+    extractor = PrecomputedExtractor()
+    dataset_path = tmp_path / "multilabel_dataset.pkl"
+    extractor_path = tmp_path / "multilabel_extractor.pkl"
     with dataset_path.open("wb") as f:
         pickle.dump(dataset, f)
     with extractor_path.open("wb") as f:

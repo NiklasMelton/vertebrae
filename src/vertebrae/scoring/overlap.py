@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 from vertebrae.config import OverlapScoringConfig
-from vertebrae.utils.labels import class_counts, display_label
+from vertebrae.utils.labels import class_counts, display_label, metric_labels, target_summary
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import (
     ensure_numeric_matrix,
@@ -81,6 +81,7 @@ def resolve_kmeans_k(
     y: Any,
     config: OverlapScoringConfig,
     return_warnings: bool = False,
+    label_names: Optional[Any] = None,
 ) -> Union[Dict[Any, int], Tuple[Dict[Any, int], List[str]]]:
     """Resolve MiniBatchKMeans k values per class.
 
@@ -94,12 +95,17 @@ def resolve_kmeans_k(
         is true, returns `(k_per_class, warnings)`.
     """
 
-    y_arr = np.asarray(y)
-    counts = class_counts(y_arr)
+    counts = class_counts(y, label_names=label_names)
     warnings: List[str] = []
     k_per_class: Dict[Any, int] = {}
 
     for label, count in counts.items():
+        if count < 1:
+            warnings.append(
+                "Skipped k resolution for label "
+                f"{display_label(label)} because it has no samples in this scoring target."
+            )
+            continue
         if isinstance(config.k, int):
             requested = config.k
         elif isinstance(config.k, dict):
@@ -145,7 +151,13 @@ class OverlapIndexScorer:
     def __init__(self, config: Optional[OverlapScoringConfig] = None) -> None:
         self.config = config or OverlapScoringConfig()
 
-    def score(self, Z: Any, y: Any, seed: Optional[int] = None) -> OverlapScoreResult:
+    def score(
+        self,
+        Z: Any,
+        y: Any,
+        seed: Optional[int] = None,
+        label_names: Optional[Any] = None,
+    ) -> OverlapScoreResult:
         """Score dense or sparse embeddings with OverlapIndex.
 
         Sparse embeddings are validated and densified at this boundary because
@@ -165,7 +177,7 @@ class OverlapIndexScorer:
         """
 
         embeddings = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
-        labels = np.asarray(y)
+        labels, label_metadata = metric_labels(y, label_names=label_names)
         if embeddings.shape[0] != len(labels):
             raise ValueError(
                 "embeddings and labels must have the same length; "
@@ -186,7 +198,12 @@ class OverlapIndexScorer:
         if self.config.normalize_embeddings:
             embeddings = l2_normalize_rows(embeddings)
 
-        k_per_class, k_warnings = resolve_kmeans_k(labels, self.config, return_warnings=True)
+        k_per_class, k_warnings = resolve_kmeans_k(
+            y,
+            self.config,
+            return_warnings=True,
+            label_names=label_metadata.get("label_names"),
+        )
         warnings.extend(k_warnings)
         kmeans_kwargs = dict(self.config.kmeans_kwargs or {})
         if seed is not None:
@@ -201,6 +218,7 @@ class OverlapIndexScorer:
         )
         raw_score = index.fit_offline(embeddings, labels, reset_state=True)
         macro_score = _extract_macro_score(index, raw_score)
+        summary = target_summary(y, label_names=label_metadata.get("label_names"))
 
         metadata = {
             "backend": "MiniBatchKMeans",
@@ -210,13 +228,16 @@ class OverlapIndexScorer:
             "kmeans_kwargs": kmeans_kwargs,
             "sparse_input": sparse_input,
             "scoring_input_format": "dense",
+            "target_type": label_metadata["target_type"],
+            "label_names": label_metadata.get("label_names"),
+            "target_summary": summary,
         }
         return OverlapScoreResult(
             macro_score=macro_score,
             per_class_scores=make_json_safe(getattr(index, "singleton_index", {})),
             pairwise_scores=make_json_safe(getattr(index, "pairwise_index", {})),
             sparse_adjacency=make_json_safe(getattr(index, "sparse_adj", None)),
-            class_counts=class_counts(labels),
+            class_counts=summary["class_counts"],
             k_per_class=k_per_class,
             warnings=warnings,
             metadata=metadata,
@@ -240,7 +261,7 @@ def _load_overlap_index() -> Any:
         from overlapindex import OverlapIndex
     except ImportError as exc:
         raise ImportError(
-            "overlapindex>=0.1.3a1 is required for scoring. Install dependencies with "
+            "overlapindex>=0.1.3a2 is required for scoring. Install dependencies with "
             "Poetry or install overlapindex directly."
         ) from exc
     return OverlapIndex

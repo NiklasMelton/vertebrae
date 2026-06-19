@@ -14,9 +14,12 @@ class FakeOverlapIndex:
 
     def fit_offline(self, Z, y, reset_state=True):
         assert reset_state is True
+        y_arr = np.asarray(y)
+        self.__class__.calls[-1]["fit_y_shape"] = list(y_arr.shape)
+        self.__class__.calls[-1]["fit_y"] = y_arr.copy()
         seed = (self.kwargs.get("kmeans_kwargs") or {}).get("random_state")
         jitter = 0.0 if seed is None else (int(seed) % 17) / 1_000.0
-        labels = np.unique(y)
+        labels = np.arange(y_arr.shape[1]) if y_arr.ndim == 2 else np.unique(y_arr)
         self.index = 0.80 + jitter
         self.singleton_index = {
             str(label): 0.70 + (idx * 0.03) + jitter for idx, label in enumerate(labels)
@@ -53,6 +56,7 @@ class FakeComplexityProfiler:
                 "shape": list(X.shape),
                 "is_sparse": hasattr(X, "tocsr"),
                 "n_labels": len(y),
+                "y_shape": list(np.asarray(y).shape),
             }
         )
         return self
@@ -62,6 +66,7 @@ class FakeComplexityProfiler:
 
 
 def _build_fake_separatix_payload(X, y, kwargs):
+    label_summary = _fake_class_summary(y)
     return {
         "recommendation": "smooth_nonlinear_recommended",
         "recommendation_text": "Recommendation: smooth nonlinear boundary.",
@@ -125,16 +130,7 @@ def _build_fake_separatix_payload(X, y, kwargs):
         "preprocessing": {"input_type": type(X).__name__, "is_sparse": hasattr(X, "tocsr")},
         "sampling": {"probe": None, "neighbors": None, "boundary": None},
         "densification_events": [],
-        "class_summary": {
-            "n_classes": len(np.unique(y)),
-            "classes": [str(label) for label in np.unique(y)],
-            "class_counts": {
-                str(label): int(np.sum(np.asarray(y) == label)) for label in np.unique(y)
-            },
-            "imbalance_ratio": 1.0,
-            "min_class_count": int(min(np.unique(y, return_counts=True)[1])),
-            "max_class_count": int(max(np.unique(y, return_counts=True)[1])),
-        },
+        "class_summary": label_summary,
         "runtime": {"total_seconds": 0.01},
         "config": {
             "budget": kwargs.get("budget", "standard"),
@@ -147,6 +143,32 @@ def _build_fake_separatix_payload(X, y, kwargs):
             "warn_on_densify": kwargs.get("warn_on_densify", True),
             "n_jobs": kwargs.get("n_jobs"),
         },
+    }
+
+
+def _fake_class_summary(y):
+    y_arr = np.asarray(y)
+    if y_arr.ndim == 2:
+        counts = np.asarray(y_arr.sum(axis=0), dtype=int)
+        labels = [f"label_{index}" for index in range(y_arr.shape[1])]
+        return {
+            "n_classes": int(y_arr.shape[1]),
+            "classes": labels,
+            "class_counts": {
+                label: int(count) for label, count in zip(labels, counts.tolist())
+            },
+            "imbalance_ratio": 1.0,
+            "min_class_count": int(counts.min()) if counts.size else 0,
+            "max_class_count": int(counts.max()) if counts.size else 0,
+        }
+    labels, counts = np.unique(y_arr, return_counts=True)
+    return {
+        "n_classes": len(labels),
+        "classes": [str(label) for label in labels],
+        "class_counts": {str(label): int(count) for label, count in zip(labels, counts)},
+        "imbalance_ratio": 1.0,
+        "min_class_count": int(min(counts)),
+        "max_class_count": int(max(counts)),
     }
 
 
@@ -169,6 +191,7 @@ def fake_separatix(monkeypatch):
                 "shape": list(X.shape),
                 "is_sparse": hasattr(X, "tocsr"),
                 "n_labels": len(y),
+                "y_shape": list(np.asarray(y).shape),
                 **kwargs,
             }
         )

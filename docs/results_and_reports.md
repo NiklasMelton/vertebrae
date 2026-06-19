@@ -27,6 +27,10 @@ Each extractor contributes an `ExtractorResult` with:
 - recommendation label,
 - weakest-class diagnostics when available.
 
+For multi-label datasets, `target_type` is `multi_label`, `class_counts` means
+per-label occurrence counts, and result metadata preserves `label_names` plus
+labelset summary fields.
+
 Multi-output extractors contribute one `ExtractorResult` per named output. Result
 names use the form `parent_name:output_name`, and embedding metadata preserves
 `parent_extractor_name` and `output_name`.
@@ -76,6 +80,7 @@ At a high level, reports include:
 - extractor summary,
 - label-view metadata when hierarchy-derived views are benchmarked,
 - overlap configuration,
+- target type and multi-label summary fields when applicable,
 - ranked comparison table for multi-extractor runs,
 - global and per-class scores,
 - per-output branch or fused source metadata when available,
@@ -87,8 +92,9 @@ At a high level, reports include:
 - reproducibility metadata.
 
 Separatix is the default classifier-complexity diagnostic when the overlap gate
-passes. Native vertebrae probes remain available as an explicit quick-check
-option through `ProbeConfig(enabled=True)`.
+passes, including multi-label datasets. Native vertebrae probes remain available
+as an explicit quick-check option through `ProbeConfig(enabled=True)`; they skip
+multi-label targets with a warning because they are currently single-label only.
 
 ## What recommendations mean
 

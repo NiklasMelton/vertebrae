@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from vertebrae.config import OverlapScoringConfig, SeparatixConfig
+from vertebrae.utils.labels import metric_labels, target_summary
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix, l2_normalize_rows
 
@@ -44,11 +45,16 @@ class SeparatixScorer:
         self.config = config or SeparatixConfig()
         self.overlap_config = overlap_config or OverlapScoringConfig()
 
-    def score(self, Z: Any, y: Any) -> SeparatixResult:
+    def score(
+        self,
+        Z: Any,
+        y: Any,
+        label_names: Optional[Any] = None,
+    ) -> SeparatixResult:
         """Run Separatix on dense or sparse embeddings and labels."""
 
         embeddings = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
-        labels = np.asarray(y)
+        labels, label_metadata = metric_labels(y, label_names=label_names)
         if embeddings.shape[0] != len(labels):
             raise ValueError(
                 "embeddings and labels must have the same length; "
@@ -60,8 +66,9 @@ class SeparatixScorer:
         if normalize_embeddings:
             embeddings = _l2_normalize_for_separatix(embeddings)
 
-        report = self._run_separatix(embeddings, labels)
+        report = self._run_separatix(embeddings, labels, label_metadata)
         report_dict = make_json_safe(report.to_dict())
+        summary = target_summary(y, label_names=label_metadata.get("label_names"))
         return SeparatixResult(
             ran=True,
             recommendation=report_dict.get("recommendation"),
@@ -79,6 +86,9 @@ class SeparatixScorer:
                 "max_samples": self.config.max_samples,
                 "max_dense_mb": self._max_dense_mb(),
                 "n_jobs": self.config.n_jobs,
+                "target_type": label_metadata["target_type"],
+                "label_names": label_metadata.get("label_names"),
+                "target_summary": summary,
             },
         )
 
@@ -95,7 +105,12 @@ class SeparatixScorer:
             },
         )
 
-    def _run_separatix(self, embeddings: Any, labels: np.ndarray) -> Any:
+    def _run_separatix(
+        self,
+        embeddings: Any,
+        labels: np.ndarray,
+        label_metadata: Dict[str, Any],
+    ) -> Any:
         separatix = _load_separatix()
         kwargs = {
             "return_report": True,
@@ -104,6 +119,8 @@ class SeparatixScorer:
             "max_dense_mb": self._max_dense_mb(),
             "max_samples": self.config.max_samples,
         }
+        if label_metadata["target_type"] == "multi_label":
+            kwargs["target_mode"] = "multilabel"
         if self.config.n_jobs is None:
             return separatix.diagnose(embeddings, labels, **kwargs)
 
@@ -114,7 +131,12 @@ class SeparatixScorer:
             random_state=kwargs["random_state"],
             n_jobs=self.config.n_jobs,
         )
-        return profiler.fit(embeddings, labels).report()
+        fit_kwargs = {"target_mode": "multilabel"} if kwargs.get("target_mode") else {}
+        try:
+            fitted = profiler.fit(embeddings, labels, **fit_kwargs)
+        except TypeError:
+            fitted = profiler.fit(embeddings, labels)
+        return fitted.report()
 
     def _max_dense_mb(self) -> int:
         max_dense_bytes = self.config.max_dense_bytes
@@ -128,7 +150,7 @@ def _load_separatix() -> Any:
         import separatix
     except ImportError as exc:
         raise ImportError(
-            "separatix is required for complexity diagnostics. Install dependencies with "
+            "separatix>=0.1.0a3 is required for complexity diagnostics. Install dependencies with "
             "Poetry or install separatix directly."
         ) from exc
     return separatix

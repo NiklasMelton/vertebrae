@@ -11,7 +11,7 @@ Use the constructor that matches the form of your source data:
 
 - `BenchmarkDataset.from_arrays(...)` for array-like samples and labels.
 - `BenchmarkDataset.from_dataframe(...)` for pandas DataFrames with explicit input
-  and label columns.
+  and label columns, including multi-label indicator columns.
 - `BenchmarkDataset.from_embeddings(...)` for dense or sparse precomputed
   embeddings.
 - `BenchmarkDataset.from_image_paths(...)` for image classification datasets stored
@@ -63,16 +63,51 @@ embedding_dataset = BenchmarkDataset.from_embeddings(
 )
 ```
 
+Multi-label datasets can use per-sample label sequences:
+
+```python
+dataset = BenchmarkDataset.from_embeddings(
+    embeddings=Z,
+    labels=[
+        ("outdoor", "vehicle"),
+        ("outdoor", "vehicle"),
+        ("indoor",),
+        ("indoor",),
+        ("outdoor", "animal"),
+        ("animal",),
+    ],
+)
+```
+
+They can also use a binary indicator matrix. Pass `label_names` when you want
+report fields and `k` mappings to use semantic names:
+
+```python
+dataset = BenchmarkDataset.from_arrays(
+    X=samples,
+    y=indicator_matrix,
+    modality="image",
+    label_names=["animal", "vehicle", "outdoor"],
+)
+```
+
+For DataFrames, pass multiple label columns to `label_col`; those columns are
+treated as 0/1 indicator columns and their names become `label_names`.
+
 ## Validation rules
 
 Every constructor validates the dataset immediately. Current validation checks
 include:
 
 - `X` and `y` must have the same number of samples.
-- labels must be one-dimensional and non-missing.
+- labels must be non-missing.
 - the dataset must contain at least one sample.
-- the dataset must contain at least two classes.
-- each class must contain at least two samples.
+- the dataset must contain at least two classes or labels.
+- each class or label must contain at least two samples.
+
+Multi-label targets additionally require every sample to have at least one label,
+no duplicate labels within a sample, and binary values for indicator matrices.
+For multi-label summaries, `class_counts` means per-label occurrence counts.
 
 These checks keep downstream scoring failures readable and early. If class counts
 are too small for the selected protocol, fix the dataset or rebalance it before
@@ -121,6 +156,9 @@ dataset = BenchmarkDataset.from_multimodal(
 
 V1 requires every declared modality to be present for every sample. Filter or
 impute missing modalities before constructing the dataset.
+
+Dataset summaries include `target_type`. For multi-label targets they also include
+`label_names`, `labelset_counts`, mean label cardinality, and label density.
 
 When using `from_dataframe(...)`, the dataset also records the original column names
 and chosen input columns. When using `from_embeddings(...)`, metadata is tagged with

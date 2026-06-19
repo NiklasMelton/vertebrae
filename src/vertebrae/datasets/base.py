@@ -9,11 +9,15 @@ from vertebrae.cache.fingerprint import fingerprint_array_like
 from vertebrae.execution.jobs import SampleBatch, ShardSpec
 from vertebrae.utils.labels import (
     class_counts,
+    coerce_label_input,
     default_label_view_metadata,
     hierarchy_depth,
     label_view_from_paths,
     normalize_label_paths,
     normalize_level_names,
+    normalize_targets,
+    stratified_label_indices,
+    target_summary,
 )
 from vertebrae.utils.validation import is_sparse_matrix
 
@@ -24,7 +28,7 @@ class BenchmarkDataset:
 
     Attributes:
         X: Input samples, tabular frame, image paths, or embedding matrix.
-        y: One-dimensional label array.
+        y: One-dimensional label array or canonical multi-label object array.
         modality: Dataset modality such as `"text"`, `"tabular"`, or `"embeddings"`.
         input_col: Source dataframe input column or columns.
         label_col: Source dataframe label column.
@@ -35,7 +39,7 @@ class BenchmarkDataset:
     y: np.ndarray
     modality: str
     input_col: Optional[Union[str, list[str]]] = None
-    label_col: Optional[str] = None
+    label_col: Optional[Union[str, list[str]]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -45,6 +49,7 @@ class BenchmarkDataset:
         y: Any,
         modality: str,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a dataset from array-like inputs and labels.
 
@@ -58,7 +63,12 @@ class BenchmarkDataset:
             Validated benchmark dataset.
         """
 
-        dataset = cls(X=X, y=np.asarray(y), modality=modality, metadata=metadata or {})
+        dataset = cls(
+            X=X,
+            y=coerce_label_input(y),
+            modality=modality,
+            metadata=_metadata_with_label_names(metadata, label_names),
+        )
         dataset.validate()
         return dataset
 
@@ -67,9 +77,10 @@ class BenchmarkDataset:
         cls,
         df: Any,
         input_col: Union[str, list[str]],
-        label_col: str,
+        label_col: Union[str, list[str]],
         modality: str,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a dataset from a pandas DataFrame.
 
@@ -91,18 +102,31 @@ class BenchmarkDataset:
         missing = [column for column in input_cols if column not in df.columns]
         if missing:
             raise ValueError(f"input_col contains columns not present in the dataframe: {missing}.")
-        if label_col not in df.columns:
-            raise ValueError(f"label_col '{label_col}' is not present in the dataframe.")
+        label_cols = [label_col] if isinstance(label_col, str) else list(label_col)
+        missing_labels = [column for column in label_cols if column not in df.columns]
+        if missing_labels:
+            raise ValueError(
+                f"label_col contains columns not present in the dataframe: {missing_labels}."
+            )
+        resolved_label_names = label_names
+        if resolved_label_names is None and not isinstance(label_col, str):
+            resolved_label_names = label_cols
         merged_metadata = {
             "source": "dataframe",
             "columns": list(df.columns),
             "input_columns": input_cols,
         }
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, resolved_label_names)
         X = df[input_col].to_numpy() if isinstance(input_col, str) else df[input_cols].copy()
+        labels = (
+            df[label_col].to_numpy()
+            if isinstance(label_col, str)
+            else df[label_cols].to_numpy()
+        )
         dataset = cls(
             X=X,
-            y=df[label_col].to_numpy(),
+            y=labels,
             modality=modality,
             input_col=input_col,
             label_col=label_col,
@@ -117,6 +141,7 @@ class BenchmarkDataset:
         paths: Any,
         labels: Any,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create an image dataset from filesystem paths.
 
@@ -131,9 +156,10 @@ class BenchmarkDataset:
 
         merged_metadata = {"source": "image_paths"}
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         dataset = cls(
             X=np.asarray(paths, dtype=object),
-            y=np.asarray(labels),
+            y=coerce_label_input(labels),
             modality="image",
             metadata=merged_metadata,
         )
@@ -146,6 +172,7 @@ class BenchmarkDataset:
         paths: Any,
         labels: Any,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create an audio dataset from filesystem paths.
 
@@ -160,9 +187,10 @@ class BenchmarkDataset:
 
         merged_metadata = {"source": "audio_paths"}
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         dataset = cls(
             X={"path": np.asarray(paths, dtype=object)},
-            y=np.asarray(labels),
+            y=coerce_label_input(labels),
             modality="audio",
             metadata=merged_metadata,
         )
@@ -176,6 +204,7 @@ class BenchmarkDataset:
         labels: Any,
         sampling_rate: int,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create an audio dataset from waveform arrays.
 
@@ -189,12 +218,13 @@ class BenchmarkDataset:
             Validated audio dataset.
         """
 
-        label_array = np.asarray(labels)
+        label_array = coerce_label_input(labels)
         merged_metadata = {
             "source": "audio_arrays",
             "sampling_rate": int(sampling_rate),
         }
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         dataset = cls(
             X={
                 "array": _coerce_object_sequence(audio),
@@ -213,6 +243,7 @@ class BenchmarkDataset:
         paths: Any,
         labels: Any,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a video dataset from filesystem paths.
 
@@ -227,9 +258,10 @@ class BenchmarkDataset:
 
         merged_metadata = {"source": "video_paths"}
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         dataset = cls(
             X={"path": np.asarray(paths, dtype=object)},
-            y=np.asarray(labels),
+            y=coerce_label_input(labels),
             modality="video",
             metadata=merged_metadata,
         )
@@ -243,6 +275,7 @@ class BenchmarkDataset:
         labels: Any,
         frame_rate: Optional[Any] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a video dataset from predecoded frame arrays.
 
@@ -256,7 +289,7 @@ class BenchmarkDataset:
             Validated video dataset.
         """
 
-        label_array = np.asarray(labels)
+        label_array = coerce_label_input(labels)
         merged_metadata: Dict[str, Any] = {"source": "video_arrays"}
         payload: Dict[str, Any] = {"frames": _coerce_object_sequence(frames)}
         if frame_rate is not None:
@@ -267,6 +300,7 @@ class BenchmarkDataset:
             else:
                 payload["frame_rate"] = np.asarray(frame_rate, dtype=float)
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         dataset = cls(
             X=payload,
             y=label_array,
@@ -285,6 +319,7 @@ class BenchmarkDataset:
         time_features: Any = None,
         timestamps: Any = None,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a time-series dataset from aligned sequence inputs.
 
@@ -303,6 +338,7 @@ class BenchmarkDataset:
 
         merged_metadata = {"source": "time_series"}
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         payload: Dict[str, Any] = {"series": np.asarray(series)}
         if observed_mask is not None:
             payload["observed_mask"] = np.asarray(observed_mask)
@@ -312,7 +348,7 @@ class BenchmarkDataset:
             payload["timestamps"] = np.asarray(timestamps)
         dataset = cls(
             X=payload,
-            y=np.asarray(labels),
+            y=coerce_label_input(labels),
             modality="time_series",
             metadata=merged_metadata,
         )
@@ -326,6 +362,7 @@ class BenchmarkDataset:
         labels: Any,
         modalities: Dict[str, str],
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a dataset from aligned multi-modal sample fields.
 
@@ -353,7 +390,7 @@ class BenchmarkDataset:
                 f"got {sorted(input_keys)} and {sorted(modality_keys)}."
             )
 
-        label_array = np.asarray(labels)
+        label_array = coerce_label_input(labels)
         normalized_inputs: Dict[str, Any] = {}
         for field_name in input_keys:
             normalized_inputs[field_name] = _normalize_multimodal_field(
@@ -373,6 +410,7 @@ class BenchmarkDataset:
             "modalities": {key: str(modalities[key]) for key in input_keys},
         }
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         dataset = cls(
             X=normalized_inputs,
             y=label_array,
@@ -388,6 +426,7 @@ class BenchmarkDataset:
         embeddings: Any,
         labels: Any,
         metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a dataset from precomputed dense or sparse embeddings.
 
@@ -402,9 +441,10 @@ class BenchmarkDataset:
 
         merged_metadata = {"precomputed_embeddings": True}
         merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_label_names(merged_metadata, label_names)
         dataset = cls(
             X=embeddings if is_sparse_matrix(embeddings) else np.asarray(embeddings),
-            y=np.asarray(labels),
+            y=coerce_label_input(labels),
             modality="embeddings",
             metadata=merged_metadata,
         )
@@ -419,8 +459,9 @@ class BenchmarkDataset:
                 classes are present, or a class has fewer than two samples.
         """
 
-        if self.y.ndim != 1:
-            raise ValueError("Labels must be one-dimensional.")
+        label_names = self.metadata.get("label_names")
+        normalized_labels, label_metadata = normalize_targets(self.y, label_names=label_names)
+        self.y = normalized_labels
         n_samples = _num_samples(self.X)
         if n_samples != len(self.y):
             raise ValueError(
@@ -428,9 +469,12 @@ class BenchmarkDataset:
             )
         if len(self.y) == 0:
             raise ValueError("Dataset must contain at least one sample.")
-        if _has_missing_labels(self.y):
-            raise ValueError("Labels must be non-missing.")
-        counts = self.class_counts()
+        self.metadata["target_type"] = label_metadata["target_type"]
+        if label_metadata["target_type"] == "multi_label":
+            self.metadata["label_names"] = list(label_metadata["label_names"])
+        else:
+            self.metadata.pop("label_names", None)
+        counts = label_metadata["class_counts"]
         if len(counts) < 2:
             raise ValueError("Dataset must contain at least two classes.")
         small = {label: count for label, count in counts.items() if count < 2}
@@ -444,7 +488,7 @@ class BenchmarkDataset:
             Mapping from original label values to sample counts.
         """
 
-        return class_counts(np.asarray(self.y))
+        return class_counts(self.y, label_names=self.metadata.get("label_names"))
 
     def with_label_hierarchy(
         self,
@@ -467,7 +511,7 @@ class BenchmarkDataset:
         metadata["label_hierarchy"] = hierarchy_metadata
         dataset = BenchmarkDataset(
             X=self.X,
-            y=np.asarray(self.y),
+            y=coerce_label_input(self.y),
             modality=self.modality,
             input_col=self.input_col,
             label_col=self.label_col,
@@ -561,16 +605,13 @@ class BenchmarkDataset:
             raise ValueError("subsample rate must be in (0, 1].")
         if rate >= 1.0:
             return np.arange(len(self.y), dtype=int)
-        rng = np.random.default_rng(random_state)
-        selected = []
-        for label in np.unique(self.y):
-            class_indices = np.flatnonzero(self.y == label)
-            target = int(np.floor(len(class_indices) * rate))
-            if len(class_indices) >= min_samples_per_class:
-                target = max(min_samples_per_class, target)
-            target = max(1, min(len(class_indices), target))
-            selected.extend(rng.choice(class_indices, size=target, replace=False).tolist())
-        return np.asarray(sorted(selected), dtype=int)
+        return stratified_label_indices(
+            self.y,
+            rate=rate,
+            random_state=random_state,
+            min_samples_per_class=min_samples_per_class,
+            label_names=self.metadata.get("label_names"),
+        )
 
     def subset(self, indices: Any, metadata: Optional[Dict[str, Any]] = None) -> "BenchmarkDataset":
         """Create a dataset subset by original sample indices.
@@ -623,16 +664,27 @@ class BenchmarkDataset:
             JSON-compatible dataset summary.
         """
 
-        return {
+        labels = target_summary(self.y, label_names=self.metadata.get("label_names"))
+        summary = {
             "n_samples": int(len(self.y)),
-            "n_classes": int(len(self.class_counts())),
-            "class_counts": self.class_counts(),
+            "n_classes": labels["n_classes"],
+            "class_counts": labels["class_counts"],
+            "target_type": labels["target_type"],
             "modality": self.modality,
             "input_col": self.input_col,
             "label_col": self.label_col,
             "label_view": self.active_label_view(),
             "metadata": self.metadata,
         }
+        for key in (
+            "label_names",
+            "labelset_counts",
+            "mean_label_cardinality",
+            "label_density",
+        ):
+            if key in labels:
+                summary[key] = labels[key]
+        return summary
 
     def fingerprint(self) -> str:
         """Compute a conservative dataset fingerprint for caching.
@@ -653,15 +705,14 @@ class BenchmarkDataset:
         )
 
 
-def _has_missing_labels(y: np.ndarray) -> bool:
-    try:
-        import pandas as pd
-
-        return bool(pd.isna(y).any())
-    except ImportError:
-        if y.dtype.kind in {"f", "c"}:
-            return bool(np.isnan(y).any())
-        return any(label is None for label in y)
+def _metadata_with_label_names(
+    metadata: Optional[Dict[str, Any]],
+    label_names: Optional[Iterable[Any]],
+) -> Dict[str, Any]:
+    merged = dict(metadata or {})
+    if label_names is not None:
+        merged["label_names"] = list(label_names)
+    return merged
 
 
 def _num_samples(X: Any) -> int:
