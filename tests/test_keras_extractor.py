@@ -4,7 +4,13 @@ import types
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator
+from vertebrae import (
+    BenchmarkDataset,
+    EmbeddingConfig,
+    Evaluator,
+    SpatialLayout,
+    SpatialOutputSpec,
+)
 from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
 from vertebrae.extractors import KerasExtractor
 
@@ -182,3 +188,26 @@ def test_keras_extractor_works_in_streaming_evaluator(monkeypatch, fake_overlapi
     assert metadata["streamed"] is True
     assert metadata["stream_batch_size"] == 3
     assert len(model.call_args) == 3
+
+
+def test_keras_extractor_supports_explicit_spatial_outputs(monkeypatch):
+    _install_fake_keras(monkeypatch)
+    model = FakeKerasModel(
+        call_fn=lambda batch, kwargs: {
+            "features": np.ones((2, 2, 2, 3), dtype=float)
+        }
+    )
+    extractor = KerasExtractor(
+        "spatial",
+        model=model,
+        spatial_output_fn=lambda output: output["features"],
+        spatial_output_specs=[
+            SpatialOutputSpec("layer", SpatialLayout(2, 2))
+        ],
+    )
+
+    output = extractor.transform_spatial(np.ones((2, 4), dtype=float))[0]
+
+    assert output.name == "layer"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (2, 2, 3)

@@ -227,6 +227,32 @@ def test_hf_vision_transform_many_shares_model_forward(fake_vision_modules):
     assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
 
 
+def test_hf_vision_exposes_explicit_patch_grid(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        spatial_outputs=[
+            {
+                "name": "patches",
+                "grid_shape": [2, 2],
+                "special_tokens": 1,
+                "hidden_layer": 2,
+            }
+        ],
+        batch_size=2,
+    )
+
+    output = extractor.transform_spatial(
+        [np.zeros((4, 4, 3), dtype=np.uint8)] * 2
+    )[0]
+
+    assert output.name == "patches"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (5, 6)
+    assert FakeVisionModel.call_count == 1
+    assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
+
+
 def test_hf_vision_rejects_pooler_with_hidden_layer(fake_vision_modules):
     extractor = HFVisionExtractor(
         "vit",

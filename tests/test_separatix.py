@@ -63,6 +63,20 @@ def test_separatix_scorer_passes_multilabel_target_mode(fake_separatix):
     assert call["y_shape"] == [6, 3]
 
 
+def test_separatix_scorer_passes_groups_without_serializing_ids(fake_separatix):
+    embeddings = np.arange(24, dtype=float).reshape(8, 3)
+    labels = np.array(["a"] * 4 + ["b"] * 4)
+    groups = np.array(["image-a"] * 2 + ["image-b"] * 2 + ["image-c"] * 2 + ["image-d"] * 2)
+
+    result = SeparatixScorer().score(embeddings, labels, groups=groups)
+
+    call = fake_separatix.ComplexityProfiler.calls[-1]
+    assert call["groups"].tolist() == groups.tolist()
+    assert result.metadata["grouped"] is True
+    assert result.metadata["n_groups"] == 4
+    assert "image-a" not in json.dumps(result.to_dict())
+
+
 def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapindex):
     embeddings = np.arange(48, dtype=float).reshape(16, 3)
     labels = np.array(["a"] * 8 + ["b"] * 8)
