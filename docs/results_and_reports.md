@@ -80,6 +80,7 @@ At a high level, reports include:
 - extractor summary,
 - label-view metadata when hierarchy-derived views are benchmarked,
 - overlap configuration,
+- global macro and weighted overlap scores plus reporting-only class exclusions,
 - target type and multi-label summary fields when applicable,
 - ranked comparison table for multi-extractor runs,
 - global and per-class scores,
@@ -90,6 +91,9 @@ At a high level, reports include:
 - warnings,
 - recommendations,
 - reproducibility metadata.
+
+Segmentation reports also include source-image counts, candidate and retained
+tokens, ignored-token reasons, background counts, and spatial layout metadata.
 
 Separatix is the default classifier-complexity diagnostic when the overlap gate
 passes, including multi-label datasets. Native vertebrae probes remain available

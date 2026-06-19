@@ -87,7 +87,10 @@ class BenchmarkResult:
 
         return sorted(
             self.extractor_results,
-            key=lambda item: item.overlap.macro_score,
+            key=lambda item: (
+                bool(item.overlap.metadata.get("aggregate_valid", True)),
+                item.overlap.macro_score,
+            ),
             reverse=True,
         )
 
@@ -108,6 +111,7 @@ class BenchmarkResult:
                     "extractor": item.name,
                     "extractor_type": item.extractor_type,
                     "overlap_macro": item.overlap.macro_score,
+                    "overlap_weighted": item.overlap.weighted_score,
                     "target_type": item.overlap.metadata.get("target_type", "single_label"),
                     "label_view": (item.label_view or {}).get("name"),
                     "weakest_class": item.weakest_class,

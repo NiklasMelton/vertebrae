@@ -1,9 +1,14 @@
 """Optional Torch module extractor for local user-supplied models."""
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 
+from vertebrae.extractors.spatial import (
+    SpatialEmbeddingOutput,
+    SpatialOutputSpec,
+    _per_image_values,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -39,6 +44,8 @@ class TorchExtractor:
         streaming_safe: bool = True,
         move_batch_to_device: bool = True,
         move_model_to_device: bool = True,
+        spatial_output_fn: Optional[Callable[[Any], Any]] = None,
+        spatial_output_specs: Optional[Iterable[SpatialOutputSpec]] = None,
     ) -> None:
         self.name = name
         self.model = model
@@ -52,6 +59,12 @@ class TorchExtractor:
         self.streaming_safe = streaming_safe
         self.move_batch_to_device = move_batch_to_device
         self.move_model_to_device = move_model_to_device
+        self.spatial_output_fn = spatial_output_fn
+        self._spatial_output_specs = list(spatial_output_specs or [])
+        if (self.spatial_output_fn is None) != (not self._spatial_output_specs):
+            raise ValueError(
+                "spatial_output_fn and spatial_output_specs must be provided together."
+            )
         self._torch: Any = None
         self._model_moved = False
 
@@ -82,6 +95,34 @@ class TorchExtractor:
 
         return self.fit(X, y).transform(X)
 
+    def spatial_output_specs(self) -> List[SpatialOutputSpec]:
+        return list(self._spatial_output_specs)
+
+    def transform_spatial(self, X: Any) -> List[SpatialEmbeddingOutput]:
+        if self.spatial_output_fn is None:
+            raise ValueError("TorchExtractor was not configured with spatial outputs.")
+        torch_module = self._load_torch()
+        self._maybe_move_model(torch_module)
+        batch = self.collate_fn(X)
+        if self.device is not None and self.move_batch_to_device:
+            batch = self._move_to_device(batch, torch_module)
+        values = self._to_numpy_nested(self.spatial_output_fn(self._call_model(batch)))
+        if not isinstance(values, dict) and len(self._spatial_output_specs) == 1:
+            values = {self._spatial_output_specs[0].name: values}
+        if not isinstance(values, dict):
+            raise ValueError("Multi-output Torch spatial adapters must return a mapping.")
+        return [
+            SpatialEmbeddingOutput(
+                name=spec.name,
+                embeddings=_per_image_values(values[spec.name], spec.layout),
+                layout=spec.layout,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+                annotation_transform=spec.annotation_transform,
+            )
+            for spec in self._spatial_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable recipe for this extractor."""
 
@@ -98,6 +139,20 @@ class TorchExtractor:
             "streaming_safe": self.streaming_safe,
             "move_batch_to_device": self.move_batch_to_device,
             "move_model_to_device": self.move_model_to_device,
+            "spatial_output_fn": (
+                _callable_name(self.spatial_output_fn)
+                if self.spatial_output_fn is not None
+                else None
+            ),
+            "spatial_outputs": [
+                {
+                    "name": spec.name,
+                    "layout": spec.layout.__dict__,
+                    "hidden_layer": spec.hidden_layer,
+                    "metadata": spec.metadata,
+                }
+                for spec in self._spatial_output_specs
+            ],
         }
 
     def _load_torch(self) -> Any:
@@ -151,6 +206,15 @@ class TorchExtractor:
         if hasattr(value, "detach") and hasattr(value, "cpu") and hasattr(value, "numpy"):
             return value.detach().cpu().numpy()
         return value
+
+    def _to_numpy_nested(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: self._to_numpy_nested(item) for key, item in value.items()}
+        if isinstance(value, tuple):
+            return tuple(self._to_numpy_nested(item) for item in value)
+        if isinstance(value, list):
+            return [self._to_numpy_nested(item) for item in value]
+        return self._tensor_to_numpy(value)
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:

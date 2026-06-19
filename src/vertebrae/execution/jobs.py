@@ -232,4 +232,5 @@ class SeparatixJob:
     score_key: str
     output_key: str
     separatix_config: Any = None
+    groups_key: Optional[str] = None
     resources: ResourceSpec = ResourceSpec()

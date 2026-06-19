@@ -6,6 +6,10 @@ All overlap scoring in `vertebrae` goes through one internal adapter:
 `vertebrae` can also run a default Separatix complexity diagnostic through the
 internal `SeparatixScorer` adapter. Separatix does not affect extractor ranking;
 it adds classifier-complexity guidance on top of the overlap result when enabled.
+When a dataset declares groups, vertebrae forwards them to Separatix so supervised
+evaluation and structural evidence respect those independence units. A grouped
+diagnostic that lacks sufficient cross-group class support is recorded as skipped;
+vertebrae never retries it with a row-level split.
 
 ## Fixed metric backend
 
@@ -38,6 +42,7 @@ config = OverlapScoringConfig(
     kmeans_kwargs={"batch_size": 256},
     offline_chunk_size=10_000,
     normalize_embeddings=True,
+    exclude_classes=None,
 )
 ```
 
@@ -51,6 +56,12 @@ Key fields:
 - `offline_chunk_size`: chunk size passed to `OverlapIndex.fit_offline(...)`.
 - `normalize_embeddings`: enables L2 row normalization before scoring.
 - `max_dense_bytes`: caps sparse-to-dense conversion size at the scoring boundary.
+- `exclude_classes`: class id or ids retained during fitting and detailed
+  diagnostics but omitted from global macro and weighted aggregation.
+
+Do not reconstruct the global score by averaging per-class scores: reporting-only
+excluded classes remain present there. `OverlapScoreResult` records both
+`macro_score` and `weighted_score`, plus the effective aggregation classes.
 
 ## Automatic k resolution
 

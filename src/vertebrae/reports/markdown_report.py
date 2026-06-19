@@ -34,12 +34,18 @@ def render_markdown_report(result: Any) -> str:
         [
             "## Dataset summary",
             "",
-            f"- Samples: {dataset['n_samples']}",
-            f"- Classes: {dataset['n_classes']}",
+            f"- Samples: {dataset.get('n_samples', dataset.get('n_images', ''))}",
+            f"- Classes: {dataset.get('n_classes', dataset.get('n_classes_raw', ''))}",
             f"- Target type: {dataset.get('target_type', 'single_label')}",
             f"- Modality: {dataset['modality']}",
         ]
     )
+    if dataset.get("modality") == "segmentation":
+        lines.append(f"- Source images: {dataset.get('n_images', '')}")
+        lines.append(
+            "- Interpretation: dense semantic representation separation; "
+            "this is not IoU, mask accuracy, or boundary accuracy."
+        )
     if dataset.get("target_type") == "multi_label":
         lines.append(
             "- " f"Mean label cardinality: {_format_float(dataset.get('mean_label_cardinality'))}"
@@ -71,13 +77,15 @@ def render_markdown_report(result: Any) -> str:
         )
     lines.extend(["", "## Ranking", ""])
     lines.append(
-        "| rank | extractor | extractor_type | label_view | overlap_macro | stability_interval | "
+        "| rank | extractor | extractor_type | label_view | overlap_macro | "
+        "overlap_weighted | stability_interval | "
         "weakest_class | probe_accuracy | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | --- | ---: | --- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
+        "| --- | --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | "
+        "--- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(result.ranked_results(), start=1):
         interval = _format_interval(item.stability)
@@ -94,7 +102,8 @@ def render_markdown_report(result: Any) -> str:
             separatix_confidence = item.separatix.confidence or ""
         lines.append(
             f"| {rank} | {item.name} | {item.extractor_type} | "
-            f"{label_view} | {item.overlap.macro_score:.4f} | {interval} | {weakest} | "
+            f"{label_view} | {item.overlap.macro_score:.4f} | "
+            f"{_format_float(item.overlap.weighted_score)} | {interval} | {weakest} | "
             f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
             f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
             f"{separatix_confidence} |"
@@ -120,6 +129,8 @@ def render_markdown_report(result: Any) -> str:
                 f"- Compression precision: {item.compression_metadata.get('precision', '')}",
                 f"- Compressed dimension: {item.compression_metadata.get('compressed_dim', '')}",
                 f"- Overlap macro: {item.overlap.macro_score:.4f}",
+                f"- Overlap weighted: {_format_float(item.overlap.weighted_score)}",
+                f"- Excluded aggregate classes: {item.overlap.metadata.get('exclude_classes', [])}",
                 f"- Weakest class: {item.weakest_class or ''}",
                 f"- Recommendation: {item.recommendation}",
                 "",
@@ -127,6 +138,18 @@ def render_markdown_report(result: Any) -> str:
                 "",
             ]
         )
+        segmentation = item.embedding_metadata.get("segmentation")
+        if segmentation:
+            lines.extend(
+                [
+                    f"- Source images: {segmentation.get('n_images', '')}",
+                    f"- Candidate tokens: {segmentation.get('candidate_tokens', '')}",
+                    f"- Retained tokens: {segmentation.get('retained_tokens', '')}",
+                    f"- Background tokens: {segmentation.get('background_tokens', '')}",
+                    f"- Ignored tokens: {segmentation.get('ignored_tokens', {})}",
+                    f"- Spatial layout: {segmentation.get('layout', {})}",
+                ]
+            )
         recipe = item.embedding_metadata.get("recipe") or item.embedding_metadata.get(
             "extractor_recipe",
             {},

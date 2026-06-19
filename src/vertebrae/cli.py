@@ -23,9 +23,12 @@ from vertebrae.execution import (
     embedding_output_key,
     embedding_output_shard_key,
     embedding_shard_key,
+    groups_artifact_key,
     labels_artifact_key,
     materialize_embedding_shard,
+    materialize_group_artifact,
     materialize_label_artifact,
+    materialize_segmentation_artifacts,
     merge_embedding_shards,
     plan_compression_job,
     plan_embedding_shard_jobs,
@@ -101,6 +104,24 @@ def build_parser() -> argparse.ArgumentParser:
     labels.add_argument("--output-json")
     labels.set_defaults(func=_cmd_write_labels)
 
+    groups = subparsers.add_parser("write-groups", help="Materialize dataset groups.")
+    groups.add_argument("--dataset-pickle", required=True)
+    _add_cache_arg(groups)
+    groups.add_argument("--output-key")
+    groups.add_argument("--output-json")
+    groups.set_defaults(func=_cmd_write_groups)
+
+    segmentation = subparsers.add_parser(
+        "materialize-segmentation",
+        help="Materialize spatial segmentation embeddings, labels, groups, and provenance.",
+    )
+    _add_object_args(segmentation)
+    _add_cache_arg(segmentation)
+    segmentation.add_argument("--segmentation-config-pickle")
+    segmentation.add_argument("--batch-size", type=int, default=16)
+    segmentation.add_argument("--output-json")
+    segmentation.set_defaults(func=_cmd_materialize_segmentation)
+
     score = subparsers.add_parser("score", help="Score persisted embeddings and labels.")
     _add_cache_arg(score)
     score.add_argument("--embedding-key")
@@ -122,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--score-key")
     diagnose.add_argument("--plan-json")
     diagnose.add_argument("--separatix-config-pickle")
+    diagnose.add_argument("--groups-key")
     diagnose.add_argument("--output-key")
     diagnose.add_argument("--output-json")
     diagnose.set_defaults(func=_cmd_diagnose_complexity)
@@ -258,6 +280,11 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "base_key": base_key,
         "output_key": base_key,
         "labels_key": labels_artifact_key(dataset),
+        "groups_key": (
+            groups_artifact_key(dataset)
+            if callable(getattr(dataset, "groups", None)) and dataset.groups() is not None
+            else None
+        ),
         "score_key": scoring_artifact_key(base_key),
         "n_samples": int(len(dataset.y)),
         "total_shards": args.total_shards,
@@ -337,6 +364,32 @@ def _cmd_write_labels(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_write_groups(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    return materialize_group_artifact(
+        dataset,
+        _store_from_args(args),
+        key=args.output_key,
+    )
+
+
+def _cmd_materialize_segmentation(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    config = (
+        _load_pickle(args.segmentation_config_pickle)
+        if args.segmentation_config_pickle
+        else None
+    )
+    return materialize_segmentation_artifacts(
+        dataset,
+        extractor,
+        _store_from_args(args),
+        segmentation_config=config,
+        batch_size=args.batch_size,
+    )
+
+
 def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
     plan = _load_json(args.plan_json) if args.plan_json else {}
     embedding_key = args.embedding_key or _resolve_embedding_key_from_plan(plan)
@@ -365,6 +418,7 @@ def _cmd_diagnose_complexity(args: argparse.Namespace) -> dict[str, Any]:
     plan = _load_json(args.plan_json) if args.plan_json else {}
     embedding_key = args.embedding_key or _resolve_embedding_key_from_plan(plan)
     labels_key = args.labels_key or plan.get("labels_key")
+    groups_key = args.groups_key or plan.get("groups_key")
     if embedding_key is None:
         raise ValueError("diagnose-complexity requires --embedding-key or --plan-json.")
     if labels_key is None:
@@ -381,6 +435,7 @@ def _cmd_diagnose_complexity(args: argparse.Namespace) -> dict[str, Any]:
             score_key=score_key,
             output_key=output_key,
             separatix_config=separatix_config,
+            groups_key=groups_key,
         ),
         _store_from_args(args),
     )

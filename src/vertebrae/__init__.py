@@ -19,10 +19,11 @@ from vertebrae.config import (
     MemoryConfig,
     OverlapScoringConfig,
     ProbeConfig,
+    SegmentationConfig,
     SeparatixConfig,
     StabilityConfig,
 )
-from vertebrae.datasets import BenchmarkDataset
+from vertebrae.datasets import BenchmarkDataset, SegmentationAnnotation, SegmentationDataset
 from vertebrae.evaluator import Evaluator
 from vertebrae.execution import (
     CompressionJob,
@@ -46,11 +47,14 @@ from vertebrae.execution import (
     embedding_output_key,
     embedding_output_shard_key,
     embedding_shard_key,
+    groups_artifact_key,
     labels_artifact_key,
     materialize_and_merge_embeddings,
     materialize_embedding_shard,
     materialize_embedding_shards,
+    materialize_group_artifact,
     materialize_label_artifact,
+    materialize_segmentation_artifacts,
     merge_embedding_shards,
     plan_compression_job,
     plan_embedding_shard_jobs,
@@ -63,6 +67,13 @@ from vertebrae.execution import (
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.huggingface_multimodal import HFMultimodalExtractor
+from vertebrae.extractors.spatial import (
+    CallableSpatialExtractor,
+    PrecomputedSpatialExtractor,
+    SpatialEmbeddingOutput,
+    SpatialLayout,
+    SpatialOutputSpec,
+)
 from vertebrae.results import BenchmarkResult, ExtractorResult
 
 __all__ = [
@@ -75,6 +86,11 @@ __all__ = [
     "diagnose_embedding_artifact",
     "EmbeddingOutput",
     "EmbeddingOutputSpec",
+    "CallableSpatialExtractor",
+    "PrecomputedSpatialExtractor",
+    "SpatialEmbeddingOutput",
+    "SpatialLayout",
+    "SpatialOutputSpec",
     "EmbeddingCompressionConfig",
     "EmbeddingConfig",
     "EmbeddingJob",
@@ -96,6 +112,9 @@ __all__ = [
     "SampleBatch",
     "ScoringJob",
     "SeparatixConfig",
+    "SegmentationConfig",
+    "SegmentationAnnotation",
+    "SegmentationDataset",
     "SeparatixJob",
     "ShardSpec",
     "ArtifactStoreConfig",
@@ -111,10 +130,13 @@ __all__ = [
     "embedding_output_shard_key",
     "embedding_shard_key",
     "labels_artifact_key",
+    "groups_artifact_key",
     "materialize_and_merge_embeddings",
     "materialize_embedding_shard",
     "materialize_embedding_shards",
     "materialize_label_artifact",
+    "materialize_group_artifact",
+    "materialize_segmentation_artifacts",
     "merge_embedding_shards",
     "plan_compression_job",
     "plan_embedding_shard_jobs",
