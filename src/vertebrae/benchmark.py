@@ -316,6 +316,7 @@ class Benchmark:
             overlap = OverlapIndexScorer(self.scoring_config).score(
                 compressed_embeddings,
                 dataset.y,
+                label_names=dataset.metadata.get("label_names"),
             )
             variant_runtime["scoring_seconds"] = perf_counter() - score_start
             variant_warnings.extend(overlap.warnings)
@@ -325,6 +326,7 @@ class Benchmark:
                 compressed_embeddings,
                 dataset.y,
                 overlap.macro_score,
+                label_names=dataset.metadata.get("label_names"),
             )
             variant_runtime["separatix_seconds"] = perf_counter() - separatix_start
             if separatix:
@@ -336,6 +338,7 @@ class Benchmark:
                 dataset.y,
                 self.scoring_config,
                 self.stability_config,
+                label_names=dataset.metadata.get("label_names"),
             )
             variant_runtime["stability_seconds"] = perf_counter() - stability_start
             if stability:
@@ -385,6 +388,7 @@ class Benchmark:
         embeddings: Any,
         labels: Any,
         macro_score: float,
+        label_names: Optional[Any] = None,
     ) -> Optional[SeparatixResult]:
         if not self.separatix_config.enabled:
             return None
@@ -401,7 +405,7 @@ class Benchmark:
                 ),
                 macro_score=macro_score,
             )
-        return scorer.score(embeddings, labels)
+        return scorer.score(embeddings, labels, label_names=label_names)
 
     def _prepare_dataset_for_extractor(
         self,

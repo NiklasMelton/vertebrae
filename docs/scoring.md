@@ -55,7 +55,8 @@ Key fields:
 ## Automatic k resolution
 
 The default `k="auto"` mode resolves a separate `k` for each class using class size,
-`min_k`, `max_k`, and `min_samples_per_cluster`. If a class is too small to support
+`min_k`, `max_k`, and `min_samples_per_cluster`. For multi-label targets, class
+size means per-label occurrence count. If a class or label is too small to support
 the requested or inferred `k`, the scorer reduces it and records a warning.
 
 That warning is carried into the structured result and final reports so users can see
@@ -63,10 +64,14 @@ when a weakly represented class forced a smaller prototype count.
 
 ## Scoring inputs
 
-The scorer accepts numeric embedding matrices and one-dimensional class labels.
+The scorer accepts numeric embedding matrices with single-label or multi-label
+classification targets.
 
 - Dense inputs are scored directly.
 - Sparse inputs are validated, then densified only at the OverlapIndex boundary.
+- Single-label targets are passed to OverlapIndex as a one-dimensional label array.
+- Multi-label targets are normalized to a dense 0/1 indicator matrix before calling
+  OverlapIndex.
 - When `normalize_embeddings=True`, embeddings are L2-normalized row-wise before
   scoring.
 
@@ -131,6 +136,8 @@ Current behavior:
 - Separatix runs on the same evaluated embedding variant that overlap scores.
 - It runs after compression and after the main overlap score is available.
 - By default it only runs when `overlap.macro_score >= 0.80`.
+- Multi-label targets are passed to Separatix as dense 0/1 indicator matrices with
+  `target_mode="multilabel"`.
 - The full Separatix report is preserved in JSON outputs, while Markdown reports
   show a compact recommendation, confidence, decision path, key scores, and skips.
 
@@ -139,7 +146,9 @@ Separatix follows the same normalization convention as overlap scoring when
 and Separatix uses its own densification policy internally.
 
 Native vertebrae probes are still available through `ProbeConfig`, but they are
-now opt-in quick checks rather than part of the default report path.
+now opt-in quick checks rather than part of the default report path. They are
+currently single-label only; when enabled on a multi-label dataset they are skipped
+with a warning while overlap scoring and Separatix continue to run.
 
 ## Practical guidance
 

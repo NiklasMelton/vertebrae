@@ -15,3 +15,45 @@ def test_overlap_scorer_uses_minibatch_kmeans_backend(fake_overlapindex):
     assert fake_overlapindex.calls[-1]["model_type"] == "MiniBatchKMeans"
     assert fake_overlapindex.calls[-1]["kmeans_kwargs"]["random_state"] == 123
     assert fake_overlapindex.calls[-1]["kmeans_k"] == {"a": 2, "b": 2}
+
+
+def test_overlap_scorer_passes_multilabel_indicator_targets(fake_overlapindex):
+    Z = np.array(
+        [
+            [1.0, 0.0],
+            [0.9, 0.1],
+            [0.0, 1.0],
+            [0.1, 0.9],
+            [0.5, 0.5],
+            [0.4, 0.6],
+        ]
+    )
+    y = [
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+    ]
+    scorer = OverlapIndexScorer(OverlapScoringConfig(k=2, min_samples_per_cluster=1))
+
+    result = scorer.score(Z, y)
+
+    assert result.metadata["target_type"] == "multi_label"
+    assert result.metadata["label_names"] == ("red", "round", "sweet")
+    assert result.class_counts == {"red": 3, "round": 3, "sweet": 3}
+    assert fake_overlapindex.calls[-1]["kmeans_k"] == {
+        "red": 2,
+        "round": 2,
+        "sweet": 2,
+    }
+    assert fake_overlapindex.calls[-1]["fit_y_shape"] == [6, 3]
+    assert fake_overlapindex.calls[-1]["fit_y"].tolist() == [
+        [1, 1, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 0, 1],
+        [0, 1, 1],
+        [0, 0, 1],
+    ]

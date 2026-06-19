@@ -317,6 +317,57 @@ def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
     assert store.get_json(score["output_key"])["score"]["metadata"]["backend"] == "MiniBatchKMeans"
 
 
+def test_score_embedding_artifact_supports_multilabel_labels(tmp_path, fake_overlapindex):
+    labels = [
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+    ]
+    dataset = BenchmarkDataset.from_embeddings(np.arange(36).reshape(12, 3), labels)
+    extractor = CallableExtractor(
+        "score_multilabel_artifact",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            output_key=scoring_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store,
+    )
+    result = benchmark_result_from_artifacts(score_key=score["output_key"], store=store)
+
+    assert label_manifest["target_type"] == "multi_label"
+    assert label_manifest["label_names"] == ["red", "round", "sweet"]
+    assert store.get_labels(label_manifest["output_key"]).tolist()[0] == ("red", "round")
+    assert fake_overlapindex.calls[-1]["fit_y_shape"] == [12, 3]
+    assert score["score"]["metadata"]["target_type"] == "multi_label"
+    assert result["dataset_summary"]["target_type"] == "multi_label"
+    assert result["dataset_summary"]["labelset_counts"]["red + round"] == 2
+
+
 def test_label_artifact_preserves_active_label_view_metadata(tmp_path):
     dataset = (
         BenchmarkDataset.from_embeddings(

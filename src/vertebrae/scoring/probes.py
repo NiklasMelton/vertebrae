@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from vertebrae.config import ProbeConfig
-from vertebrae.utils.labels import class_counts
+from vertebrae.utils.labels import class_counts, normalize_targets
 
 
 def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional[Dict[str, Any]]:
@@ -24,8 +24,20 @@ def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional
     if not probe_config.enabled:
         return None
 
+    normalized_labels, label_metadata = normalize_targets(y)
+    if label_metadata["target_type"] == "multi_label":
+        return {
+            "enabled": False,
+            "target_type": "multi_label",
+            "warnings": [
+                "Native vertebrae probes are currently single-label only; "
+                "probe evaluation was skipped for this multi-label dataset."
+            ],
+            "results": {},
+        }
+
     embeddings = np.asarray(Z)
-    labels = np.asarray(y)
+    labels = normalized_labels
     counts = class_counts(labels)
     warnings: List[str] = []
     if min(counts.values()) < 2:

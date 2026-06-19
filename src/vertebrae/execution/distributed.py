@@ -24,7 +24,7 @@ from vertebrae.execution.jobs import (
 )
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
-from vertebrae.utils.labels import label_view_suffix
+from vertebrae.utils.labels import label_view_suffix, target_summary
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -219,6 +219,7 @@ def materialize_label_artifact(
 
     output_key = key or labels_artifact_key(dataset)
     artifact_path = store.put_labels(output_key, dataset.y)
+    labels = target_summary(dataset.y, label_names=dataset.metadata.get("label_names"))
     manifest = {
         "artifact_type": "labels",
         "vertebrae_version": __version__,
@@ -227,9 +228,19 @@ def materialize_label_artifact(
         "dataset_fingerprint": dataset.fingerprint(),
         "n_samples": int(len(dataset.y)),
         "dtype": str(np.asarray(dataset.y).dtype),
-        "class_counts": make_json_safe(dataset.class_counts()),
+        "target_type": labels["target_type"],
+        "class_counts": make_json_safe(labels["class_counts"]),
+        "n_classes": labels["n_classes"],
         "label_view": make_json_safe(dataset.active_label_view()),
     }
+    for label_key in (
+        "label_names",
+        "labelset_counts",
+        "mean_label_cardinality",
+        "label_density",
+    ):
+        if label_key in labels:
+            manifest[label_key] = make_json_safe(labels[label_key])
     store.put_json(output_key, manifest)
     return manifest
 
@@ -259,7 +270,12 @@ def score_embedding_artifact(
     from vertebrae.scoring.overlap import OverlapIndexScorer
 
     config = job.scoring_config or OverlapScoringConfig()
-    score = OverlapIndexScorer(config).score(embeddings, labels, seed=job.seed)
+    score = OverlapIndexScorer(config).score(
+        embeddings,
+        labels,
+        seed=job.seed,
+        label_names=label_metadata.get("label_names"),
+    )
     artifact = {
         "artifact_type": "overlap_score",
         "vertebrae_version": __version__,
@@ -312,7 +328,11 @@ def diagnose_embedding_artifact(
     else:
         embeddings = store.get_array(job.embedding_key)
         labels = store.get_labels(job.labels_key)
-        diagnostic = scorer.score(embeddings, labels)
+        diagnostic = scorer.score(
+            embeddings,
+            labels,
+            label_names=label_metadata.get("label_names"),
+        )
 
     artifact = {
         "artifact_type": "separatix_diagnostic",
@@ -597,8 +617,16 @@ def benchmark_result_from_artifacts(
     result = BenchmarkResult(
         dataset_summary={
             "n_samples": label_metadata.get("n_samples", embedding_metadata.get("n_samples")),
-            "n_classes": len(label_metadata.get("class_counts", {})),
+            "n_classes": label_metadata.get(
+                "n_classes",
+                len(label_metadata.get("class_counts", {})),
+            ),
             "class_counts": label_metadata.get("class_counts", {}),
+            "target_type": label_metadata.get("target_type", "single_label"),
+            "label_names": label_metadata.get("label_names"),
+            "labelset_counts": label_metadata.get("labelset_counts"),
+            "mean_label_cardinality": label_metadata.get("mean_label_cardinality"),
+            "label_density": label_metadata.get("label_density"),
             "modality": embedding_metadata.get("modality", "artifact"),
             "label_view": label_metadata.get("label_view"),
         },

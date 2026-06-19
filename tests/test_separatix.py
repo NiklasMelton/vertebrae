@@ -41,6 +41,28 @@ def test_separatix_scorer_preserves_sparse_input_and_records_normalization(fake_
     assert fake_separatix.ComplexityProfiler.calls[0]["is_sparse"] is True
 
 
+def test_separatix_scorer_passes_multilabel_target_mode(fake_separatix):
+    embeddings = np.arange(18, dtype=float).reshape(6, 3)
+    labels = [
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+    ]
+    scorer = SeparatixScorer(overlap_config=OverlapScoringConfig(normalize_embeddings=False))
+
+    result = scorer.score(embeddings, labels)
+
+    call = fake_separatix.ComplexityProfiler.calls[-1]
+    assert result.metadata["target_type"] == "multi_label"
+    assert result.metadata["label_names"] == ("red", "round", "sweet")
+    assert call["kind"] == "diagnose"
+    assert call["target_mode"] == "multilabel"
+    assert call["y_shape"] == [6, 3]
+
+
 def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapindex):
     embeddings = np.arange(48, dtype=float).reshape(16, 3)
     labels = np.array(["a"] * 8 + ["b"] * 8)
@@ -135,3 +157,52 @@ def test_native_probes_remain_available_when_explicitly_enabled(fake_overlapinde
     assert item.probes["enabled"] is True
     assert set(item.probes["results"]) == {"knn", "logistic_regression"}
     assert frame.loc[0, "probe_accuracy"] not in ("", None)
+
+
+def test_multilabel_benchmark_runs_separatix_and_skips_native_probes(
+    tmp_path,
+    fake_overlapindex,
+):
+    embeddings = np.arange(36, dtype=float).reshape(12, 3)
+    labels = [
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+    ]
+    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor(name="multilabel_dense"),
+        separatix_config=SeparatixConfig(overlap_threshold=0.80),
+        stability_config=StabilityConfig(enabled=False),
+        probe_config=ProbeConfig(enabled=True),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+    ).run()
+
+    item = result.extractor_results[0]
+    frame = result.to_dataframe()
+    markdown_path = tmp_path / "multilabel_report.md"
+    result.save_markdown(str(markdown_path))
+    markdown = markdown_path.read_text(encoding="utf-8")
+
+    assert result.dataset_summary["target_type"] == "multi_label"
+    assert item.overlap.metadata["target_type"] == "multi_label"
+    assert item.separatix is not None
+    assert item.separatix.ran is True
+    assert item.separatix.metadata["target_type"] == "multi_label"
+    assert item.probes is not None
+    assert item.probes["enabled"] is False
+    assert "single-label only" in item.probes["warnings"][0]
+    assert frame.loc[0, "target_type"] == "multi_label"
+    assert "Target type: multi_label" in markdown
+    assert "single-label only" in markdown

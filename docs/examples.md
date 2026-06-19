@@ -18,6 +18,10 @@ Runnable examples live in `examples/`:
 - `hf_vision_mnist.py`: compare MNIST handwritten digit images with generic,
   final-layer, and mid-layer Hugging Face vision embeddings from one model
   configuration plus a scikit-learn image pipeline.
+- `caltech101_vision_foundation_models.py`: compare a laptop-sized Caltech-101
+  subset with related category pairs using DINOv2, a tiny supervised ViT baseline,
+  and optional gated DINOv3 embeddings. It reuses a local Caltech-101 download
+  when available, otherwise it downloads the dataset archive.
 - `sentence_transformer_extractor.py`: demonstrate the sentence-transformers API.
 
 Run local examples from the repository root:
@@ -32,4 +36,9 @@ a local cache or from Hugging Face:
 ```bash
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E hf
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_mnist.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/caltech101_vision_foundation_models.py
 ```
+
+Set `VERTABRAE_INCLUDE_DINOV3=1` for the Caltech-101 example after accepting the
+DINOv3 model terms on Hugging Face.
+Override `VERTABRAE_CALTECH101_CLASSES` to make the slice easier or harder.

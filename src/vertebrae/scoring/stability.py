@@ -6,7 +6,7 @@ import numpy as np
 
 from vertebrae.config import OverlapScoringConfig, StabilityConfig
 from vertebrae.scoring.overlap import OverlapIndexScorer
-from vertebrae.utils.labels import class_counts
+from vertebrae.utils.labels import normalize_targets, stratified_label_indices
 
 
 def run_stability_analysis(
@@ -14,6 +14,7 @@ def run_stability_analysis(
     y: Any,
     scoring_config: OverlapScoringConfig,
     stability_config: Optional[StabilityConfig] = None,
+    label_names: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run prototype or subsample stability analysis.
 
@@ -32,7 +33,7 @@ def run_stability_analysis(
         return None
 
     embeddings = np.asarray(Z)
-    labels = np.asarray(y)
+    labels, label_metadata = normalize_targets(y, label_names=label_names)
     rng = np.random.default_rng(config.random_state)
     seeds = rng.integers(0, np.iinfo(np.int32).max, size=config.repeats).tolist()
     scorer = OverlapIndexScorer(scoring_config)
@@ -44,12 +45,17 @@ def run_stability_analysis(
         if config.mode == "prototype":
             repeat_Z, repeat_y = embeddings, labels
         elif config.mode == "subsample":
-            indices = _subsample_indices(labels, config, rng)
+            indices = _subsample_indices(labels, config, rng, label_metadata)
             repeat_Z, repeat_y = embeddings[indices], labels[indices]
         else:
             raise ValueError(f"Unsupported stability mode: {config.mode}")
 
-        result = scorer.score(repeat_Z, repeat_y, seed=int(seed))
+        result = scorer.score(
+            repeat_Z,
+            repeat_y,
+            seed=int(seed),
+            label_names=label_metadata.get("label_names"),
+        )
         scores.append(result.macro_score)
         warnings.extend(result.warnings)
         for label, value in result.per_class_scores.items():
@@ -92,16 +98,17 @@ def _subsample_indices(
     labels: np.ndarray,
     config: StabilityConfig,
     rng: np.random.Generator,
+    label_metadata: Dict[str, Any],
 ) -> np.ndarray:
     n_samples = len(labels)
     if config.stratified:
-        indices: List[int] = []
-        for label in class_counts(labels):
-            class_indices = np.flatnonzero(labels == label)
-            n_take = max(2, int(round(len(class_indices) * config.subsample_fraction)))
-            n_take = min(len(class_indices), n_take)
-            indices.extend(rng.choice(class_indices, size=n_take, replace=False).tolist())
-        return np.asarray(indices, dtype=int)
+        return stratified_label_indices(
+            labels,
+            rate=config.subsample_fraction,
+            random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
+            min_samples_per_class=2,
+            label_names=label_metadata.get("label_names"),
+        )
 
     n_take = max(2, int(round(n_samples * config.subsample_fraction)))
     n_take = min(n_samples, n_take)

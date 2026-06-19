@@ -4246,14 +4246,14 @@ torch = ["torch"]
 
 [[package]]
 name = "overlapindex"
-version = "0.1.3a1"
+version = "0.1.3a2"
 description = "OverlapIndex (OI), an Incremental Cluster Validity index for identifying the degree of overlap of data classes."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "overlapindex-0.1.3a1-py3-none-any.whl", hash = "sha256:de84d4b8952464eda3aae35aff9c8ff5e01bf0348df1252fc9b2c37ff17d5939"},
-    {file = "overlapindex-0.1.3a1.tar.gz", hash = "sha256:48b44501b9fef38aa23225cb0eb7da15df63b2968b949ed28d5273e7c8009d66"},
+    {file = "overlapindex-0.1.3a2-py3-none-any.whl", hash = "sha256:20e4089648415ee44a805899ecacead24f976d908a4c6ab578d7ccd6d9baf252"},
+    {file = "overlapindex-0.1.3a2.tar.gz", hash = "sha256:c7e4e9b21b36c1e840a11ff250a6e7016163594f0e93e4132e94e5c3517be7ce"},
 ]
 
 [package.dependencies]
@@ -6836,14 +6836,14 @@ train = ["accelerate (>=0.20.3)", "datasets"]
 
 [[package]]
 name = "separatix"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "Diagnostic profiling of labeled embeddings for classification model complexity guidance."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "separatix-0.1.0a2-py3-none-any.whl", hash = "sha256:ba57a665b69cbe8e8a59b574e8d0a4f3dcf37f38f940f5704567928811e4f3c9"},
-    {file = "separatix-0.1.0a2.tar.gz", hash = "sha256:68a386cdc2e4e2ac6d6a1311fd06747b6c3891d31995b084403bc1eb6cf55f56"},
+    {file = "separatix-0.1.0a3-py3-none-any.whl", hash = "sha256:923e79aaf407fec08269abf2dee00544226815b7070373b09038712d4a5fa958"},
+    {file = "separatix-0.1.0a3.tar.gz", hash = "sha256:642d3fcc496c9fd7ffe82ae032b18882b9534ac1d8abdcb1a7b06916a988732a"},
 ]
 
 [package.dependencies]
@@ -6853,6 +6853,7 @@ scipy = ">=1.9"
 
 [package.extras]
 examples = ["matplotlib (>=3.6)", "pandas (>=1.5)"]
+multilabel = ["iterative-stratification (>=0.1.9)"]
 pandas = ["pandas (>=1.5)"]
 tda = ["ripser (>=0.6)"]
 
@@ -8600,4 +8601,4 @@ video = ["av", "pytorchvideo", "torch", "transformers"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-content-hash = "cffbb54883167ba1b7b008fcb2b4878d5a4eea148422009aba89f658fe1a2ffd"
+content-hash = "3b4f528619b494618921a6569c841561bb19ead45577a4a57311fae59b3e24e8"
