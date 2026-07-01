@@ -9,6 +9,7 @@ from the repository README, existing Markdown guides, and generated API referenc
 
 overview
 datasets
+segmentation
 feature_extractors
 compression
 scoring
