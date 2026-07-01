@@ -43,8 +43,13 @@ def materialize_segmentation_outputs(
                 )
             bucket = collected.setdefault(
                 output.name,
-                {"layout": output.layout, "recipe": output.recipe, "metadata": output.metadata,
-                 "annotation_transform": output.annotation_transform, "candidates": []},
+                {
+                    "layout": output.layout,
+                    "recipe": output.recipe,
+                    "metadata": output.metadata,
+                    "annotation_transform": output.annotation_transform,
+                    "candidates": [],
+                },
             )
             if bucket["layout"] != output.layout:
                 raise ValueError(f"Spatial output {output.name!r} changed layout between batches.")
@@ -276,11 +281,7 @@ def _materialization_metadata(
         ),
         "background_tokens": sum(candidate["is_background"] for candidate in selected),
         "background_labels": list(
-            {
-                candidate["label"]
-                for candidate in selected
-                if candidate["is_background"]
-            }
+            {candidate["label"] for candidate in selected if candidate["is_background"]}
         ),
         "ignored_tokens": ignored,
         "layout": asdict(layout),

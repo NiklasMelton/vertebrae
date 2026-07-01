@@ -125,10 +125,7 @@ def materialize_segmentation_artifacts(
     from vertebrae.segmentation import materialize_segmentation_outputs
 
     recipe = extractor.recipe()
-    base_key = (
-        f"segmentation/{dataset.fingerprint()}/"
-        f"{fingerprint_extractor_recipe(recipe)}"
-    )
+    base_key = f"segmentation/{dataset.fingerprint()}/" f"{fingerprint_extractor_recipe(recipe)}"
     outputs = []
     for materialization in materialize_segmentation_outputs(
         dataset,
@@ -469,20 +466,13 @@ def diagnose_embedding_artifact(
                 raise ValueError("Group and label artifacts have different row counts.")
             group_fingerprint = group_metadata.get("dataset_fingerprint")
             label_fingerprint = label_metadata.get("dataset_fingerprint")
-            if (
-                group_fingerprint
-                and label_fingerprint
-                and group_fingerprint != label_fingerprint
-            ):
+            if group_fingerprint and label_fingerprint and group_fingerprint != label_fingerprint:
                 raise ValueError("Group and label artifacts have different dataset fingerprints.")
             groups = store.get_labels(job.groups_key)
         excluded = overlap_metadata.get("exclude_classes", [])
         if excluded:
             mask = np.asarray(
-                [
-                    not any(label == item for item in excluded)
-                    for label in labels
-                ],
+                [not any(label == item for item in excluded) for label in labels],
                 dtype=bool,
             )
             embeddings = embeddings[mask]

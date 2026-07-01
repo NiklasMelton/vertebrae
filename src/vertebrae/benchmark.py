@@ -180,12 +180,8 @@ class Benchmark:
             for materialization in materializations:
                 scoring_config = self.scoring_config
                 if self.segmentation_config.background_mode == "include_excluded":
-                    exclusions = _normalized_excluded_classes(
-                        scoring_config.exclude_classes
-                    )
-                    for background_label in materialization.metadata.get(
-                        "background_labels", []
-                    ):
+                    exclusions = _normalized_excluded_classes(scoring_config.exclude_classes)
+                    for background_label in materialization.metadata.get("background_labels", []):
                         if not _label_is_excluded_exact(background_label, exclusions):
                             exclusions.append(background_label)
                     scoring_config = replace(
@@ -441,12 +437,10 @@ class Benchmark:
                 variant_warnings.extend(stability.get("warnings", []))
 
             probe_start = perf_counter()
-            diagnostic_embeddings, diagnostic_labels, diagnostic_groups = (
-                self._diagnostic_inputs(
-                    compressed_embeddings,
-                    dataset.y,
-                    dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
-                )
+            diagnostic_embeddings, diagnostic_labels, diagnostic_groups = self._diagnostic_inputs(
+                compressed_embeddings,
+                dataset.y,
+                dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
             )
             probes = run_probes(
                 diagnostic_embeddings,
@@ -1390,8 +1384,7 @@ def _weakest_class(
     numeric_scores = {
         str(label): float(score)
         for label, score in per_class_scores.items()
-        if isinstance(score, (int, float, np.number))
-        and not _label_is_excluded(label, excluded)
+        if isinstance(score, (int, float, np.number)) and not _label_is_excluded(label, excluded)
     }
     if not numeric_scores:
         return None, None

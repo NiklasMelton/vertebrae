@@ -426,9 +426,7 @@ def _resolve_spatial_output_specs(
     specs = []
     for raw in outputs or []:
         if "name" not in raw or "grid_shape" not in raw:
-            raise ValueError(
-                "HFVisionExtractor spatial outputs require name and grid_shape."
-            )
+            raise ValueError("HFVisionExtractor spatial outputs require name and grid_shape.")
         grid_shape = tuple(raw["grid_shape"])
         if len(grid_shape) != 2:
             raise ValueError("grid_shape must contain [height, width].")

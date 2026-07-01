@@ -252,18 +252,14 @@ def test_torch_extractor_works_in_streaming_evaluator(fake_torch, fake_overlapin
 
 def test_torch_extractor_supports_explicit_spatial_outputs(fake_torch):
     model = TrackingModel(
-        lambda args, kwargs: {
-            "features": FakeTensor(np.ones((2, 2, 2, 3), dtype=float))
-        }
+        lambda args, kwargs: {"features": FakeTensor(np.ones((2, 2, 2, 3), dtype=float))}
     )
     extractor = TorchExtractor(
         "spatial",
         model=model,
         collate_fn=lambda batch: FakeTensor(batch),
         spatial_output_fn=lambda output: output["features"],
-        spatial_output_specs=[
-            SpatialOutputSpec("layer", SpatialLayout(2, 2))
-        ],
+        spatial_output_specs=[SpatialOutputSpec("layer", SpatialLayout(2, 2))],
     )
 
     output = extractor.transform_spatial(np.ones((2, 4), dtype=float))[0]

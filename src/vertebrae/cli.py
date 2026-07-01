@@ -377,9 +377,7 @@ def _cmd_materialize_segmentation(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
     config = (
-        _load_pickle(args.segmentation_config_pickle)
-        if args.segmentation_config_pickle
-        else None
+        _load_pickle(args.segmentation_config_pickle) if args.segmentation_config_pickle else None
     )
     return materialize_segmentation_artifacts(
         dataset,

@@ -242,9 +242,7 @@ def test_hf_vision_exposes_explicit_patch_grid(fake_vision_modules):
         batch_size=2,
     )
 
-    output = extractor.transform_spatial(
-        [np.zeros((4, 4, 3), dtype=np.uint8)] * 2
-    )[0]
+    output = extractor.transform_spatial([np.zeros((4, 4, 3), dtype=np.uint8)] * 2)[0]
 
     assert output.name == "patches"
     assert len(output.embeddings) == 2

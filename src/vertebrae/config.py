@@ -254,9 +254,7 @@ class SegmentationConfig:
         if not 0.0 <= self.ambiguity_margin <= 1.0:
             raise ValueError("ambiguity_margin must be between 0 and 1.")
         if self.background_mode not in {"ignore", "include", "include_excluded"}:
-            raise ValueError(
-                "background_mode must be one of: ignore, include, include_excluded."
-            )
+            raise ValueError("background_mode must be one of: ignore, include, include_excluded.")
         for name in (
             "max_instances_per_class",
             "max_tokens_per_instance",

@@ -193,17 +193,13 @@ def test_keras_extractor_works_in_streaming_evaluator(monkeypatch, fake_overlapi
 def test_keras_extractor_supports_explicit_spatial_outputs(monkeypatch):
     _install_fake_keras(monkeypatch)
     model = FakeKerasModel(
-        call_fn=lambda batch, kwargs: {
-            "features": np.ones((2, 2, 2, 3), dtype=float)
-        }
+        call_fn=lambda batch, kwargs: {"features": np.ones((2, 2, 2, 3), dtype=float)}
     )
     extractor = KerasExtractor(
         "spatial",
         model=model,
         spatial_output_fn=lambda output: output["features"],
-        spatial_output_specs=[
-            SpatialOutputSpec("layer", SpatialLayout(2, 2))
-        ],
+        spatial_output_specs=[SpatialOutputSpec("layer", SpatialLayout(2, 2))],
     )
 
     output = extractor.transform_spatial(np.ones((2, 4), dtype=float))[0]
