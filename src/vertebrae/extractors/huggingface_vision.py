@@ -6,6 +6,11 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.spatial import (
+    SpatialEmbeddingOutput,
+    SpatialLayout,
+    SpatialOutputSpec,
+)
 
 
 class HFVisionExtractor:
@@ -47,6 +52,7 @@ class HFVisionExtractor:
         trust_remote_code: bool = False,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
+        spatial_outputs: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         if pooling not in {"cls", "mean", "pooler"}:
             raise ValueError("pooling must be one of: cls, mean, pooler.")
@@ -72,6 +78,7 @@ class HFVisionExtractor:
         self.trust_remote_code = trust_remote_code
         self.processor_kwargs = processor_kwargs or {}
         self.model_kwargs = model_kwargs or {}
+        self._spatial_output_specs = _resolve_spatial_output_specs(spatial_outputs)
         self.modality = "image"
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
@@ -177,6 +184,49 @@ class HFVisionExtractor:
             )
         return outputs
 
+    def spatial_output_specs(self) -> List[SpatialOutputSpec]:
+        return list(self._spatial_output_specs)
+
+    def transform_spatial(self, X: Any) -> List[SpatialEmbeddingOutput]:
+        if not self._spatial_output_specs:
+            raise ValueError("HFVisionExtractor was not configured with spatial_outputs.")
+        processor, model, torch, image_module = self._load_model()
+        collected: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._spatial_output_specs
+        }
+        model.eval()
+        need_hidden_states = any(
+            spec.hidden_layer is not None for spec in self._spatial_output_specs
+        )
+        with torch.no_grad():
+            for items in _iter_chunks(_as_iterable(X), self.batch_size):
+                batch = [
+                    _coerce_image(item, image_module, self.image_mode, self.alpha_mode)
+                    for item in items
+                ]
+                encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
+                encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
+                model_output = model(**encoded, output_hidden_states=need_hidden_states)
+                for spec in self._spatial_output_specs:
+                    hidden = (
+                        self._select_hidden_state(model_output, spec.hidden_layer)
+                        if spec.hidden_layer is not None
+                        else model_output.last_hidden_state
+                    )
+                    values = hidden.detach().cpu().numpy().astype(np.float32, copy=False)
+                    collected[spec.name].extend(values[index] for index in range(values.shape[0]))
+        return [
+            SpatialEmbeddingOutput(
+                name=spec.name,
+                embeddings=collected[spec.name],
+                layout=spec.layout,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+                annotation_transform=spec.annotation_transform,
+            )
+            for spec in self._spatial_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable Hugging Face vision recipe.
 
@@ -204,6 +254,27 @@ class HFVisionExtractor:
         }
         if len(self._output_specs) > 1:
             recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        if self._spatial_output_specs:
+            recipe["spatial_outputs"] = [
+                {
+                    "name": spec.name,
+                    "hidden_layer": spec.hidden_layer,
+                    "layout": {
+                        "grid_height": spec.layout.grid_height,
+                        "grid_width": spec.layout.grid_width,
+                        "special_tokens": spec.layout.special_tokens,
+                        "channel_axis": spec.layout.channel_axis,
+                    },
+                    "metadata": dict(spec.metadata),
+                    "annotation_transform": (
+                        f"{spec.annotation_transform.__module__}."
+                        f"{spec.annotation_transform.__qualname__}"
+                        if spec.annotation_transform is not None
+                        else None
+                    ),
+                }
+                for spec in self._spatial_output_specs
+            ]
         return recipe
 
     def _load_model(self) -> Any:
@@ -347,6 +418,36 @@ def _spec_to_dict(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
         "hidden_layer": spec.hidden_layer,
         "metadata": dict(spec.metadata),
     }
+
+
+def _resolve_spatial_output_specs(
+    outputs: Optional[List[Dict[str, Any]]],
+) -> List[SpatialOutputSpec]:
+    specs = []
+    for raw in outputs or []:
+        if "name" not in raw or "grid_shape" not in raw:
+            raise ValueError("HFVisionExtractor spatial outputs require name and grid_shape.")
+        grid_shape = tuple(raw["grid_shape"])
+        if len(grid_shape) != 2:
+            raise ValueError("grid_shape must contain [height, width].")
+        specs.append(
+            SpatialOutputSpec(
+                name=str(raw["name"]),
+                hidden_layer=raw.get("hidden_layer"),
+                layout=SpatialLayout(
+                    grid_height=int(grid_shape[0]),
+                    grid_width=int(grid_shape[1]),
+                    special_tokens=int(raw.get("special_tokens", 1)),
+                    channel_axis=int(raw.get("channel_axis", -1)),
+                ),
+                metadata=dict(raw.get("metadata", {})),
+                annotation_transform=raw.get("annotation_transform"),
+            )
+        )
+    names = [spec.name for spec in specs]
+    if len(names) != len(set(names)):
+        raise ValueError("HFVisionExtractor spatial output names must be unique.")
+    return specs
 
 
 _IMAGE_MODES = {"auto", "rgb", "grayscale", "preserve"}

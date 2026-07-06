@@ -86,6 +86,12 @@ def labels_artifact_key(dataset: Any) -> str:
     return f"labels/{dataset.fingerprint()}"
 
 
+def groups_artifact_key(dataset: Any) -> str:
+    """Build the canonical independence-group artifact key."""
+
+    return f"groups/{dataset.fingerprint()}"
+
+
 def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
     """Build a scoring artifact key.
 
@@ -105,6 +111,105 @@ def separatix_artifact_key(embedding_key: str) -> str:
     """Build a Separatix diagnostic artifact key."""
 
     return f"{embedding_key}/diagnostics/separatix"
+
+
+def materialize_segmentation_artifacts(
+    dataset: Any,
+    extractor: Any,
+    store: ArtifactStore,
+    segmentation_config: Any = None,
+    batch_size: int = 16,
+) -> dict[str, Any]:
+    """Materialize spatial segmentation outputs into standard artifact boundaries."""
+
+    from vertebrae.segmentation import materialize_segmentation_outputs
+
+    recipe = extractor.recipe()
+    base_key = f"segmentation/{dataset.fingerprint()}/" f"{fingerprint_extractor_recipe(recipe)}"
+    outputs = []
+    for materialization in materialize_segmentation_outputs(
+        dataset,
+        extractor,
+        config=segmentation_config,
+        batch_size=batch_size,
+    ):
+        safe_name = materialization.name.replace("/", "_")
+        output_key = f"{base_key}/outputs/{safe_name}"
+        labels_key = f"{output_key}/labels"
+        groups_key = f"{output_key}/groups"
+        provenance_key = f"{output_key}/provenance"
+        embeddings = materialization.dataset.X
+        labels = materialization.dataset.y
+        groups = materialization.dataset.groups()
+        if groups is None:
+            raise ValueError("Segmentation materialization must define image groups.")
+        artifact_path = store.put_array(output_key, embeddings)
+        embedding_manifest = {
+            "artifact_type": "segmentation_embedding",
+            "vertebrae_version": __version__,
+            "output_key": output_key,
+            "artifact_path": artifact_path,
+            "dataset_fingerprint": materialization.dataset.fingerprint(),
+            "source_dataset_fingerprint": dataset.fingerprint(),
+            "extractor_recipe": recipe,
+            "recipe_hash": fingerprint_extractor_recipe(recipe),
+            "output_name": materialization.name,
+            "n_samples": int(embeddings.shape[0]),
+            "embedding_dim": int(embeddings.shape[1]),
+            "shape": list(embeddings.shape),
+            "dtype": str(embeddings.dtype),
+            "sparse": False,
+            "storage_format": "dense",
+            "modality": "segmentation",
+            "segmentation": materialization.metadata,
+            "labels_key": labels_key,
+            "groups_key": groups_key,
+            "provenance_key": provenance_key,
+        }
+        store.put_json(output_key, embedding_manifest)
+        label_path = store.put_labels(labels_key, labels)
+        label_summary = target_summary(labels)
+        store.put_json(
+            labels_key,
+            {
+                "artifact_type": "labels",
+                "vertebrae_version": __version__,
+                "output_key": labels_key,
+                "artifact_path": label_path,
+                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "n_samples": int(len(labels)),
+                "target_type": label_summary["target_type"],
+                "class_counts": make_json_safe(label_summary["class_counts"]),
+                "n_classes": label_summary["n_classes"],
+                "label_view": materialization.dataset.active_label_view(),
+            },
+        )
+        group_path = store.put_labels(groups_key, groups)
+        store.put_json(
+            groups_key,
+            {
+                "artifact_type": "groups",
+                "vertebrae_version": __version__,
+                "output_key": groups_key,
+                "artifact_path": group_path,
+                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "n_samples": int(len(groups)),
+                "n_groups": int(len(np.unique(groups))),
+                "group_name": "image_id",
+            },
+        )
+        store.put_json(provenance_key, {"rows": materialization.provenance})
+        outputs.append(embedding_manifest)
+    bundle = {
+        "artifact_type": "segmentation_embedding_bundle",
+        "vertebrae_version": __version__,
+        "output_key": base_key,
+        "dataset_fingerprint": dataset.fingerprint(),
+        "extractor_recipe": recipe,
+        "outputs": outputs,
+    }
+    store.put_json(base_key, bundle)
+    return bundle
 
 
 def plan_embedding_shard_jobs(
@@ -245,6 +350,32 @@ def materialize_label_artifact(
     return manifest
 
 
+def materialize_group_artifact(
+    dataset: Any,
+    store: ArtifactStore,
+    key: Any = None,
+) -> dict[str, Any]:
+    """Materialize aligned independence groups without reporting raw IDs."""
+
+    groups = dataset.groups() if callable(getattr(dataset, "groups", None)) else None
+    if groups is None:
+        raise ValueError("Dataset does not define independence groups.")
+    output_key = key or groups_artifact_key(dataset)
+    artifact_path = store.put_labels(output_key, groups)
+    manifest = {
+        "artifact_type": "groups",
+        "vertebrae_version": __version__,
+        "output_key": output_key,
+        "artifact_path": artifact_path,
+        "dataset_fingerprint": dataset.fingerprint(),
+        "n_samples": int(len(groups)),
+        "n_groups": int(len(np.unique(groups))),
+        "group_name": dataset.metadata.get("group_name", "group"),
+    }
+    store.put_json(output_key, manifest)
+    return manifest
+
+
 def score_embedding_artifact(
     job: ScoringJob,
     store: ArtifactStore,
@@ -328,11 +459,39 @@ def diagnose_embedding_artifact(
     else:
         embeddings = store.get_array(job.embedding_key)
         labels = store.get_labels(job.labels_key)
-        diagnostic = scorer.score(
-            embeddings,
-            labels,
-            label_names=label_metadata.get("label_names"),
-        )
+        groups = None
+        if job.groups_key:
+            group_metadata = store.get_json(job.groups_key)
+            if int(group_metadata.get("n_samples", -1)) != len(labels):
+                raise ValueError("Group and label artifacts have different row counts.")
+            group_fingerprint = group_metadata.get("dataset_fingerprint")
+            label_fingerprint = label_metadata.get("dataset_fingerprint")
+            if group_fingerprint and label_fingerprint and group_fingerprint != label_fingerprint:
+                raise ValueError("Group and label artifacts have different dataset fingerprints.")
+            groups = store.get_labels(job.groups_key)
+        excluded = overlap_metadata.get("exclude_classes", [])
+        if excluded:
+            mask = np.asarray(
+                [not any(label == item for item in excluded) for label in labels],
+                dtype=bool,
+            )
+            embeddings = embeddings[mask]
+            labels = np.asarray(labels)[mask]
+            groups = None if groups is None else np.asarray(groups)[mask]
+        try:
+            diagnostic = scorer.score(
+                embeddings,
+                labels,
+                label_names=label_metadata.get("label_names"),
+                groups=groups,
+            )
+        except ValueError as exc:
+            if groups is None:
+                raise
+            diagnostic = scorer.skipped_result(
+                reason=f"Skipped grouped Separatix diagnostic: {exc}",
+                macro_score=macro_score,
+            )
 
     artifact = {
         "artifact_type": "separatix_diagnostic",
@@ -341,6 +500,7 @@ def diagnose_embedding_artifact(
         "embedding_key": job.embedding_key,
         "labels_key": job.labels_key,
         "score_key": job.score_key,
+        "groups_key": job.groups_key,
         "diagnostic": diagnostic.to_dict(),
         "embedding_metadata": embedding_metadata,
         "label_metadata": label_metadata,
@@ -574,18 +734,27 @@ def benchmark_result_from_artifacts(
     separatix = None
     if separatix_artifact:
         separatix = SeparatixResult(**separatix_artifact["diagnostic"])
-    weakest_class, weakest_score = _weakest_class(score_data.get("per_class_scores", {}))
+    score_metadata = score_data.get("metadata", {})
+    weakest_class, weakest_score = _weakest_class(
+        score_data.get("per_class_scores", {}),
+        excluded_classes=score_metadata.get("exclude_classes"),
+    )
     overlap = OverlapScoreResult(
         macro_score=float(score_data["macro_score"]),
+        weighted_score=score_data.get("weighted_score"),
         per_class_scores=score_data.get("per_class_scores", {}),
         pairwise_scores=score_data.get("pairwise_scores", {}),
         sparse_adjacency=score_data.get("sparse_adjacency"),
         class_counts=score_data.get("class_counts", {}),
         k_per_class=score_data.get("k_per_class", {}),
         warnings=score_data.get("warnings", []),
-        metadata=score_data.get("metadata", {}),
+        metadata=score_metadata,
     )
-    recommendation = recommendation_for_extractor(overlap.macro_score, stability, weakest_score)
+    recommendation = (
+        recommendation_for_extractor(overlap.macro_score, stability, weakest_score)
+        if overlap.metadata.get("aggregate_valid", True)
+        else "aggregate_unavailable"
+    )
     compression_metadata = embedding_metadata.get("compression", {"method": "none"})
     base_name = embedding_metadata.get("extractor_recipe", {}).get(
         "name",
@@ -662,11 +831,22 @@ def _score_summary(scores: list[float], interval_level: float) -> dict[str, floa
     }
 
 
-def _weakest_class(per_class_scores: dict[str, Any]) -> tuple[Optional[str], Optional[float]]:
+def _weakest_class(
+    per_class_scores: dict[str, Any],
+    excluded_classes: Optional[Any] = None,
+) -> tuple[Optional[str], Optional[float]]:
+    excluded = (
+        []
+        if excluded_classes is None
+        else [excluded_classes]
+        if isinstance(excluded_classes, (str, bytes))
+        else list(excluded_classes)
+    )
     numeric = {
         str(label): float(score)
         for label, score in per_class_scores.items()
         if isinstance(score, (int, float, np.number))
+        and not any(label == item or str(label) == str(item) for item in excluded)
     }
     if not numeric:
         return None, None

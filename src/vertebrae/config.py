@@ -17,6 +17,7 @@ class OverlapScoringConfig:
         offline_chunk_size: Chunk size forwarded to `OverlapIndex.fit_offline`.
         normalize_embeddings: Whether to L2-normalize embeddings before scoring.
         max_dense_bytes: Maximum sparse-to-dense allocation allowed for scoring.
+        exclude_classes: Reporting-only classes omitted from global aggregation.
     """
 
     k: Union[int, str, Dict[Any, int]] = "auto"
@@ -27,6 +28,7 @@ class OverlapScoringConfig:
     offline_chunk_size: Optional[int] = 10_000
     normalize_embeddings: bool = True
     max_dense_bytes: int = 2_000_000_000
+    exclude_classes: Any = None
 
     def __post_init__(self) -> None:
         if isinstance(self.k, str) and self.k != "auto":
@@ -43,6 +45,7 @@ class OverlapScoringConfig:
             raise ValueError("min_samples_per_cluster must be >= 1.")
         if self.max_dense_bytes < 1:
             raise ValueError("max_dense_bytes must be >= 1.")
+        _validate_excluded_classes(self.exclude_classes)
 
 
 @dataclass
@@ -140,6 +143,25 @@ class ProbeConfig:
             raise ValueError(f"Unknown probe methods: {sorted(unknown)}.")
 
 
+def _validate_excluded_classes(value: Any) -> None:
+    if value is None:
+        return
+    values = [value] if isinstance(value, (str, bytes)) or not _is_iterable(value) else value
+    for item in values:
+        try:
+            hash(item)
+        except TypeError as exc:
+            raise ValueError("exclude_classes entries must be hashable.") from exc
+
+
+def _is_iterable(value: Any) -> bool:
+    try:
+        iter(value)
+    except TypeError:
+        return False
+    return True
+
+
 @dataclass
 class LabelViewConfig:
     """Configuration for optional hierarchical label-view benchmarking.
@@ -208,6 +230,40 @@ class EmbeddingConfig:
     def __post_init__(self) -> None:
         if self.batch_size < 1:
             raise ValueError("EmbeddingConfig.batch_size must be >= 1.")
+
+
+@dataclass
+class SegmentationConfig:
+    """Configuration for dense spatial segmentation evaluation."""
+
+    coverage_threshold: float = 0.7
+    ambiguity_margin: float = 0.2
+    background_mode: str = "ignore"
+    background_label: Any = "background"
+    include_things: bool = True
+    include_stuff: bool = True
+    max_instances_per_class: Optional[int] = None
+    max_tokens_per_instance: Optional[int] = None
+    max_tokens_per_class: Optional[int] = None
+    max_background_tokens: Optional[int] = None
+    random_state: int = 42
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.coverage_threshold <= 1.0:
+            raise ValueError("coverage_threshold must be between 0 and 1.")
+        if not 0.0 <= self.ambiguity_margin <= 1.0:
+            raise ValueError("ambiguity_margin must be between 0 and 1.")
+        if self.background_mode not in {"ignore", "include", "include_excluded"}:
+            raise ValueError("background_mode must be one of: ignore, include, include_excluded.")
+        for name in (
+            "max_instances_per_class",
+            "max_tokens_per_instance",
+            "max_tokens_per_class",
+            "max_background_tokens",
+        ):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be >= 1 when provided.")
 
 
 @dataclass

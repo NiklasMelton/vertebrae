@@ -57,3 +57,21 @@ def test_overlap_scorer_passes_multilabel_indicator_targets(fake_overlapindex):
         [0, 1, 1],
         [0, 0, 1],
     ]
+
+
+def test_overlap_scorer_passes_reporting_exclusions(fake_overlapindex):
+    Z = np.eye(6)
+    y = np.array(["background", "background", "cat", "cat", "dog", "dog"])
+
+    result = OverlapIndexScorer(
+        OverlapScoringConfig(
+            k=1,
+            min_samples_per_cluster=1,
+            exclude_classes="background",
+        )
+    ).score(Z, y)
+
+    assert fake_overlapindex.calls[-1]["exclude_classes"] == "background"
+    assert result.metadata["exclude_classes"] == ["background"]
+    assert result.metadata["aggregation_classes"] == ["cat", "dog"]
+    assert result.metadata["aggregate_valid"] is True

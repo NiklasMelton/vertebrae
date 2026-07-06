@@ -8,7 +8,12 @@ from vertebrae.config import ProbeConfig
 from vertebrae.utils.labels import class_counts, normalize_targets
 
 
-def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional[Dict[str, Any]]:
+def run_probes(
+    Z: Any,
+    y: Any,
+    config: Optional[ProbeConfig] = None,
+    groups: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
     """Evaluate lightweight probe classifiers on embeddings.
 
     Args:
@@ -40,6 +45,12 @@ def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional
     labels = normalized_labels
     counts = class_counts(labels)
     warnings: List[str] = []
+    if not counts:
+        return {
+            "enabled": False,
+            "warnings": ["Probe evaluation has no non-excluded classes to evaluate."],
+            "results": {},
+        }
     if min(counts.values()) < 2:
         return {
             "enabled": False,
@@ -49,7 +60,7 @@ def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional
 
     try:
         from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
-        from sklearn.model_selection import train_test_split
+        from sklearn.model_selection import GroupShuffleSplit, train_test_split
     except ImportError as exc:
         raise ImportError("Probe evaluation requires scikit-learn.") from exc
 
@@ -61,17 +72,40 @@ def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional
         )
 
     try:
-        X_train, X_test, y_train, y_test = train_test_split(
-            embeddings,
-            labels,
-            test_size=probe_config.test_size,
-            random_state=probe_config.random_state,
-            stratify=stratify,
-        )
+        if groups is not None:
+            group_array = np.asarray(groups)
+            if group_array.ndim != 1 or len(group_array) != len(labels):
+                raise ValueError("groups must be one-dimensional and aligned to labels.")
+            splitter = GroupShuffleSplit(
+                n_splits=1,
+                test_size=probe_config.test_size,
+                random_state=probe_config.random_state,
+            )
+            train_indices, test_indices = next(splitter.split(embeddings, labels, group_array))
+            X_train, X_test = embeddings[train_indices], embeddings[test_indices]
+            y_train, y_test = labels[train_indices], labels[test_indices]
+        else:
+            X_train, X_test, y_train, y_test = train_test_split(
+                embeddings,
+                labels,
+                test_size=probe_config.test_size,
+                random_state=probe_config.random_state,
+                stratify=stratify,
+            )
     except ValueError as exc:
         return {
             "enabled": False,
             "warnings": [f"Probe evaluation disabled: {exc}"],
+            "results": {},
+        }
+    if len(class_counts(y_train)) < 2:
+        return {
+            "enabled": False,
+            "grouped": groups is not None,
+            "warnings": [
+                "Probe evaluation disabled because the training split contains fewer "
+                "than two classes."
+            ],
             "results": {},
         }
 
@@ -90,6 +124,7 @@ def run_probes(Z: Any, y: Any, config: Optional[ProbeConfig] = None) -> Optional
         "enabled": True,
         "test_size": probe_config.test_size,
         "methods": list(probe_config.methods),
+        "grouped": groups is not None,
         "warnings": warnings,
         "results": results,
     }

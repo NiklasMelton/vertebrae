@@ -13,6 +13,13 @@ from vertebrae.extractors.onnx import ONNXExtractor
 from vertebrae.extractors.precomputed import PrecomputedExtractor
 from vertebrae.extractors.sentence_transformers import SentenceTransformerExtractor
 from vertebrae.extractors.sklearn import SklearnExtractor
+from vertebrae.extractors.spatial import (
+    CallableSpatialExtractor,
+    PrecomputedSpatialExtractor,
+    SpatialEmbeddingOutput,
+    SpatialLayout,
+    SpatialOutputSpec,
+)
 from vertebrae.extractors.torch import TorchExtractor
 
 __all__ = [
@@ -30,4 +37,9 @@ __all__ = [
     "SentenceTransformerExtractor",
     "SklearnExtractor",
     "TorchExtractor",
+    "CallableSpatialExtractor",
+    "PrecomputedSpatialExtractor",
+    "SpatialEmbeddingOutput",
+    "SpatialLayout",
+    "SpatialOutputSpec",
 ]

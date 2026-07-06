@@ -1,9 +1,14 @@
 """Optional Keras module extractor for local user-supplied models."""
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 
+from vertebrae.extractors.spatial import (
+    SpatialEmbeddingOutput,
+    SpatialOutputSpec,
+    _per_image_values,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -39,6 +44,8 @@ class KerasExtractor:
         recipe_data: Optional[Dict[str, Any]] = None,
         allow_sparse: bool = False,
         streaming_safe: bool = True,
+        spatial_output_fn: Optional[Callable[[Any], Any]] = None,
+        spatial_output_specs: Optional[Iterable[SpatialOutputSpec]] = None,
     ) -> None:
         if call_method not in {"call", "predict"}:
             raise ValueError("call_method must be either 'call' or 'predict'.")
@@ -58,6 +65,12 @@ class KerasExtractor:
         self.recipe_data = recipe_data or {}
         self.allow_sparse = allow_sparse
         self.streaming_safe = streaming_safe
+        self.spatial_output_fn = spatial_output_fn
+        self._spatial_output_specs = list(spatial_output_specs or [])
+        if (self.spatial_output_fn is None) != (not self._spatial_output_specs):
+            raise ValueError(
+                "spatial_output_fn and spatial_output_specs must be provided together."
+            )
         self._keras: Any = None
 
     def fit(self, X: Any, y: Any = None) -> "KerasExtractor":
@@ -84,6 +97,30 @@ class KerasExtractor:
 
         return self.fit(X, y).transform(X)
 
+    def spatial_output_specs(self) -> List[SpatialOutputSpec]:
+        return list(self._spatial_output_specs)
+
+    def transform_spatial(self, X: Any) -> List[SpatialEmbeddingOutput]:
+        if self.spatial_output_fn is None:
+            raise ValueError("KerasExtractor was not configured with spatial outputs.")
+        self._load_keras()
+        values = self._to_numpy(self.spatial_output_fn(self._call_model(self.collate_fn(X))))
+        if not isinstance(values, dict) and len(self._spatial_output_specs) == 1:
+            values = {self._spatial_output_specs[0].name: values}
+        if not isinstance(values, dict):
+            raise ValueError("Multi-output Keras spatial adapters must return a mapping.")
+        return [
+            SpatialEmbeddingOutput(
+                name=spec.name,
+                embeddings=_per_image_values(values[spec.name], spec.layout),
+                layout=spec.layout,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+                annotation_transform=spec.annotation_transform,
+            )
+            for spec in self._spatial_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable recipe for this extractor."""
 
@@ -100,6 +137,20 @@ class KerasExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
+            "spatial_output_fn": (
+                _callable_name(self.spatial_output_fn)
+                if self.spatial_output_fn is not None
+                else None
+            ),
+            "spatial_outputs": [
+                {
+                    "name": spec.name,
+                    "layout": spec.layout.__dict__,
+                    "hidden_layer": spec.hidden_layer,
+                    "metadata": spec.metadata,
+                }
+                for spec in self._spatial_output_specs
+            ],
         }
 
     def _load_keras(self) -> Any:

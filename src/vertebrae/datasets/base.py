@@ -449,6 +449,27 @@ class BenchmarkDataset:
         dataset.validate()
         return dataset
 
+    @classmethod
+    def from_segmentation_embeddings(
+        cls,
+        embeddings: Any,
+        labels: Any,
+        image_ids: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "BenchmarkDataset":
+        """Create a grouped token dataset from precomputed segmentation features."""
+
+        merged_metadata = {
+            "precomputed_embeddings": True,
+            "segmentation_embeddings": True,
+            **(metadata or {}),
+        }
+        return cls.from_embeddings(
+            embeddings,
+            labels,
+            metadata=merged_metadata,
+        ).with_groups(image_ids, name="image_id")
+
     def validate(self) -> None:
         """Validate dataset shape and labels.
 
@@ -553,6 +574,42 @@ class BenchmarkDataset:
             return default_label_view_metadata()
         return dict(view)
 
+    def with_groups(self, groups: Any, name: str = "group") -> "BenchmarkDataset":
+        """Return a dataset with aligned independence-group identifiers."""
+
+        group_array = np.asarray(groups)
+        if group_array.ndim != 1:
+            raise ValueError("groups must be one-dimensional.")
+        if len(group_array) != len(self.y):
+            raise ValueError(
+                f"groups and samples must have the same length; got {len(group_array)} "
+                f"and {len(self.y)}."
+            )
+        for value in group_array:
+            try:
+                hash(value.item() if hasattr(value, "item") else value)
+            except TypeError as exc:
+                raise ValueError("groups values must be hashable.") from exc
+        metadata = dict(self.metadata)
+        metadata["groups"] = group_array.tolist()
+        metadata["group_name"] = str(name)
+        dataset = BenchmarkDataset(
+            X=self.X,
+            y=coerce_label_input(self.y),
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            metadata=metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    def groups(self) -> Optional[np.ndarray]:
+        """Return aligned independence groups when configured."""
+
+        values = self.metadata.get("groups")
+        return None if values is None else np.asarray(values)
+
     def iter_batches(
         self,
         batch_size: int,
@@ -643,6 +700,9 @@ class BenchmarkDataset:
                 hierarchy = dict(hierarchy)
                 hierarchy["paths"] = np.asarray(paths, dtype=object)[index_array].tolist()
                 merged_metadata["label_hierarchy"] = hierarchy
+        groups = merged_metadata.get("groups")
+        if groups is not None:
+            merged_metadata["groups"] = np.asarray(groups, dtype=object)[index_array].tolist()
         merged_metadata.update(metadata or {})
         dataset = BenchmarkDataset(
             X=_take_samples(self.X, index_array),
@@ -663,6 +723,8 @@ class BenchmarkDataset:
         """
 
         labels = target_summary(self.y, label_names=self.metadata.get("label_names"))
+        report_metadata = dict(self.metadata)
+        groups = report_metadata.pop("groups", None)
         summary = {
             "n_samples": int(len(self.y)),
             "n_classes": labels["n_classes"],
@@ -672,8 +734,14 @@ class BenchmarkDataset:
             "input_col": self.input_col,
             "label_col": self.label_col,
             "label_view": self.active_label_view(),
-            "metadata": self.metadata,
+            "metadata": report_metadata,
         }
+        if groups is not None:
+            summary["grouping"] = {
+                "provided": True,
+                "name": self.metadata.get("group_name", "group"),
+                "n_groups": int(len(set(groups))),
+            }
         for key in (
             "label_names",
             "labelset_counts",

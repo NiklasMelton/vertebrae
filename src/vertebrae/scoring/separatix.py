@@ -50,6 +50,7 @@ class SeparatixScorer:
         Z: Any,
         y: Any,
         label_names: Optional[Any] = None,
+        groups: Optional[Any] = None,
     ) -> SeparatixResult:
         """Run Separatix on dense or sparse embeddings and labels."""
 
@@ -60,13 +61,14 @@ class SeparatixScorer:
                 "embeddings and labels must have the same length; "
                 f"got {embeddings.shape[0]} and {len(labels)}."
             )
+        normalized_groups = _validate_groups(groups, len(labels))
 
         sparse_input = is_sparse_matrix(embeddings)
         normalize_embeddings = self.overlap_config.normalize_embeddings
         if normalize_embeddings:
             embeddings = _l2_normalize_for_separatix(embeddings)
 
-        report = self._run_separatix(embeddings, labels, label_metadata)
+        report = self._run_separatix(embeddings, labels, label_metadata, normalized_groups)
         report_dict = make_json_safe(report.to_dict())
         summary = target_summary(y, label_names=label_metadata.get("label_names"))
         return SeparatixResult(
@@ -89,6 +91,12 @@ class SeparatixScorer:
                 "target_type": label_metadata["target_type"],
                 "label_names": label_metadata.get("label_names"),
                 "target_summary": summary,
+                "grouped": normalized_groups is not None,
+                "n_groups": (
+                    int(len(np.unique(normalized_groups)))
+                    if normalized_groups is not None
+                    else None
+                ),
             },
         )
 
@@ -110,9 +118,10 @@ class SeparatixScorer:
         embeddings: Any,
         labels: np.ndarray,
         label_metadata: Dict[str, Any],
+        groups: Optional[np.ndarray],
     ) -> Any:
         separatix = _load_separatix()
-        kwargs = {
+        kwargs: Dict[str, Any] = {
             "return_report": True,
             "random_state": self.config.random_state,
             "budget": self.config.budget or "standard",
@@ -121,6 +130,8 @@ class SeparatixScorer:
         }
         if label_metadata["target_type"] == "multi_label":
             kwargs["target_mode"] = "multilabel"
+        if groups is not None:
+            kwargs["groups"] = groups
         if self.config.n_jobs is None:
             return separatix.diagnose(embeddings, labels, **kwargs)
 
@@ -131,11 +142,10 @@ class SeparatixScorer:
             random_state=kwargs["random_state"],
             n_jobs=self.config.n_jobs,
         )
-        fit_kwargs = {"target_mode": "multilabel"} if kwargs.get("target_mode") else {}
-        try:
-            fitted = profiler.fit(embeddings, labels, **fit_kwargs)
-        except TypeError:
-            fitted = profiler.fit(embeddings, labels)
+        fit_kwargs: Dict[str, Any] = {}
+        if groups is not None:
+            fit_kwargs["groups"] = groups
+        fitted = profiler.fit(embeddings, labels, **fit_kwargs)
         return fitted.report()
 
     def _max_dense_mb(self) -> int:
@@ -163,3 +173,16 @@ def _l2_normalize_for_separatix(value: Any) -> Any:
         norms[norms == 0.0] = 1.0
         return value.multiply(1.0 / norms[:, None])
     return l2_normalize_rows(value)
+
+
+def _validate_groups(groups: Optional[Any], n_samples: int) -> Optional[np.ndarray]:
+    if groups is None:
+        return None
+    array = np.asarray(groups)
+    if array.ndim != 1:
+        raise ValueError("groups must be one-dimensional.")
+    if len(array) != n_samples:
+        raise ValueError(
+            f"groups and labels must have the same length; got {len(array)} and {n_samples}."
+        )
+    return array

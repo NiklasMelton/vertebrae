@@ -32,6 +32,7 @@ class OverlapScoreResult:
     """
 
     macro_score: float
+    weighted_score: Optional[float] = None
     per_class_scores: Dict[Any, Any] = field(default_factory=dict)
     pairwise_scores: Dict[Any, Any] = field(default_factory=dict)
     sparse_adjacency: Any = None
@@ -215,10 +216,19 @@ class OverlapIndexScorer:
             kmeans_k=k_per_class,
             kmeans_kwargs=kmeans_kwargs,
             offline_chunk_size=self.config.offline_chunk_size,
+            exclude_classes=self.config.exclude_classes,
         )
-        raw_score = index.fit_offline(embeddings, labels, reset_state=True)
+        with _capture_runtime_warnings(warnings):
+            raw_score = index.fit_offline(embeddings, labels, reset_state=True)
         macro_score = _extract_macro_score(index, raw_score)
+        weighted_score = _extract_optional_score(getattr(index, "weighted_index", None))
         summary = target_summary(y, label_names=label_metadata.get("label_names"))
+        excluded_classes = _normalized_excluded_classes(self.config.exclude_classes)
+        observed_classes = list(summary["class_counts"])
+        included_classes = [
+            label for label in observed_classes if not _label_is_excluded(label, excluded_classes)
+        ]
+        aggregate_valid = bool(included_classes)
 
         metadata = {
             "backend": "MiniBatchKMeans",
@@ -231,9 +241,13 @@ class OverlapIndexScorer:
             "target_type": label_metadata["target_type"],
             "label_names": label_metadata.get("label_names"),
             "target_summary": summary,
+            "exclude_classes": make_json_safe(excluded_classes),
+            "aggregation_classes": make_json_safe(included_classes),
+            "aggregate_valid": aggregate_valid,
         }
         return OverlapScoreResult(
             macro_score=macro_score,
+            weighted_score=weighted_score,
             per_class_scores=make_json_safe(getattr(index, "singleton_index", {})),
             pairwise_scores=make_json_safe(getattr(index, "pairwise_index", {})),
             sparse_adjacency=make_json_safe(getattr(index, "sparse_adj", None)),
@@ -273,3 +287,49 @@ def _extract_macro_score(index: Any, raw_score: Any) -> float:
         if isinstance(candidate, (int, float, np.number)):
             return float(candidate)
     raise ValueError("OverlapIndex did not return a numeric global score.")
+
+
+def _extract_optional_score(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float, np.number)):
+        return float(value)
+    return None
+
+
+def _normalized_excluded_classes(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        values = [value]
+    else:
+        try:
+            values = list(value)
+        except TypeError:
+            values = [value]
+    unique: List[Any] = []
+    for item in values:
+        if not any(item == existing for existing in unique):
+            unique.append(item)
+    return unique
+
+
+def _label_is_excluded(label: Any, excluded: List[Any]) -> bool:
+    label_value = label.item() if hasattr(label, "item") else label
+    return any(label_value == item for item in excluded)
+
+
+class _capture_runtime_warnings:
+    def __init__(self, output: List[str]) -> None:
+        self.output = output
+        self._context: Any = None
+        self._records: Any = None
+
+    def __enter__(self) -> None:
+        import warnings
+
+        self._context = warnings.catch_warnings(record=True)
+        self._records = self._context.__enter__()
+        warnings.simplefilter("always", RuntimeWarning)
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self._context.__exit__(exc_type, exc, traceback)
+        self.output.extend(str(record.message) for record in self._records)

@@ -17,6 +17,13 @@
 - `HFVisionExtractor`: lazy-loads Hugging Face vision backbones when optional
   dependencies are installed.
 
+Dense segmentation workflows use `SpatialOutputSpec`, `SpatialLayout`, and
+`SpatialEmbeddingOutput`. `CallableSpatialExtractor` and
+`PrecomputedSpatialExtractor` cover explicit adapters; Torch and Keras support
+`spatial_output_fn`, while `HFVisionExtractor` supports explicit
+`spatial_outputs`. Spatial geometry must be declared rather than inferred from
+ambiguous model outputs.
+
 Every extractor implements:
 
 ```python

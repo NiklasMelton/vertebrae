@@ -1,6 +1,6 @@
 """Benchmark runner."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
@@ -19,6 +19,7 @@ from vertebrae.config import (
     MemoryConfig,
     OverlapScoringConfig,
     ProbeConfig,
+    SegmentationConfig,
     SeparatixConfig,
     StabilityConfig,
 )
@@ -76,6 +77,7 @@ class Benchmark:
         embedding_config: Optional[EmbeddingConfig] = None,
         memory_config: Optional[MemoryConfig] = None,
         execution: Optional[Any] = None,
+        segmentation_config: Optional[SegmentationConfig] = None,
     ) -> None:
         self.dataset = dataset
         self.extractors = list(extractors or [])
@@ -96,6 +98,7 @@ class Benchmark:
         self.embedding_config = embedding_config or EmbeddingConfig()
         self.memory_config = memory_config or MemoryConfig()
         self.execution = execution or LocalBackend()
+        self.segmentation_config = segmentation_config or SegmentationConfig()
 
     def add_extractor(self, extractor: Any) -> "Benchmark":
         """Add an extractor to this benchmark.
@@ -123,6 +126,8 @@ class Benchmark:
         self.dataset.validate()
         if not self.extractors:
             raise ValueError("At least one extractor must be provided.")
+        if getattr(self.dataset, "modality", None) == "segmentation":
+            return self._run_segmentation()
 
         evaluation_datasets, label_view_warnings = self._evaluation_datasets()
         self._validate_output_level_mapping()
@@ -151,6 +156,92 @@ class Benchmark:
                 "embedding_config": asdict(self.embedding_config),
                 "memory_config": asdict(self.memory_config),
                 "label_view_warnings": label_view_warnings,
+            },
+        )
+
+    def _run_segmentation(self) -> BenchmarkResult:
+        from vertebrae.cache import create_artifact_store
+        from vertebrae.extractors import PrecomputedExtractor
+        from vertebrae.segmentation import materialize_segmentation_outputs
+
+        extractor_results: List[ExtractorResult] = []
+        materialization_summaries = []
+        store = create_artifact_store(
+            self.cache_config.cache_dir,
+            **self.cache_config.storage_options,
+        )
+        for extractor in self.extractors:
+            materializations = materialize_segmentation_outputs(
+                dataset=self.dataset,
+                extractor=extractor,
+                config=self.segmentation_config,
+                batch_size=self.embedding_config.batch_size,
+            )
+            for materialization in materializations:
+                scoring_config = self.scoring_config
+                if self.segmentation_config.background_mode == "include_excluded":
+                    exclusions = _normalized_excluded_classes(scoring_config.exclude_classes)
+                    for background_label in materialization.metadata.get("background_labels", []):
+                        if not _label_is_excluded_exact(background_label, exclusions):
+                            exclusions.append(background_label)
+                    scoring_config = replace(
+                        scoring_config,
+                        exclude_classes=exclusions,
+                    )
+                result = Benchmark(
+                    dataset=materialization.dataset,
+                    extractors=[
+                        PrecomputedExtractor(
+                            name=_qualified_output_name(extractor.name, materialization.name)
+                        )
+                    ],
+                    scoring_config=scoring_config,
+                    stability_config=self.stability_config,
+                    probe_config=self.probe_config,
+                    separatix_config=self.separatix_config,
+                    cache_config=self.cache_config,
+                    compression_configs=self.compression_configs,
+                    embedding_config=self.embedding_config,
+                    memory_config=self.memory_config,
+                    execution=self.execution,
+                ).run()
+                for item in result.extractor_results:
+                    item.extractor_type = getattr(extractor, "extractor_type", "spatial")
+                    item.embedding_metadata["segmentation"] = materialization.metadata
+                    item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
+                    provenance_key = f"{item.embedding_metadata['cache_key']}/provenance"
+                    item.embedding_metadata["provenance_key"] = provenance_key
+                    if self.cache_config.enabled:
+                        store.put_json(
+                            provenance_key,
+                            {"rows": materialization.provenance},
+                        )
+                    extractor_results.append(item)
+                materialization_summaries.append(
+                    {
+                        "extractor": extractor.name,
+                        "output": materialization.name,
+                        **materialization.metadata,
+                    }
+                )
+
+        recommendations = recommendations_for_benchmark(extractor_results)
+        return BenchmarkResult(
+            dataset_summary={
+                **self.dataset.summary(),
+                "segmentation_outputs": materialization_summaries,
+            },
+            extractor_results=extractor_results,
+            recommendations=recommendations,
+            metadata={
+                "vertebrae_version": __version__,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "scoring_config": asdict(scoring_config),
+                "segmentation_config": asdict(self.segmentation_config),
+                "separatix_config": asdict(self.separatix_config),
+                "compression_configs": [asdict(config) for config in self.compression_configs],
+                "embedding_config": asdict(self.embedding_config),
+                "memory_config": asdict(self.memory_config),
             },
         )
 
@@ -327,6 +418,7 @@ class Benchmark:
                 dataset.y,
                 overlap.macro_score,
                 label_names=dataset.metadata.get("label_names"),
+                groups=dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
             )
             variant_runtime["separatix_seconds"] = perf_counter() - separatix_start
             if separatix:
@@ -345,16 +437,33 @@ class Benchmark:
                 variant_warnings.extend(stability.get("warnings", []))
 
             probe_start = perf_counter()
-            probes = run_probes(compressed_embeddings, dataset.y, self.probe_config)
+            diagnostic_embeddings, diagnostic_labels, diagnostic_groups = self._diagnostic_inputs(
+                compressed_embeddings,
+                dataset.y,
+                dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
+            )
+            probes = run_probes(
+                diagnostic_embeddings,
+                diagnostic_labels,
+                self.probe_config,
+                groups=diagnostic_groups,
+            )
             variant_runtime["probe_seconds"] = perf_counter() - probe_start
             if probes:
                 variant_warnings.extend(probes.get("warnings", []))
 
-            weakest_class, weakest_score = _weakest_class(overlap.per_class_scores)
-            recommendation = recommendation_for_extractor(
-                overlap.macro_score,
-                stability,
-                weakest_score,
+            weakest_class, weakest_score = _weakest_class(
+                overlap.per_class_scores,
+                excluded_classes=overlap.metadata.get("exclude_classes"),
+            )
+            recommendation = (
+                recommendation_for_extractor(
+                    overlap.macro_score,
+                    stability,
+                    weakest_score,
+                )
+                if overlap.metadata.get("aggregate_valid", True)
+                else "aggregate_unavailable"
             )
             result_name = _qualified_label_view_name(
                 embedding_metadata.get("extractor_name", extractor.name),
@@ -389,6 +498,7 @@ class Benchmark:
         labels: Any,
         macro_score: float,
         label_names: Optional[Any] = None,
+        groups: Optional[Any] = None,
     ) -> Optional[SeparatixResult]:
         if not self.separatix_config.enabled:
             return None
@@ -405,7 +515,47 @@ class Benchmark:
                 ),
                 macro_score=macro_score,
             )
-        return scorer.score(embeddings, labels, label_names=label_names)
+        diagnostic_embeddings, diagnostic_labels, diagnostic_groups = self._diagnostic_inputs(
+            embeddings,
+            labels,
+            groups,
+        )
+        if len(diagnostic_labels) == 0:
+            return scorer.skipped_result(
+                reason="Skipped Separatix because all classes were excluded from diagnostics.",
+                macro_score=macro_score,
+            )
+        try:
+            return scorer.score(
+                diagnostic_embeddings,
+                diagnostic_labels,
+                label_names=label_names,
+                groups=diagnostic_groups,
+            )
+        except ValueError as exc:
+            if diagnostic_groups is None:
+                raise
+            return scorer.skipped_result(
+                reason=f"Skipped grouped Separatix diagnostic: {exc}",
+                macro_score=macro_score,
+            )
+
+    def _diagnostic_inputs(
+        self,
+        embeddings: Any,
+        labels: Any,
+        groups: Optional[Any],
+    ) -> Tuple[Any, Any, Optional[Any]]:
+        excluded = _normalized_excluded_classes(self.scoring_config.exclude_classes)
+        if not excluded:
+            return embeddings, labels, groups
+        label_array = np.asarray(labels)
+        mask = np.asarray(
+            [not _label_is_excluded_exact(label, excluded) for label in label_array],
+            dtype=bool,
+        )
+        filtered_groups = None if groups is None else np.asarray(groups)[mask]
+        return embeddings[mask], label_array[mask], filtered_groups
 
     def _prepare_dataset_for_extractor(
         self,
@@ -1226,16 +1376,41 @@ class Benchmark:
         return qualified
 
 
-def _weakest_class(per_class_scores: dict) -> Any:
+def _weakest_class(
+    per_class_scores: dict,
+    excluded_classes: Optional[Any] = None,
+) -> Any:
+    excluded = _normalized_excluded_classes(excluded_classes)
     numeric_scores = {
         str(label): float(score)
         for label, score in per_class_scores.items()
-        if isinstance(score, (int, float, np.number))
+        if isinstance(score, (int, float, np.number)) and not _label_is_excluded(label, excluded)
     }
     if not numeric_scores:
         return None, None
     label, score = min(numeric_scores.items(), key=lambda item: item[1])
     return label, score
+
+
+def _normalized_excluded_classes(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return [value]
+    try:
+        return list(value)
+    except TypeError:
+        return [value]
+
+
+def _label_is_excluded(label: Any, excluded: List[Any]) -> bool:
+    label_value = label.item() if hasattr(label, "item") else label
+    return any(label_value == item or str(label_value) == str(item) for item in excluded)
+
+
+def _label_is_excluded_exact(label: Any, excluded: List[Any]) -> bool:
+    label_value = label.item() if hasattr(label, "item") else label
+    return any(label_value == item for item in excluded)
 
 
 def _variant_extractor_name(name: str, compression_metadata: dict) -> str:

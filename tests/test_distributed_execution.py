@@ -14,9 +14,11 @@ from vertebrae.execution import (
     collect_score_artifacts,
     diagnose_embedding_artifact,
     embedding_artifact_key,
+    groups_artifact_key,
     labels_artifact_key,
     materialize_and_merge_embeddings,
     materialize_embedding_shard,
+    materialize_group_artifact,
     materialize_label_artifact,
     merge_embedding_shards,
     plan_embedding_shard_jobs,
@@ -35,6 +37,54 @@ def test_resource_spec_validates_bounds():
         ResourceSpec(cpus=0)
     with pytest.raises(ValueError, match="gpus"):
         ResourceSpec(gpus=-1)
+
+
+def test_group_artifact_and_separatix_job_preserve_group_safety(
+    tmp_path,
+    fake_overlapindex,
+    fake_separatix,
+):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24, dtype=float).reshape(8, 3),
+        np.array(["a"] * 4 + ["b"] * 4),
+    ).with_groups(np.repeat(np.arange(4), 2), name="image_id")
+    store = LocalArtifactStore(tmp_path)
+    extractor = CallableExtractor("identity", transform_fn=lambda value: value)
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset,
+        extractor,
+        store,
+        LocalBackend(),
+        total_shards=1,
+    )
+    labels = materialize_label_artifact(dataset, store)
+    groups = materialize_group_artifact(dataset, store)
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=labels["output_key"],
+            output_key=scoring_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store,
+    )
+
+    diagnostic = diagnose_embedding_artifact(
+        SeparatixJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=labels["output_key"],
+            groups_key=groups["output_key"],
+            score_key=score["output_key"],
+            output_key=separatix_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store,
+    )
+
+    assert groups["output_key"] == groups_artifact_key(dataset)
+    assert groups["n_groups"] == 4
+    assert fake_separatix.ComplexityProfiler.calls[-1]["groups"].tolist() == (
+        dataset.groups().tolist()
+    )
+    assert diagnostic["diagnostic"]["metadata"]["grouped"] is True
 
 
 def test_local_backend_submit_gather_status():

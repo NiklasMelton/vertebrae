@@ -252,3 +252,12 @@ guard.
 - Keep labels in their original semantic form when possible; `vertebrae` preserves
   them in class counts, per-class scores, and weakest-class summaries.
 - Add meaningful `metadata` up front so JSON and Markdown reports stay useful later.
+
+For dense semantic, instance, or panoptic evaluation, use `SegmentationDataset`
+and the spatial extractor contracts documented in
+[segmentation.md](segmentation.md).
+
+Ordinary benchmark datasets can declare independence units with
+`dataset.with_groups(groups, name="image_id")`. Groups remain aligned through
+subsetting and are forwarded to grouped diagnostics without being serialized as
+raw IDs in result reports.
