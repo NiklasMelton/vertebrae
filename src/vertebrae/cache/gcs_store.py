@@ -134,11 +134,21 @@ class GCSArtifactStore:
 
         payload = self._get_bytes(self._artifact_blob_name(key, "labels.json"))
         label_names = None
+        target_type = "auto"
+        target_names = None
         metadata_name = self._artifact_blob_name(key, "metadata.json")
         if self._blob_exists(metadata_name):
             metadata_payload = self._get_bytes(metadata_name)
-            label_names = json.loads(metadata_payload.decode("utf-8")).get("label_names")
-        return labels_from_jsonable(json.loads(payload.decode("utf-8")), label_names=label_names)
+            metadata = json.loads(metadata_payload.decode("utf-8"))
+            label_names = metadata.get("label_names")
+            target_type = metadata.get("target_type", "auto")
+            target_names = metadata.get("target_names")
+        return labels_from_jsonable(
+            json.loads(payload.decode("utf-8")),
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+        )
 
     def put_json(self, key: str, obj: dict) -> str:
         """Store JSON metadata for an artifact key."""

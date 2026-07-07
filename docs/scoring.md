@@ -29,7 +29,8 @@ This backend choice is not exposed as a public user option.
 
 ## OverlapScoringConfig
 
-Use `OverlapScoringConfig` to tune the supported MiniBatchKMeans-facing settings:
+Use `OverlapScoringConfig` to tune the supported MiniBatchKMeans-facing settings
+for classification and multi-label datasets:
 
 ```python
 from vertebrae import OverlapScoringConfig
@@ -63,6 +64,29 @@ Do not reconstruct the global score by averaging per-class scores: reporting-onl
 excluded classes remain present there. `OverlapScoreResult` records both
 `macro_score` and `weighted_score`, plus the effective aggregation classes.
 
+## ContinuousOverlapScoringConfig
+
+Explicit regression datasets use `ContinuousOverlapIndex` internally through the
+same `OverlapIndexScorer` adapter. Configure that path with
+`ContinuousOverlapScoringConfig`:
+
+```python
+from vertebrae import ContinuousOverlapScoringConfig
+
+config = ContinuousOverlapScoringConfig(
+    k=8,
+    target_cover="auto",
+    target_distance="auto",
+    n_null_permutations=20,
+    aggregation="support_weighted",
+)
+```
+
+Regression scoring keeps the MiniBatchKMeans backend fixed internally and reports
+`OverlapScoreResult.score` as the primary continuous overlap score. Values near
+`0.5` are null-like, values above `0.5` indicate useful structure, and values
+below `0.5` indicate harmful overlap.
+
 ## Automatic k resolution
 
 The default `k="auto"` mode resolves a separate `k` for each class using class size,
@@ -75,14 +99,16 @@ when a weakly represented class forced a smaller prototype count.
 
 ## Scoring inputs
 
-The scorer accepts numeric embedding matrices with single-label or multi-label
-classification targets.
+The scorer accepts numeric embedding matrices with single-label, multi-label, or
+explicit regression targets.
 
 - Dense inputs are scored directly.
 - Sparse inputs are validated, then densified only at the OverlapIndex boundary.
 - Single-label targets are passed to OverlapIndex as a one-dimensional label array.
 - Multi-label targets are normalized to a dense 0/1 indicator matrix before calling
   OverlapIndex.
+- Regression targets are passed to ContinuousOverlapIndex as finite numeric 1D or
+  2D targets.
 - When `normalize_embeddings=True`, embeddings are L2-normalized row-wise before
   scoring.
 
@@ -93,6 +119,7 @@ while still meeting the MiniBatchKMeans backend requirements.
 
 `OverlapIndexScorer.score(...)` returns an `OverlapScoreResult` with:
 
+- `score`
 - `macro_score`
 - `per_class_scores`
 - `pairwise_scores`
@@ -103,7 +130,9 @@ while still meeting the MiniBatchKMeans backend requirements.
 - `metadata`
 
 The `metadata` payload records backend details such as normalization, chunk size,
-seed, KMeans kwargs, and whether the original input was sparse.
+seed, KMeans kwargs, and whether the original input was sparse. Regression results
+also preserve continuous null-calibration metadata plus prototype-level summaries,
+support, adjacency, and loss diagnostics.
 
 ## Stability analysis
 
@@ -146,9 +175,13 @@ Current behavior:
 
 - Separatix runs on the same evaluated embedding variant that overlap scores.
 - It runs after compression and after the main overlap score is available.
-- By default it only runs when `overlap.macro_score >= 0.80`.
+- By default it only runs when the overlap gate passes.
+- Classification and multi-label datasets use `overlap_threshold`.
+- Regression datasets use `regression_overlap_threshold`.
 - Multi-label targets are passed to Separatix as dense 0/1 indicator matrices with
   `target_mode="multilabel"`.
+- Regression targets are passed with `target_mode="regression"`.
+- Optional Separatix MLP probes can be enabled with `mlp_probes=True`.
 - The full Separatix report is preserved in JSON outputs, while Markdown reports
   show a compact recommendation, confidence, decision path, key scores, and skips.
 
@@ -158,8 +191,8 @@ and Separatix uses its own densification policy internally.
 
 Native vertebrae probes are still available through `ProbeConfig`, but they are
 now opt-in quick checks rather than part of the default report path. They are
-currently single-label only; when enabled on a multi-label dataset they are skipped
-with a warning while overlap scoring and Separatix continue to run.
+currently classification-only; when enabled on a multi-label or regression dataset
+they are skipped with a warning while overlap scoring and Separatix continue to run.
 
 ## Practical guidance
 

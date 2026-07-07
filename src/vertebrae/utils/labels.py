@@ -8,6 +8,7 @@ LABEL_PATH_DELIMITER = " > "
 LABEL_SET_DELIMITER = " + "
 SINGLE_LABEL_TARGET = "single_label"
 MULTI_LABEL_TARGET = "multi_label"
+REGRESSION_TARGET = "regression"
 
 
 def coerce_label_input(labels: Any) -> np.ndarray:
@@ -27,16 +28,31 @@ def coerce_label_input(labels: Any) -> np.ndarray:
 def normalize_targets(
     y: Any,
     label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Normalize single-label or multi-label targets.
+    """Normalize single-label, multi-label, or explicit regression targets.
 
     Single-label targets are returned as a one-dimensional array. Multi-label
     targets are returned as a one-dimensional object array where each element is
-    a tuple of labels ordered by the resolved label names.
+    a tuple of labels ordered by the resolved label names. Regression targets
+    are returned as a one- or two-dimensional float array.
     """
 
     labels = coerce_label_input(y)
     names = normalize_label_names(label_names)
+    resolved_target_names = _normalize_target_names(target_names)
+    _validate_target_mode(
+        target_type,
+        label_names=names,
+        target_names=resolved_target_names,
+    )
+    if target_type == REGRESSION_TARGET:
+        normalized, metadata = _normalize_regression_targets(
+            labels,
+            target_names=resolved_target_names,
+        )
+        return normalized, metadata
     if _is_indicator_matrix(labels):
         normalized = _labels_from_indicator(labels, names)
         resolved_names = names if names is not None else tuple(range(labels.shape[1]))
@@ -48,6 +64,8 @@ def normalize_targets(
     if labels.ndim == 2 and names is not None and labels.dtype.kind in {"b", "i", "u", "f"}:
         raise ValueError("Indicator labels must contain only 0/1 or boolean values.")
     if labels.ndim == 2:
+        if target_type == SINGLE_LABEL_TARGET:
+            raise ValueError("single_label targets must be one-dimensional.")
         normalized, resolved_names = _normalize_label_sequences(
             [row for row in labels],
             label_names=names,
@@ -60,6 +78,10 @@ def normalize_targets(
     if labels.ndim != 1:
         raise ValueError("Labels must be one-dimensional or a two-dimensional multilabel target.")
     if _is_sequence_label_array(labels):
+        if target_type == SINGLE_LABEL_TARGET:
+            raise ValueError(
+                "single_label targets must contain scalar label values, not label sequences."
+            )
         normalized, resolved_names = _normalize_label_sequences(
             list(labels),
             label_names=names,
@@ -71,26 +93,53 @@ def normalize_targets(
         )
     if names is not None:
         raise ValueError("label_names can only be provided for multi-label targets.")
+    if target_type == MULTI_LABEL_TARGET:
+        raise ValueError(
+            "multi_label targets must be a 2D indicator matrix or a 1D sequence of label sets."
+        )
     normalized_single = np.asarray([_normalize_scalar(label) for label in labels], dtype=object)
     if _has_missing_single_labels(normalized_single):
         raise ValueError("Labels must be non-missing.")
     return normalized_single, _target_metadata(SINGLE_LABEL_TARGET, normalized_single)
 
 
-def target_type(y: Any, label_names: Optional[Iterable[Any]] = None) -> str:
+def target_type(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
+) -> str:
     """Return the target type for labels."""
 
-    _, metadata = normalize_targets(y, label_names=label_names)
+    _, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
     return str(metadata["target_type"])
 
 
-def class_counts(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[Any, int]:
+def class_counts(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
+) -> Dict[Any, int]:
     """Count labels while preserving scalar label values.
 
-    For multi-label targets, counts are per-label occurrence counts.
+    For multi-label targets, counts are per-label occurrence counts. Regression
+    targets do not define classes and return an empty mapping.
     """
 
-    labels, metadata = normalize_targets(y, label_names=label_names)
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
+    if metadata["target_type"] == REGRESSION_TARGET:
+        return {}
     if metadata["target_type"] == MULTI_LABEL_TARGET:
         return _multi_label_counts(labels, tuple(metadata["label_names"]))
 
@@ -101,23 +150,48 @@ def class_counts(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[An
     }
 
 
-def labelset_counts(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[str, int]:
+def labelset_counts(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
+) -> Dict[str, int]:
     """Count exact label combinations for a multi-label target."""
 
-    labels, metadata = normalize_targets(y, label_names=label_names)
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
     if metadata["target_type"] != MULTI_LABEL_TARGET:
         return {}
     return _labelset_counts_normalized(labels)
 
 
-def target_summary(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[str, Any]:
+def target_summary(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
+) -> Dict[str, Any]:
     """Return JSON-friendly target summary metadata."""
 
-    labels, metadata = normalize_targets(y, label_names=label_names)
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
     summary = {
         "target_type": metadata["target_type"],
         "n_classes": metadata["n_classes"],
-        "class_counts": class_counts(labels, label_names=metadata.get("label_names")),
+        "class_counts": class_counts(
+            labels,
+            label_names=metadata.get("label_names"),
+            target_type=metadata["target_type"],
+            target_names=metadata.get("target_names"),
+        ),
     }
     if metadata["target_type"] == MULTI_LABEL_TARGET:
         summary.update(
@@ -131,42 +205,93 @@ def target_summary(y: Any, label_names: Optional[Iterable[Any]] = None) -> Dict[
                 "label_density": metadata["label_density"],
             }
         )
+    if metadata["target_type"] == REGRESSION_TARGET:
+        summary.update(
+            {
+                "n_targets": metadata["n_targets"],
+                "target_names": list(metadata["target_names"]),
+                "target_means": metadata["target_means"],
+                "target_variances": metadata["target_variances"],
+                "constant_targets": list(metadata["constant_targets"]),
+                "nonconstant_targets": list(metadata["nonconstant_targets"]),
+            }
+        )
     return summary
 
 
 def metric_labels(
     y: Any,
     label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Return labels in the shape expected by metric libraries."""
 
-    labels, metadata = normalize_targets(y, label_names=label_names)
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
     if metadata["target_type"] == MULTI_LABEL_TARGET:
         return multilabel_indicator(labels, metadata["label_names"]), metadata
+    if metadata["target_type"] == REGRESSION_TARGET:
+        return np.asarray(labels, dtype=float), metadata
     return labels, metadata
 
 
-def labels_to_jsonable(y: Any, label_names: Optional[Iterable[Any]] = None) -> Any:
+def labels_to_jsonable(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
+) -> Any:
     """Serialize labels in the canonical artifact shape."""
 
-    labels, metadata = normalize_targets(y, label_names=label_names)
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
     if metadata["target_type"] == MULTI_LABEL_TARGET:
         return [list(labelset) for labelset in labels]
+    if metadata["target_type"] == REGRESSION_TARGET:
+        return np.asarray(labels, dtype=float).tolist()
     return labels.tolist()
 
 
 def labels_from_jsonable(
     payload: Any,
     label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
 ) -> np.ndarray:
     """Load labels from an artifact JSON payload."""
 
+    if target_type == REGRESSION_TARGET:
+        labels, _ = normalize_targets(
+            payload,
+            target_type=target_type,
+            target_names=target_names,
+        )
+        return labels
     if label_names is not None and isinstance(payload, list):
         rows = np.empty(len(payload), dtype=object)
         rows[:] = payload
-        labels, _ = normalize_targets(rows, label_names=label_names)
+        labels, _ = normalize_targets(
+            rows,
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+        )
         return labels
-    labels, _ = normalize_targets(payload, label_names=label_names)
+    labels, _ = normalize_targets(
+        payload,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
     return labels
 
 
@@ -191,14 +316,23 @@ def stratified_label_indices(
     random_state: int = 42,
     min_samples_per_class: int = 2,
     label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
 ) -> np.ndarray:
     """Select deterministic label-aware sample indices."""
 
     if not 0.0 < rate <= 1.0:
         raise ValueError("subsample rate must be in (0, 1].")
-    labels, metadata = normalize_targets(y, label_names=label_names)
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
     if rate >= 1.0:
         return np.arange(len(labels), dtype=int)
+    if metadata["target_type"] == REGRESSION_TARGET:
+        raise ValueError("stratified_label_indices does not support regression targets.")
     rng = np.random.default_rng(random_state)
     if metadata["target_type"] != MULTI_LABEL_TARGET:
         return _single_label_subsample_indices(
@@ -388,6 +522,7 @@ def _target_metadata(
     target_type_value: str,
     labels: np.ndarray,
     label_names: Optional[Sequence[Any]] = None,
+    target_names: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     if target_type_value == MULTI_LABEL_TARGET:
         if label_names is None:
@@ -404,6 +539,38 @@ def _target_metadata(
             "label_density": (
                 float(np.mean(cardinalities) / len(label_names)) if label_names else 0.0
             ),
+        }
+    if target_type_value == REGRESSION_TARGET:
+        regression = np.asarray(labels, dtype=float)
+        if regression.ndim == 1:
+            regression = regression.reshape(-1, 1)
+        resolved_names = (
+            tuple(target_names)
+            if target_names is not None
+            else tuple(f"target_{index}" for index in range(regression.shape[1]))
+        )
+        variances = np.var(regression, axis=0).astype(float, copy=False)
+        means = np.mean(regression, axis=0).astype(float, copy=False)
+        constant_targets = tuple(
+            resolved_names[index]
+            for index, variance in enumerate(variances.tolist())
+            if float(variance) <= 0.0
+        )
+        nonconstant_targets = tuple(name for name in resolved_names if name not in constant_targets)
+        return {
+            "target_type": REGRESSION_TARGET,
+            "n_classes": 0,
+            "class_counts": {},
+            "n_targets": int(regression.shape[1]),
+            "target_names": resolved_names,
+            "target_means": {
+                name: float(value) for name, value in zip(resolved_names, means.tolist())
+            },
+            "target_variances": {
+                name: float(value) for name, value in zip(resolved_names, variances.tolist())
+            },
+            "constant_targets": constant_targets,
+            "nonconstant_targets": nonconstant_targets,
         }
     counts = _single_label_counts(labels)
     return {
@@ -427,6 +594,61 @@ def _multi_label_counts(labels: np.ndarray, label_names: Sequence[Any]) -> Dict[
         for label in tuple(labelset):
             counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+def _normalize_regression_targets(
+    labels: np.ndarray,
+    target_names: Optional[Sequence[str]],
+) -> Tuple[np.ndarray, Dict[str, Any]]:
+    try:
+        regression = np.asarray(labels, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Regression targets must be numeric.") from exc
+    if regression.ndim == 1:
+        normalized = regression.astype(float, copy=False)
+        n_targets = 1
+    elif regression.ndim == 2:
+        normalized = regression.astype(float, copy=False)
+        n_targets = normalized.shape[1]
+    else:
+        raise ValueError("Regression targets must be one- or two-dimensional.")
+    if not np.all(np.isfinite(normalized)):
+        raise ValueError("Regression targets must be finite.")
+    if target_names is not None and len(target_names) != n_targets:
+        raise ValueError(
+            "target_names must match the regression target columns; "
+            f"got {len(target_names)} names for {n_targets} targets."
+        )
+    return normalized, _target_metadata(
+        REGRESSION_TARGET,
+        normalized,
+        target_names=target_names,
+    )
+
+
+def _normalize_target_names(target_names: Optional[Iterable[Any]]) -> Optional[Tuple[str, ...]]:
+    if target_names is None:
+        return None
+    normalized = tuple(str(name) for name in target_names)
+    if not normalized:
+        raise ValueError("target_names must not be empty.")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("target_names must be unique.")
+    return normalized
+
+
+def _validate_target_mode(
+    target_type: str,
+    label_names: Optional[Sequence[Any]],
+    target_names: Optional[Sequence[str]],
+) -> None:
+    allowed = {"auto", SINGLE_LABEL_TARGET, MULTI_LABEL_TARGET, REGRESSION_TARGET}
+    if target_type not in allowed:
+        raise ValueError(f"target_type must be one of {sorted(allowed)}.")
+    if target_type == REGRESSION_TARGET and label_names is not None:
+        raise ValueError("label_names cannot be provided for regression targets.")
+    if target_type != REGRESSION_TARGET and target_names is not None:
+        raise ValueError("target_names can only be provided for regression targets.")
 
 
 def _labelset_counts_normalized(labels: np.ndarray) -> Dict[str, int]:

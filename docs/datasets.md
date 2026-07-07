@@ -11,7 +11,8 @@ Use the constructor that matches the form of your source data:
 
 - `BenchmarkDataset.from_arrays(...)` for array-like samples and labels.
 - `BenchmarkDataset.from_dataframe(...)` for pandas DataFrames with explicit input
-  and label columns, including multi-label indicator columns.
+  and label columns, including multi-label indicator columns or explicit
+  regression target columns.
 - `BenchmarkDataset.from_embeddings(...)` for dense or sparse precomputed
   embeddings.
 - `BenchmarkDataset.from_image_paths(...)` for image classification datasets stored
@@ -28,6 +29,19 @@ Use the constructor that matches the form of your source data:
   optional masks and time features.
 - `BenchmarkDataset.from_multimodal(...)` for aligned multi-modal sample fields
   such as image-text or audio-text classification datasets.
+
+Regression datasets are opt-in. Pass `target_type="regression"` so numeric class
+identifiers are not reinterpreted as continuous targets by accident:
+
+```python
+dataset = BenchmarkDataset.from_arrays(
+    X=samples,
+    y=targets,
+    modality="tabular",
+    target_type="regression",
+    target_names=["score"],
+)
+```
 
 Examples:
 
@@ -109,6 +123,11 @@ Multi-label targets additionally require every sample to have at least one label
 no duplicate labels within a sample, and binary values for indicator matrices.
 For multi-label summaries, `class_counts` means per-label occurrence counts.
 
+Explicit regression targets must be finite numeric 1D or 2D arrays, must contain
+at least three samples, and must include at least one non-constant target column.
+Regression summaries include `n_targets`, `target_names`, target means, target
+variances, and any constant targets detected during validation.
+
 These checks keep downstream scoring failures readable and early. If class counts
 are too small for the selected protocol, fix the dataset or rebalance it before
 starting a benchmark run.
@@ -158,7 +177,9 @@ V1 requires every declared modality to be present for every sample. Filter or
 impute missing modalities before constructing the dataset.
 
 Dataset summaries include `target_type`. For multi-label targets they also include
-`label_names`, `labelset_counts`, mean label cardinality, and label density.
+`label_names`, `labelset_counts`, mean label cardinality, and label density. For
+regression targets they include `target_names`, `n_targets`, target statistics,
+and constant-target diagnostics.
 
 When using `from_dataframe(...)`, the dataset also records the original column names
 and chosen input columns. When using `from_embeddings(...)`, metadata is tagged with
@@ -197,6 +218,9 @@ group_dataset = dataset.label_view("group")
 Derived label views behave like ordinary benchmark datasets. They preserve the same
 inputs, carry label-view metadata into reports and artifacts, and still use the
 standard dataset validation rules for class counts and minimum samples per class.
+
+Hierarchy-derived label views are classification-only. They are not available for
+explicit regression datasets.
 
 For multi-output extractors, `LabelViewConfig.output_levels` can route different
 embedding outputs to different hierarchy levels during benchmarking:

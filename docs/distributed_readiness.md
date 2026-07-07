@@ -26,11 +26,12 @@ jobs over saved embedding and label artifacts. New extractors should keep determ
 row order, avoid hidden global state, and include all model/preprocessing settings in
 `recipe()`.
 
-Label artifacts support both single-label and multi-label classification targets.
+Label artifacts support single-label, multi-label, and explicit regression targets.
 Multi-label artifacts store one JSON list of labels per sample and preserve
 `target_type`, `label_names`, per-label `class_counts`, labelset counts, mean label
-cardinality, and label density in the manifest. CLI commands still use the same
-`--labels-key` arguments for both target types.
+cardinality, and label density in the manifest. Regression artifacts preserve
+`target_type`, `target_names`, target statistics, and constant-target diagnostics.
+CLI commands still use the same `--labels-key` arguments for every target type.
 
 The concrete local distributed flow is:
 
@@ -183,14 +184,16 @@ streaming-safe extractors, the benchmark probes a small first batch, estimates t
 final embedding artifact and dense scoring input, and reuses that probe as the first
 materialized batch when no subsampling is needed. If the full plan would exceed the
 budget, the local runner records a warning and switches to the largest fitting
-class-stratified subsample when possible. This keeps single-GPU sequential embedding
+class-stratified subsample when possible. Explicit regression datasets use a
+deterministic random subsample instead. This keeps single-GPU sequential embedding
 and CPU-distributed analysis workflows from overcommitting memory.
 
 The metric backend remains fixed: all scoring goes through MiniBatchKMeans-backed
-`overlapindex.OverlapIndex` via the internal `OverlapIndexScorer` adapter.
+`overlapindex.OverlapIndex` or `overlapindex.ContinuousOverlapIndex` via the
+internal `OverlapIndexScorer` adapter.
 
 Artifact-backed workflows can also attach a Separatix diagnostic artifact after
 overlap scoring. Use the CLI `diagnose-complexity` command with an embedding key,
-labels key, and score key. The score artifact provides the overlap macro used to
+labels key, and score key. The score artifact provides the overlap score used to
 gate Separatix execution, and `benchmark-from-artifacts --separatix-key ...` can
 fold that diagnostic back into the final benchmark-style JSON or Markdown report.

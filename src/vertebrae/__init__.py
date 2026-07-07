@@ -13,6 +13,7 @@ from vertebrae.cache import (
 from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
 from vertebrae.config import (
     CacheConfig,
+    ContinuousOverlapScoringConfig,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
     LabelViewConfig,
@@ -82,6 +83,7 @@ __all__ = [
     "BenchmarkResult",
     "CacheConfig",
     "CompressionJob",
+    "ContinuousOverlapScoringConfig",
     "DaskBackend",
     "diagnose_embedding_artifact",
     "EmbeddingOutput",

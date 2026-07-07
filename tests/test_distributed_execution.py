@@ -418,6 +418,49 @@ def test_score_embedding_artifact_supports_multilabel_labels(tmp_path, fake_over
     assert result["dataset_summary"]["labelset_counts"]["red + round"] == 2
 
 
+def test_score_embedding_artifact_supports_regression_labels(tmp_path, fake_overlapindex):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(18, dtype=float).reshape(6, 3),
+        np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0]),
+        target_type="regression",
+        target_names=["score"],
+    )
+    extractor = CallableExtractor(
+        "score_regression_artifact",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            output_key=scoring_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store,
+    )
+    result = benchmark_result_from_artifacts(score_key=score["output_key"], store=store)
+
+    assert label_manifest["target_type"] == "regression"
+    assert label_manifest["target_names"] == ["score"]
+    assert store.get_labels(label_manifest["output_key"]).shape == (6,)
+    assert fake_overlapindex.continuous_calls[-1]["fit_y_shape"] == [6]
+    assert score["score"]["score"] == 0.62
+    assert score["score"]["metadata"]["target_type"] == "regression"
+    assert result["dataset_summary"]["target_type"] == "regression"
+    assert result["extractor_results"][0]["overlap"]["score"] == 0.62
+
+
 def test_label_artifact_preserves_active_label_view_metadata(tmp_path):
     dataset = (
         BenchmarkDataset.from_embeddings(

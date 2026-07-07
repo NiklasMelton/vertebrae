@@ -1,20 +1,30 @@
 """Prototype and subsample stability analysis."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
-from vertebrae.config import OverlapScoringConfig, StabilityConfig
+from vertebrae.config import (
+    ContinuousOverlapScoringConfig,
+    OverlapScoringConfig,
+    StabilityConfig,
+)
 from vertebrae.scoring.overlap import OverlapIndexScorer
-from vertebrae.utils.labels import normalize_targets, stratified_label_indices
+from vertebrae.utils.labels import (
+    REGRESSION_TARGET,
+    normalize_targets,
+    stratified_label_indices,
+)
 
 
 def run_stability_analysis(
     Z: Any,
     y: Any,
-    scoring_config: OverlapScoringConfig,
+    scoring_config: Union[OverlapScoringConfig, ContinuousOverlapScoringConfig],
     stability_config: Optional[StabilityConfig] = None,
     label_names: Optional[Any] = None,
+    target_type: str = "auto",
+    target_names: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Run prototype or subsample stability analysis.
 
@@ -33,7 +43,16 @@ def run_stability_analysis(
         return None
 
     embeddings = np.asarray(Z)
-    labels, label_metadata = normalize_targets(y, label_names=label_names)
+    labels, label_metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
+    if label_metadata["target_type"] == REGRESSION_TARGET and config.stratified:
+        raise ValueError(
+            "StabilityConfig(stratified=True) is not supported for regression targets."
+        )
     rng = np.random.default_rng(config.random_state)
     seeds = rng.integers(0, np.iinfo(np.int32).max, size=config.repeats).tolist()
     scorer = OverlapIndexScorer(scoring_config)
@@ -55,8 +74,10 @@ def run_stability_analysis(
             repeat_y,
             seed=int(seed),
             label_names=label_metadata.get("label_names"),
+            target_type=label_metadata["target_type"],
+            target_names=label_metadata.get("target_names"),
         )
-        scores.append(result.macro_score)
+        scores.append(result.score)
         warnings.extend(result.warnings)
         for label, value in result.per_class_scores.items():
             if isinstance(value, (int, float, np.number)):
@@ -108,6 +129,8 @@ def _subsample_indices(
             random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
             min_samples_per_class=2,
             label_names=label_metadata.get("label_names"),
+            target_type=label_metadata["target_type"],
+            target_names=label_metadata.get("target_names"),
         )
 
     n_take = max(2, int(round(n_samples * config.subsample_fraction)))

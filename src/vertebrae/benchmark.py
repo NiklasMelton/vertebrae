@@ -13,6 +13,7 @@ from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
 from vertebrae.config import (
     CacheConfig,
+    ContinuousOverlapScoringConfig,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
     LabelViewConfig,
@@ -35,7 +36,7 @@ from vertebrae.scoring.overlap import OverlapIndexScorer
 from vertebrae.scoring.probes import run_probes
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
-from vertebrae.utils.labels import label_view_suffix
+from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix
 from vertebrae.utils.memory import (
     EmbeddingMemoryEstimate,
     assert_within_memory,
@@ -66,7 +67,9 @@ class Benchmark:
         self,
         dataset: Any,
         extractors: Optional[Iterable[Any]] = None,
-        scoring_config: Optional[OverlapScoringConfig] = None,
+        scoring_config: Optional[
+            Union[OverlapScoringConfig, ContinuousOverlapScoringConfig]
+        ] = None,
         stability_config: Optional[StabilityConfig] = None,
         probe_config: Optional[ProbeConfig] = None,
         label_view_config: Optional[LabelViewConfig] = None,
@@ -81,7 +84,7 @@ class Benchmark:
     ) -> None:
         self.dataset = dataset
         self.extractors = list(extractors or [])
-        self.scoring_config = scoring_config or OverlapScoringConfig()
+        self.scoring_config = scoring_config or _default_scoring_config_for_dataset(dataset)
         self.stability_config = stability_config or StabilityConfig()
         self.probe_config = probe_config or ProbeConfig()
         self.label_view_config = label_view_config or LabelViewConfig()
@@ -124,6 +127,13 @@ class Benchmark:
         """
 
         self.dataset.validate()
+        if (
+            self.dataset.metadata.get("target_type") == REGRESSION_TARGET
+            and getattr(self.dataset, "modality", None) == "segmentation"
+        ):
+            raise ValueError(
+                "Segmentation evaluation does not currently support regression targets."
+            )
         if not self.extractors:
             raise ValueError("At least one extractor must be provided.")
         if getattr(self.dataset, "modality", None) == "segmentation":
@@ -178,7 +188,7 @@ class Benchmark:
                 batch_size=self.embedding_config.batch_size,
             )
             for materialization in materializations:
-                scoring_config = self.scoring_config
+                scoring_config = _classification_scoring_config(self.scoring_config)
                 if self.segmentation_config.background_mode == "include_excluded":
                     exclusions = _normalized_excluded_classes(scoring_config.exclude_classes)
                     for background_label in materialization.metadata.get("background_labels", []):
@@ -408,6 +418,8 @@ class Benchmark:
                 compressed_embeddings,
                 dataset.y,
                 label_names=dataset.metadata.get("label_names"),
+                target_type=dataset.metadata.get("target_type", "auto"),
+                target_names=dataset.metadata.get("target_names"),
             )
             variant_runtime["scoring_seconds"] = perf_counter() - score_start
             variant_warnings.extend(overlap.warnings)
@@ -416,8 +428,10 @@ class Benchmark:
             separatix = self._run_separatix_diagnostic(
                 compressed_embeddings,
                 dataset.y,
-                overlap.macro_score,
+                overlap.score,
+                target_type=dataset.metadata.get("target_type", "auto"),
                 label_names=dataset.metadata.get("label_names"),
+                target_names=dataset.metadata.get("target_names"),
                 groups=dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
             )
             variant_runtime["separatix_seconds"] = perf_counter() - separatix_start
@@ -431,6 +445,8 @@ class Benchmark:
                 self.scoring_config,
                 self.stability_config,
                 label_names=dataset.metadata.get("label_names"),
+                target_type=dataset.metadata.get("target_type", "auto"),
+                target_names=dataset.metadata.get("target_names"),
             )
             variant_runtime["stability_seconds"] = perf_counter() - stability_start
             if stability:
@@ -441,12 +457,15 @@ class Benchmark:
                 compressed_embeddings,
                 dataset.y,
                 dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
+                target_type=dataset.metadata.get("target_type", "auto"),
             )
             probes = run_probes(
                 diagnostic_embeddings,
                 diagnostic_labels,
                 self.probe_config,
                 groups=diagnostic_groups,
+                target_type=dataset.metadata.get("target_type", "auto"),
+                target_names=dataset.metadata.get("target_names"),
             )
             variant_runtime["probe_seconds"] = perf_counter() - probe_start
             if probes:
@@ -458,9 +477,10 @@ class Benchmark:
             )
             recommendation = (
                 recommendation_for_extractor(
-                    overlap.macro_score,
+                    overlap.score,
                     stability,
                     weakest_score,
+                    target_type=overlap.metadata.get("target_type", "single_label"),
                 )
                 if overlap.metadata.get("aggregate_valid", True)
                 else "aggregate_unavailable"
@@ -496,8 +516,10 @@ class Benchmark:
         self,
         embeddings: Any,
         labels: Any,
-        macro_score: float,
+        overlap_score: float,
+        target_type: str,
         label_names: Optional[Any] = None,
+        target_names: Optional[Any] = None,
         groups: Optional[Any] = None,
     ) -> Optional[SeparatixResult]:
         if not self.separatix_config.enabled:
@@ -506,30 +528,40 @@ class Benchmark:
             config=self.separatix_config,
             overlap_config=self.scoring_config,
         )
-        if macro_score < self.separatix_config.overlap_threshold:
+        threshold = (
+            self.separatix_config.regression_overlap_threshold
+            if target_type == REGRESSION_TARGET
+            else self.separatix_config.overlap_threshold
+        )
+        if overlap_score < threshold:
             return scorer.skipped_result(
                 reason=(
-                    "Skipped Separatix because overlap macro "
-                    f"{macro_score:.4f} is below the configured threshold "
-                    f"{self.separatix_config.overlap_threshold:.4f}."
+                    "Skipped Separatix because overlap score "
+                    f"{overlap_score:.4f} is below the configured threshold "
+                    f"{threshold:.4f}."
                 ),
-                macro_score=macro_score,
+                overlap_score=overlap_score,
+                threshold=threshold,
             )
         diagnostic_embeddings, diagnostic_labels, diagnostic_groups = self._diagnostic_inputs(
             embeddings,
             labels,
             groups,
+            target_type=target_type,
         )
         if len(diagnostic_labels) == 0:
             return scorer.skipped_result(
                 reason="Skipped Separatix because all classes were excluded from diagnostics.",
-                macro_score=macro_score,
+                overlap_score=overlap_score,
+                threshold=threshold,
             )
         try:
             return scorer.score(
                 diagnostic_embeddings,
                 diagnostic_labels,
                 label_names=label_names,
+                target_type=target_type,
+                target_names=target_names,
                 groups=diagnostic_groups,
             )
         except ValueError as exc:
@@ -537,7 +569,8 @@ class Benchmark:
                 raise
             return scorer.skipped_result(
                 reason=f"Skipped grouped Separatix diagnostic: {exc}",
-                macro_score=macro_score,
+                overlap_score=overlap_score,
+                threshold=threshold,
             )
 
     def _diagnostic_inputs(
@@ -545,8 +578,11 @@ class Benchmark:
         embeddings: Any,
         labels: Any,
         groups: Optional[Any],
+        target_type: str,
     ) -> Tuple[Any, Any, Optional[Any]]:
-        excluded = _normalized_excluded_classes(self.scoring_config.exclude_classes)
+        if target_type == REGRESSION_TARGET:
+            return embeddings, labels, groups
+        excluded = _normalized_excluded_classes(_scoring_excluded_classes(self.scoring_config))
         if not excluded:
             return embeddings, labels, groups
         label_array = np.asarray(labels)
@@ -599,6 +635,11 @@ class Benchmark:
         return dataset, warnings, metadata, probe_plan
 
     def _evaluation_datasets(self) -> Tuple[List[Any], List[str]]:
+        if (
+            self.dataset.metadata.get("target_type") == REGRESSION_TARGET
+            and self._requires_label_hierarchy()
+        ):
+            raise ValueError("LabelViewConfig is not supported for regression targets.")
         if not self.label_view_config.enabled and not self.label_view_config.output_levels:
             return [self.dataset], []
         if (
@@ -692,17 +733,31 @@ class Benchmark:
             "sample_indices": subset.metadata.get("sample_indices", indices.tolist()),
             "n_samples_after_subsampling": int(len(indices)),
         }
+        regression = dataset.metadata.get("target_type") == REGRESSION_TARGET
         if reason == "memory_limit":
-            warning = (
-                "Embedding memory estimate exceeded the configured budget; using a "
-                f"class-stratified subsample with effective rate {effective_rate:.3f} "
-                f"({len(indices)}/{parent_n_samples} samples)."
-            )
+            if regression:
+                warning = (
+                    "Embedding memory estimate exceeded the configured budget; using a "
+                    f"random regression subsample with effective rate {effective_rate:.3f} "
+                    f"({len(indices)}/{parent_n_samples} samples)."
+                )
+            else:
+                warning = (
+                    "Embedding memory estimate exceeded the configured budget; using a "
+                    f"class-stratified subsample with effective rate {effective_rate:.3f} "
+                    f"({len(indices)}/{parent_n_samples} samples)."
+                )
         else:
-            warning = (
-                "Using user-requested class-stratified subsample with effective rate "
-                f"{effective_rate:.3f} ({len(indices)}/{parent_n_samples} samples)."
-            )
+            if regression:
+                warning = (
+                    "Using user-requested random regression subsample with effective rate "
+                    f"{effective_rate:.3f} ({len(indices)}/{parent_n_samples} samples)."
+                )
+            else:
+                warning = (
+                    "Using user-requested class-stratified subsample with effective rate "
+                    f"{effective_rate:.3f} ({len(indices)}/{parent_n_samples} samples)."
+                )
         return subset, metadata, warning
 
     def _auto_subsample_rate_for_streaming_estimate(
@@ -1374,6 +1429,37 @@ class Benchmark:
         qualified.update(output.recipe)
         qualified["output_name"] = output.name
         return qualified
+
+
+def _default_scoring_config_for_dataset(
+    dataset: Any,
+) -> Union[OverlapScoringConfig, ContinuousOverlapScoringConfig]:
+    target_type = getattr(dataset, "metadata", {}).get("target_type")
+    if target_type == REGRESSION_TARGET:
+        return ContinuousOverlapScoringConfig()
+    return OverlapScoringConfig()
+
+
+def _classification_scoring_config(
+    config: Union[OverlapScoringConfig, ContinuousOverlapScoringConfig],
+) -> OverlapScoringConfig:
+    if isinstance(config, OverlapScoringConfig):
+        return config
+    return OverlapScoringConfig(
+        k=config.k,
+        kmeans_kwargs=config.kmeans_kwargs,
+        offline_chunk_size=config.offline_chunk_size,
+        normalize_embeddings=config.normalize_embeddings,
+        max_dense_bytes=config.max_dense_bytes,
+    )
+
+
+def _scoring_excluded_classes(
+    config: Union[OverlapScoringConfig, ContinuousOverlapScoringConfig],
+) -> Any:
+    if isinstance(config, OverlapScoringConfig):
+        return config.exclude_classes
+    return None
 
 
 def _weakest_class(

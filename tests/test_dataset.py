@@ -180,6 +180,85 @@ def test_multilabel_validation_rejects_invalid_targets():
         )
 
 
+def test_from_arrays_supports_explicit_regression_targets():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(12, dtype=float).reshape(6, 2),
+        np.array([0.0, 0.2, 0.4, 0.6, 0.8, 1.0]),
+        modality="tabular",
+        target_type="regression",
+        target_names=["score"],
+    )
+
+    summary = dataset.summary()
+    assert dataset.metadata["target_type"] == "regression"
+    assert dataset.metadata["target_names"] == ["score"]
+    assert summary["target_type"] == "regression"
+    assert summary["n_targets"] == 1
+    assert summary["target_names"] == ["score"]
+    assert summary["constant_targets"] == []
+
+
+def test_from_dataframe_supports_multitarget_regression_columns():
+    df = pd.DataFrame(
+        {
+            "x": [0, 1, 2, 3, 4, 5],
+            "y1": [0.0, 0.1, 0.2, 0.8, 0.9, 1.0],
+            "y2": [1.0, 1.1, 1.2, 1.8, 1.9, 2.0],
+        }
+    )
+
+    dataset = BenchmarkDataset.from_dataframe(
+        df,
+        input_col="x",
+        label_col=["y1", "y2"],
+        modality="tabular",
+        target_type="regression",
+    )
+
+    assert dataset.metadata["target_type"] == "regression"
+    assert dataset.metadata["target_names"] == ["y1", "y2"]
+    assert dataset.y.shape == (6, 2)
+
+
+def test_regression_validation_rejects_constant_and_too_small_targets():
+    X = np.arange(6, dtype=float).reshape(3, 2)
+
+    with pytest.raises(ValueError, match="at least 3 samples"):
+        BenchmarkDataset.from_arrays(
+            np.arange(4, dtype=float).reshape(2, 2),
+            np.array([0.0, 1.0]),
+            modality="tabular",
+            target_type="regression",
+        )
+    with pytest.raises(ValueError, match="non-constant target"):
+        BenchmarkDataset.from_arrays(
+            X,
+            np.array([1.0, 1.0, 1.0]),
+            modality="tabular",
+            target_type="regression",
+        )
+
+
+def test_regression_subsetting_and_roundtrip_summary_preserve_target_metadata():
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(18, dtype=float).reshape(6, 3),
+        np.column_stack(
+            [
+                np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0]),
+                np.array([1.0, 1.2, 1.1, 2.0, 2.2, 2.1]),
+            ]
+        ),
+        modality="embeddings",
+        target_type="regression",
+        target_names=["a", "b"],
+    )
+
+    subset = dataset.subset([0, 2, 4])
+    assert subset.metadata["target_type"] == "regression"
+    assert subset.metadata["target_names"] == ["a", "b"]
+    assert subset.summary()["n_targets"] == 2
+
+
 def test_from_image_paths_sets_image_modality():
     dataset = BenchmarkDataset.from_image_paths(
         ["a.png", "b.png", "c.png", "d.png"],

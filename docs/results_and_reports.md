@@ -29,7 +29,9 @@ Each extractor contributes an `ExtractorResult` with:
 
 For multi-label datasets, `target_type` is `multi_label`, `class_counts` means
 per-label occurrence counts, and result metadata preserves `label_names` plus
-labelset summary fields.
+labelset summary fields. For explicit regression datasets, `target_type` is
+`regression`, the primary ranking field is `overlap.score`, and summaries preserve
+`target_names`, target statistics, and constant-target diagnostics.
 
 Multi-output extractors contribute one `ExtractorResult` per named output. Result
 names use the form `parent_name:output_name`, and embedding metadata preserves
@@ -49,7 +51,7 @@ the original `output_name`, and result metadata keeps the active `label_view`.
 
 ## Ranking and tabular views
 
-`BenchmarkResult.ranked_results()` sorts extractors by descending macro overlap
+`BenchmarkResult.ranked_results()` sorts extractors by descending primary overlap
 score. `BenchmarkResult.to_dataframe()` produces a compact comparison table with the
 most important fields for side-by-side inspection.
 
@@ -58,7 +60,7 @@ result = benchmark.run()
 
 print(result.to_dataframe())
 best = result.ranked_results()[0]
-print(best.name, best.overlap.macro_score)
+print(best.name, best.overlap.score)
 ```
 
 ## JSON and Markdown output
@@ -81,7 +83,7 @@ At a high level, reports include:
 - label-view metadata when hierarchy-derived views are benchmarked,
 - overlap configuration,
 - global macro and weighted overlap scores plus reporting-only class exclusions,
-- target type and multi-label summary fields when applicable,
+- target type and multi-label or regression summary fields when applicable,
 - ranked comparison table for multi-extractor runs,
 - global and per-class scores,
 - per-output branch or fused source metadata when available,
@@ -98,7 +100,10 @@ tokens, ignored-token reasons, background counts, and spatial layout metadata.
 Separatix is the default classifier-complexity diagnostic when the overlap gate
 passes, including multi-label datasets. Native vertebrae probes remain available
 as an explicit quick-check option through `ProbeConfig(enabled=True)`; they skip
-multi-label targets with a warning because they are currently single-label only.
+multi-label and regression targets with a warning because they are currently
+classification-only. When Separatix MLP probes are enabled, JSON outputs preserve
+the full trigger and comparison payload and Markdown reports summarize the MLP
+status.
 
 ## What recommendations mean
 

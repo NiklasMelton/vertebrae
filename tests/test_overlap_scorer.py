@@ -1,6 +1,6 @@
 import numpy as np
 
-from vertebrae.config import OverlapScoringConfig
+from vertebrae.config import ContinuousOverlapScoringConfig, OverlapScoringConfig
 from vertebrae.scoring.overlap import OverlapIndexScorer
 
 
@@ -75,3 +75,37 @@ def test_overlap_scorer_passes_reporting_exclusions(fake_overlapindex):
     assert result.metadata["exclude_classes"] == ["background"]
     assert result.metadata["aggregation_classes"] == ["cat", "dog"]
     assert result.metadata["aggregate_valid"] is True
+
+
+def test_overlap_scorer_supports_explicit_regression_targets(fake_overlapindex):
+    Z = np.array(
+        [
+            [1.0, 0.0],
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.2, 0.8],
+            [0.1, 0.9],
+            [0.0, 1.0],
+        ]
+    )
+    y = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
+
+    result = OverlapIndexScorer(ContinuousOverlapScoringConfig(k=3, n_null_permutations=5)).score(
+        Z,
+        y,
+        seed=11,
+        target_type="regression",
+        target_names=["score"],
+    )
+
+    assert result.metadata["target_type"] == "regression"
+    assert result.metadata["target_names"] == ("score",)
+    assert result.score == 0.631
+    assert result.macro_score == 0.611
+    assert result.weighted_score == 0.631
+    assert result.actual_loss == 0.12
+    assert result.null_loss == 0.24
+    assert result.loss_ratio == 0.50
+    assert fake_overlapindex.continuous_calls[-1]["model_type"] == "MiniBatchKMeans"
+    assert fake_overlapindex.continuous_calls[-1]["kmeans_k"] == 3
+    assert fake_overlapindex.continuous_calls[-1]["random_state"] == 11

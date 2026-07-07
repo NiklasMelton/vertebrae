@@ -30,13 +30,18 @@ def render_markdown_report(result: Any) -> str:
     data = result.to_dict()
     lines: List[str] = ["# vertebrae benchmark report", ""]
     dataset = data["dataset_summary"]
+    target_type = dataset.get("target_type", "single_label")
     lines.extend(
         [
             "## Dataset summary",
             "",
             f"- Samples: {dataset.get('n_samples', dataset.get('n_images', ''))}",
-            f"- Classes: {dataset.get('n_classes', dataset.get('n_classes_raw', ''))}",
-            f"- Target type: {dataset.get('target_type', 'single_label')}",
+            (
+                f"- Targets: {dataset.get('n_targets', '')}"
+                if target_type == "regression"
+                else f"- Classes: {dataset.get('n_classes', dataset.get('n_classes_raw', ''))}"
+            ),
+            f"- Target type: {target_type}",
             f"- Modality: {dataset['modality']}",
         ]
     )
@@ -46,11 +51,16 @@ def render_markdown_report(result: Any) -> str:
             "- Interpretation: dense semantic representation separation; "
             "this is not IoU, mask accuracy, or boundary accuracy."
         )
-    if dataset.get("target_type") == "multi_label":
+    if target_type == "multi_label":
         lines.append(
             "- " f"Mean label cardinality: {_format_float(dataset.get('mean_label_cardinality'))}"
         )
         lines.append(f"- Label density: {_format_float(dataset.get('label_density'))}")
+    if target_type == "regression":
+        lines.append(f"- Target names: {dataset.get('target_names', [])}")
+        constant_targets = dataset.get("constant_targets", [])
+        if constant_targets:
+            lines.append(f"- Constant targets: {constant_targets}")
     dataset_metadata = dataset.get("metadata", {})
     if dataset_metadata.get("modalities"):
         lines.append(f"- Modalities: {dataset_metadata['modalities']}")
@@ -77,14 +87,14 @@ def render_markdown_report(result: Any) -> str:
         )
     lines.extend(["", "## Ranking", ""])
     lines.append(
-        "| rank | extractor | extractor_type | label_view | overlap_macro | "
+        "| rank | extractor | extractor_type | label_view | overlap_score | overlap_macro | "
         "overlap_weighted | stability_interval | "
         "weakest_class | probe_accuracy | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | --- | ---: | ---: | --- | --- | ---: | ---: | "
+        "| --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | "
         "--- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(result.ranked_results(), start=1):
@@ -102,7 +112,7 @@ def render_markdown_report(result: Any) -> str:
             separatix_confidence = item.separatix.confidence or ""
         lines.append(
             f"| {rank} | {item.name} | {item.extractor_type} | "
-            f"{label_view} | {item.overlap.macro_score:.4f} | "
+            f"{label_view} | {item.overlap.score:.4f} | {item.overlap.macro_score:.4f} | "
             f"{_format_float(item.overlap.weighted_score)} | {interval} | {weakest} | "
             f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
             f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
@@ -128,6 +138,7 @@ def render_markdown_report(result: Any) -> str:
                 f"- Compression method: {item.compression_metadata.get('method', 'none')}",
                 f"- Compression precision: {item.compression_metadata.get('precision', '')}",
                 f"- Compressed dimension: {item.compression_metadata.get('compressed_dim', '')}",
+                f"- Primary overlap score: {item.overlap.score:.4f}",
                 f"- Overlap macro: {item.overlap.macro_score:.4f}",
                 f"- Overlap weighted: {_format_float(item.overlap.weighted_score)}",
                 f"- Excluded aggregate classes: {item.overlap.metadata.get('exclude_classes', [])}",
@@ -184,7 +195,10 @@ def render_markdown_report(result: Any) -> str:
                 "",
             ]
         )
-        if item.overlap.per_class_scores:
+        if item.overlap.metadata.get("target_type") == "regression":
+            lines.append("Per-class scores are not defined for regression overlap scoring.")
+            lines.append("")
+        elif item.overlap.per_class_scores:
             lines.append("| class | score |")
             lines.append("| --- | ---: |")
             for label, score in item.overlap.per_class_scores.items():
@@ -233,6 +247,15 @@ def render_markdown_report(result: Any) -> str:
             lines.append(f"- Recommendation: {item.separatix.recommendation or ''}")
             lines.append(f"- Confidence: {item.separatix.confidence or ''}")
             lines.append(f"- Summary: {(item.separatix.recommendation_text or '').strip()}")
+            mlp = ((item.separatix.report or {}).get("metrics", {}) or {}).get("mlp_probes", {})
+            if mlp:
+                lines.append(f"- MLP status: {mlp.get('status', '')}")
+                backend = mlp.get("backend", {})
+                if backend:
+                    lines.append(
+                        "- MLP backend: "
+                        f"{backend.get('resolved_device') or backend.get('requested_device')}"
+                    )
             if item.separatix.decision_path:
                 lines.append("- Decision path:")
                 for step in item.separatix.decision_path:
