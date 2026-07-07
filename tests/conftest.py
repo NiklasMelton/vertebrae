@@ -31,6 +31,43 @@ class FakeOverlapIndex:
         return self.index
 
 
+class FakeContinuousOverlapIndex:
+    calls = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.__class__.calls.append(kwargs)
+
+    def fit_offline(self, Z, y, reset_state=True):
+        assert reset_state is True
+        y_arr = np.asarray(y, dtype=float)
+        self.__class__.calls[-1]["fit_y_shape"] = list(y_arr.shape)
+        self.__class__.calls[-1]["fit_y"] = y_arr.copy()
+        self.__class__.calls[-1]["fit_X_shape"] = list(np.asarray(Z).shape)
+        seed = self.kwargs.get("random_state")
+        jitter = 0.0 if seed is None else (int(seed) % 13) / 1_000.0
+        self.index = 0.62 + jitter
+        self.macro_index_ = 0.60 + jitter
+        self.raw_index_ = 0.58 + jitter
+        self.actual_loss_ = 0.12
+        self.null_loss_ = 0.24
+        self.loss_ratio_ = 0.50
+        self.prototype_index_ = {0: 0.66 + jitter, 1: 0.59 + jitter}
+        self.prototype_support_ = {0: 4, 1: 4}
+        self.prototype_target_mean_ = {0: [0.2], 1: [0.8]}
+        self.prototype_target_radius_ = {0: 0.1, 1: 0.1}
+        self.prototype_target_values_ = {
+            0: y_arr[: len(y_arr) // 2].tolist(),
+            1: y_arr[len(y_arr) // 2 :].tolist(),
+        }
+        self.prototype_adjacency_normalized_ = {0: {1: 0.4}, 1: {0: 0.4}}
+        return self.index
+
+    @property
+    def weighted_index(self):
+        return self.index
+
+
 class FakeSeparatixReport:
     def __init__(self, payload):
         self.payload = payload
@@ -47,7 +84,7 @@ class FakeComplexityProfiler:
         self.report_ = None
         self.__class__.calls.append({"kind": "profiler_init", **kwargs})
 
-    def fit(self, X, y):
+    def fit(self, X, y, **kwargs):
         report = _build_fake_separatix_payload(X, y, self.kwargs)
         self.report_ = FakeSeparatixReport(report)
         self.__class__.calls.append(
@@ -57,6 +94,7 @@ class FakeComplexityProfiler:
                 "is_sparse": hasattr(X, "tocsr"),
                 "n_labels": len(y),
                 "y_shape": list(np.asarray(y).shape),
+                **kwargs,
             }
         )
         return self
@@ -65,8 +103,57 @@ class FakeComplexityProfiler:
         return self.report_
 
 
+def _build_fake_mlp_payload(X, kwargs):
+    requested = bool(kwargs.get("mlp_probes", False))
+    if not requested:
+        return {
+            "status": "not_requested",
+            "reason": "MLP probes were disabled.",
+            "trigger": {
+                "status": "not_requested",
+                "threshold": kwargs.get("mlp_trigger_skill_threshold", 0.75),
+            },
+            "backend": {
+                "requested_device": kwargs.get("mlp_device", "cpu"),
+                "resolved_device": None,
+            },
+            "architectures": [],
+            "aligned_comparators": {},
+            "best_architecture": None,
+            "pairwise_comparisons": {},
+            "required_comparators_complete": False,
+            "recommendation_override": False,
+            "override_reason": None,
+            "sample_info": None,
+        }
+    return {
+        "status": "executed",
+        "reason": "MLP probes executed in the fake test harness.",
+        "trigger": {
+            "status": "triggered",
+            "reason": "No simpler fake probe met the configured threshold.",
+            "threshold": kwargs.get("mlp_trigger_skill_threshold", 0.75),
+        },
+        "backend": {
+            "requested_device": kwargs.get("mlp_device", "cpu"),
+            "resolved_device": "cpu",
+        },
+        "architectures": ["mlp_one_layer_compact", "mlp_two_layer_compact"],
+        "aligned_comparators": {"linear": True, "smooth_poly": True},
+        "best_architecture": "mlp_two_layer_compact",
+        "pairwise_comparisons": {
+            "mlp_two_layer_compact_vs_linear": {"mean_delta": 0.05, "better": True}
+        },
+        "required_comparators_complete": True,
+        "recommendation_override": True,
+        "override_reason": "Fake MLP improved beyond the configured minimum.",
+        "sample_info": {"n_samples": int(X.shape[0])},
+    }
+
+
 def _build_fake_separatix_payload(X, y, kwargs):
     label_summary = _fake_class_summary(y)
+    mlp_payload = _build_fake_mlp_payload(X, kwargs)
     return {
         "recommendation": "smooth_nonlinear_recommended",
         "recommendation_text": "Recommendation: smooth nonlinear boundary.",
@@ -109,6 +196,11 @@ def _build_fake_separatix_payload(X, y, kwargs):
             "boundary": {},
             "graph": {},
             "topology": {"mode": "auto", "skipped_reason": "not requested"},
+            "mlp_trigger_evidence": mlp_payload.get("trigger", {}),
+            "mlp_probes": mlp_payload,
+            "mlp_recommendation_evidence": {
+                key: value for key, value in mlp_payload.items() if key != "trigger"
+            },
         },
         "scores": {
             "signal_score": 0.9,
@@ -142,6 +234,11 @@ def _build_fake_separatix_payload(X, y, kwargs):
             "random_state": kwargs.get("random_state"),
             "warn_on_densify": kwargs.get("warn_on_densify", True),
             "n_jobs": kwargs.get("n_jobs"),
+            "mlp_probes": kwargs.get("mlp_probes", False),
+            "mlp_device": kwargs.get("mlp_device", "cpu"),
+            "mlp_trigger_skill_threshold": kwargs.get("mlp_trigger_skill_threshold", 0.75),
+            "mlp_min_improvement": kwargs.get("mlp_min_improvement", 0.02),
+            "mlp_max_parameters": kwargs.get("mlp_max_parameters"),
         },
     }
 
@@ -173,9 +270,18 @@ def _fake_class_summary(y):
 @pytest.fixture
 def fake_overlapindex(monkeypatch):
     FakeOverlapIndex.calls = []
-    module = types.SimpleNamespace(OverlapIndex=FakeOverlapIndex)
+    FakeContinuousOverlapIndex.calls = []
+    module = types.SimpleNamespace(
+        OverlapIndex=FakeOverlapIndex,
+        ContinuousOverlapIndex=FakeContinuousOverlapIndex,
+    )
     monkeypatch.setitem(sys.modules, "overlapindex", module)
-    return FakeOverlapIndex
+    return types.SimpleNamespace(
+        OverlapIndex=FakeOverlapIndex,
+        ContinuousOverlapIndex=FakeContinuousOverlapIndex,
+        calls=FakeOverlapIndex.calls,
+        continuous_calls=FakeContinuousOverlapIndex.calls,
+    )
 
 
 @pytest.fixture

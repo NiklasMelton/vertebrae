@@ -49,31 +49,101 @@ class OverlapScoringConfig:
 
 
 @dataclass
+class ContinuousOverlapScoringConfig:
+    """Configuration for MiniBatchKMeans-backed ContinuousOverlapIndex scoring."""
+
+    k: int = 8
+    kmeans_kwargs: Optional[Dict[str, Any]] = None
+    offline_chunk_size: Optional[int] = 10_000
+    normalize_embeddings: bool = True
+    max_dense_bytes: int = 2_000_000_000
+    target_cover: str = "auto"
+    n_target_cells: Union[int, str] = "auto"
+    target_cover_kwargs: Optional[Dict[str, Any]] = None
+    target_distance: str = "auto"
+    target_scaling: str = "standard"
+    n_projections: int = 64
+    n_null_permutations: int = 20
+    aggregation: str = "support_weighted"
+    clip: bool = True
+
+    def __post_init__(self) -> None:
+        if self.k < 1:
+            raise ValueError("ContinuousOverlapScoringConfig.k must be >= 1.")
+        if self.offline_chunk_size is not None and self.offline_chunk_size < 1:
+            raise ValueError("offline_chunk_size must be >= 1 when provided.")
+        if self.max_dense_bytes < 1:
+            raise ValueError("max_dense_bytes must be >= 1.")
+        allowed_target_cover = {"auto", "quantile", "kmeans"}
+        if self.target_cover not in allowed_target_cover:
+            raise ValueError(
+                f"target_cover must be one of {sorted(allowed_target_cover)}."
+            )
+        if isinstance(self.n_target_cells, str) and self.n_target_cells != "auto":
+            raise ValueError("n_target_cells must be an int or 'auto'.")
+        if isinstance(self.n_target_cells, int) and self.n_target_cells < 1:
+            raise ValueError("n_target_cells must be >= 1.")
+        allowed_target_distance = {"auto", "wasserstein", "sliced_wasserstein"}
+        if self.target_distance not in allowed_target_distance:
+            raise ValueError(
+                f"target_distance must be one of {sorted(allowed_target_distance)}."
+            )
+        allowed_target_scaling = {"standard", "none", "minmax", "robust"}
+        if self.target_scaling not in allowed_target_scaling:
+            raise ValueError(
+                f"target_scaling must be one of {sorted(allowed_target_scaling)}."
+            )
+        if self.n_projections < 1:
+            raise ValueError("n_projections must be >= 1.")
+        if self.n_null_permutations < 1:
+            raise ValueError("n_null_permutations must be >= 1.")
+        allowed_aggregation = {"support_weighted", "macro"}
+        if self.aggregation not in allowed_aggregation:
+            raise ValueError(f"aggregation must be one of {sorted(allowed_aggregation)}.")
+
+
+@dataclass
 class SeparatixConfig:
     """Configuration for optional Separatix complexity diagnostics.
 
     Attributes:
         enabled: Whether Separatix diagnostics should run.
-        overlap_threshold: Minimum overlap macro score required to run.
+        overlap_threshold: Minimum classification overlap score required to run.
+        regression_overlap_threshold: Minimum regression overlap score required to run.
         random_state: Seed forwarded to Separatix.
         budget: Optional Separatix diagnostic budget.
         max_samples: Optional Separatix sample cap.
         max_dense_bytes: Optional sparse densification memory limit in bytes.
         n_jobs: Optional parallelism hint forwarded to Separatix.
+        mlp_probes: Whether conditional Separatix MLP probes should be enabled.
+        mlp_device: Requested Separatix MLP execution device.
+        mlp_trigger_skill_threshold: Skill threshold that suppresses MLP execution.
+        mlp_min_improvement: Minimum improvement required for an MLP override.
+        mlp_max_parameters: Optional hard cap for MLP parameter count.
     """
 
     enabled: bool = True
     overlap_threshold: float = 0.80
+    regression_overlap_threshold: float = 0.80
     random_state: Optional[int] = 42
     budget: Optional[str] = None
     max_samples: Optional[int] = None
     max_dense_bytes: Optional[int] = None
     n_jobs: Optional[int] = None
+    mlp_probes: bool = False
+    mlp_device: str = "cpu"
+    mlp_trigger_skill_threshold: float = 0.75
+    mlp_min_improvement: float = 0.02
+    mlp_max_parameters: Optional[int] = None
 
     def __post_init__(self) -> None:
         allowed_budgets = {"fast", "standard", "extended"}
         if not 0.0 <= self.overlap_threshold <= 1.0:
             raise ValueError("SeparatixConfig.overlap_threshold must be between 0 and 1.")
+        if not 0.0 <= self.regression_overlap_threshold <= 1.0:
+            raise ValueError(
+                "SeparatixConfig.regression_overlap_threshold must be between 0 and 1."
+            )
         if self.budget is not None and self.budget not in allowed_budgets:
             raise ValueError(f"SeparatixConfig.budget must be one of {sorted(allowed_budgets)}.")
         if self.max_samples is not None and self.max_samples < 1:
@@ -82,6 +152,19 @@ class SeparatixConfig:
             raise ValueError("SeparatixConfig.max_dense_bytes must be >= 1 when provided.")
         if self.n_jobs is not None and self.n_jobs < 1:
             raise ValueError("SeparatixConfig.n_jobs must be >= 1 when provided.")
+        allowed_devices = {"cpu", "auto", "cuda", "mps"}
+        if self.mlp_device not in allowed_devices:
+            raise ValueError(
+                f"SeparatixConfig.mlp_device must be one of {sorted(allowed_devices)}."
+            )
+        if not 0.0 <= self.mlp_trigger_skill_threshold <= 1.0:
+            raise ValueError(
+                "SeparatixConfig.mlp_trigger_skill_threshold must be between 0 and 1."
+            )
+        if self.mlp_min_improvement < 0.0:
+            raise ValueError("SeparatixConfig.mlp_min_improvement must be >= 0.")
+        if self.mlp_max_parameters is not None and self.mlp_max_parameters < 1:
+            raise ValueError("SeparatixConfig.mlp_max_parameters must be >= 1 when provided.")
 
 
 @dataclass

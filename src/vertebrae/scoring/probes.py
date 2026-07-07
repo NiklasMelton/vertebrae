@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from vertebrae.config import ProbeConfig
-from vertebrae.utils.labels import class_counts, normalize_targets
+from vertebrae.utils.labels import REGRESSION_TARGET, class_counts, normalize_targets
 
 
 def run_probes(
@@ -13,6 +13,8 @@ def run_probes(
     y: Any,
     config: Optional[ProbeConfig] = None,
     groups: Optional[Any] = None,
+    target_type: str = "auto",
+    target_names: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Evaluate lightweight probe classifiers on embeddings.
 
@@ -29,7 +31,11 @@ def run_probes(
     if not probe_config.enabled:
         return None
 
-    normalized_labels, label_metadata = normalize_targets(y)
+    normalized_labels, label_metadata = normalize_targets(
+        y,
+        target_type=target_type,
+        target_names=target_names,
+    )
     if label_metadata["target_type"] == "multi_label":
         return {
             "enabled": False,
@@ -40,10 +46,20 @@ def run_probes(
             ],
             "results": {},
         }
+    if label_metadata["target_type"] == REGRESSION_TARGET:
+        return {
+            "enabled": False,
+            "target_type": REGRESSION_TARGET,
+            "warnings": [
+                "Native vertebrae probes are currently classification-only; "
+                "probe evaluation was skipped for this regression dataset."
+            ],
+            "results": {},
+        }
 
     embeddings = np.asarray(Z)
     labels = normalized_labels
-    counts = class_counts(labels)
+    counts = class_counts(labels, target_type=label_metadata["target_type"])
     warnings: List[str] = []
     if not counts:
         return {

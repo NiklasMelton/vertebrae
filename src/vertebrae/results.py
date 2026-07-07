@@ -89,7 +89,7 @@ class BenchmarkResult:
             self.extractor_results,
             key=lambda item: (
                 bool(item.overlap.metadata.get("aggregate_valid", True)),
-                item.overlap.macro_score,
+                item.overlap.score,
             ),
             reverse=True,
         )
@@ -110,12 +110,16 @@ class BenchmarkResult:
                     "rank": rank,
                     "extractor": item.name,
                     "extractor_type": item.extractor_type,
+                    "overlap_score": item.overlap.score,
                     "overlap_macro": item.overlap.macro_score,
                     "overlap_weighted": item.overlap.weighted_score,
                     "target_type": item.overlap.metadata.get("target_type", "single_label"),
+                    "target_names": item.overlap.metadata.get("target_names"),
                     "label_view": (item.label_view or {}).get("name"),
                     "weakest_class": item.weakest_class,
                     "weakest_class_score": item.weakest_class_score,
+                    "probe_metric": _probe_metric_name(item.probes, item.overlap.metadata),
+                    "probe_score": _best_probe_accuracy(item.probes),
                     "probe_accuracy": _best_probe_accuracy(item.probes),
                     "embedding_dim": item.embedding_metadata.get("embedding_dim"),
                     "compression_method": item.compression_metadata.get("method", "none"),
@@ -168,3 +172,14 @@ def _best_probe_accuracy(probes: Optional[Dict[str, Any]]) -> Optional[float]:
     if not accuracies:
         return None
     return max(accuracies)
+
+
+def _probe_metric_name(
+    probes: Optional[Dict[str, Any]],
+    overlap_metadata: Dict[str, Any],
+) -> Optional[str]:
+    if not probes or not probes.get("enabled"):
+        return None
+    if overlap_metadata.get("target_type") == "regression":
+        return "r2"
+    return "accuracy"

@@ -4,14 +4,15 @@ from typing import Any, Dict, List, Optional
 
 
 def recommendation_for_extractor(
-    macro_score: float,
+    score: float,
     stability: Optional[Dict[str, Any]],
     weakest_class_score: Optional[float],
+    target_type: str = "single_label",
 ) -> str:
     """Compute a recommendation label for one extractor.
 
     Args:
-        macro_score: Global OverlapIndex score.
+        score: Primary overlap score.
         stability: Optional stability summary.
         weakest_class_score: Lowest per-class score when available.
 
@@ -20,11 +21,17 @@ def recommendation_for_extractor(
     """
 
     width = _stability_width(stability)
-    if macro_score >= 0.9 and width <= 0.05:
+    if target_type == "regression":
+        if _crosses_null_reference(stability, null_reference=0.5):
+            return "continuous_overlap_null_indeterminate"
+        if score >= 0.5:
+            return "continuous_structure_above_null"
+        return "continuous_overlap_below_null"
+    if score >= 0.9 and width <= 0.05:
         recommendation = "strong_candidate"
-    elif macro_score >= 0.80:
+    elif score >= 0.80:
         recommendation = "promising_inspect_weak_classes"
-    elif macro_score >= 0.75:
+    elif score >= 0.75:
         recommendation = "moderate_overlap_fine_tuning_likely"
     else:
         recommendation = "poor_frozen_representation"
@@ -48,11 +55,17 @@ def recommendations_for_benchmark(extractor_results: List[Any]) -> List[str]:
 
     if not extractor_results:
         return ["No extractors were evaluated."]
-    ranked = sorted(extractor_results, key=lambda item: item.overlap.macro_score, reverse=True)
+    ranked = sorted(extractor_results, key=lambda item: item.overlap.score, reverse=True)
     top = ranked[0]
+    top_target_type = top.overlap.metadata.get("target_type", "single_label")
+    top_score_label = (
+        "continuous overlap"
+        if top_target_type == "regression"
+        else "overlap macro"
+    )
     messages = [
         f"Top representation under this protocol: {top.name} "
-        f"(overlap macro {top.overlap.macro_score:.3f})."
+        f"({top_score_label} {top.overlap.score:.3f})."
     ]
     weak = [
         result
@@ -82,3 +95,17 @@ def _stability_width(stability: Optional[Dict[str, Any]]) -> float:
         return 0.0
     summary = stability.get("summary", {})
     return float(summary.get("width", 0.0))
+
+
+def _crosses_null_reference(
+    stability: Optional[Dict[str, Any]],
+    null_reference: float,
+) -> bool:
+    if not stability:
+        return False
+    summary = stability.get("summary", {})
+    lower = summary.get("lower")
+    upper = summary.get("upper")
+    if lower is None or upper is None:
+        return False
+    return float(lower) <= null_reference <= float(upper)

@@ -24,7 +24,7 @@ from vertebrae.execution.jobs import (
 )
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
-from vertebrae.utils.labels import label_view_suffix, target_summary
+from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix, target_summary
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -168,7 +168,11 @@ def materialize_segmentation_artifacts(
         }
         store.put_json(output_key, embedding_manifest)
         label_path = store.put_labels(labels_key, labels)
-        label_summary = target_summary(labels)
+        label_summary = target_summary(
+            labels,
+            target_type=materialization.dataset.metadata.get("target_type", "auto"),
+            target_names=materialization.dataset.metadata.get("target_names"),
+        )
         store.put_json(
             labels_key,
             {
@@ -324,7 +328,12 @@ def materialize_label_artifact(
 
     output_key = key or labels_artifact_key(dataset)
     artifact_path = store.put_labels(output_key, dataset.y)
-    labels = target_summary(dataset.y, label_names=dataset.metadata.get("label_names"))
+    labels = target_summary(
+        dataset.y,
+        label_names=dataset.metadata.get("label_names"),
+        target_type=dataset.metadata.get("target_type", "auto"),
+        target_names=dataset.metadata.get("target_names"),
+    )
     manifest = {
         "artifact_type": "labels",
         "vertebrae_version": __version__,
@@ -343,6 +352,12 @@ def materialize_label_artifact(
         "labelset_counts",
         "mean_label_cardinality",
         "label_density",
+        "n_targets",
+        "target_names",
+        "target_means",
+        "target_variances",
+        "constant_targets",
+        "nonconstant_targets",
     ):
         if label_key in labels:
             manifest[label_key] = make_json_safe(labels[label_key])
@@ -406,6 +421,8 @@ def score_embedding_artifact(
         labels,
         seed=job.seed,
         label_names=label_metadata.get("label_names"),
+        target_type=label_metadata.get("target_type", "auto"),
+        target_names=label_metadata.get("target_names"),
     )
     artifact = {
         "artifact_type": "overlap_score",
@@ -436,7 +453,7 @@ def diagnose_embedding_artifact(
     )
     score_artifact = store.get_json(job.score_key)
     score_data = score_artifact.get("score", {})
-    macro_score = float(score_data.get("macro_score"))
+    overlap_score = float(score_data.get("score", score_data.get("macro_score")))
 
     from vertebrae.config import OverlapScoringConfig, SeparatixConfig
 
@@ -447,14 +464,21 @@ def diagnose_embedding_artifact(
     separatix_config = job.separatix_config or SeparatixConfig()
     scorer = SeparatixScorer(config=separatix_config, overlap_config=overlap_config)
 
-    if macro_score < separatix_config.overlap_threshold:
+    target_type = label_metadata.get("target_type", "single_label")
+    threshold = (
+        separatix_config.regression_overlap_threshold
+        if target_type == REGRESSION_TARGET
+        else separatix_config.overlap_threshold
+    )
+    if overlap_score < threshold:
         diagnostic = scorer.skipped_result(
             reason=(
-                "Skipped Separatix because overlap macro "
-                f"{macro_score:.4f} is below the configured threshold "
-                f"{separatix_config.overlap_threshold:.4f}."
+                "Skipped Separatix because overlap score "
+                f"{overlap_score:.4f} is below the configured threshold "
+                f"{threshold:.4f}."
             ),
-            macro_score=macro_score,
+            overlap_score=overlap_score,
+            threshold=threshold,
         )
     else:
         embeddings = store.get_array(job.embedding_key)
@@ -470,7 +494,7 @@ def diagnose_embedding_artifact(
                 raise ValueError("Group and label artifacts have different dataset fingerprints.")
             groups = store.get_labels(job.groups_key)
         excluded = overlap_metadata.get("exclude_classes", [])
-        if excluded:
+        if excluded and target_type != REGRESSION_TARGET:
             mask = np.asarray(
                 [not any(label == item for item in excluded) for label in labels],
                 dtype=bool,
@@ -483,6 +507,8 @@ def diagnose_embedding_artifact(
                 embeddings,
                 labels,
                 label_names=label_metadata.get("label_names"),
+                target_type=target_type,
+                target_names=label_metadata.get("target_names"),
                 groups=groups,
             )
         except ValueError as exc:
@@ -490,7 +516,8 @@ def diagnose_embedding_artifact(
                 raise
             diagnostic = scorer.skipped_result(
                 reason=f"Skipped grouped Separatix diagnostic: {exc}",
-                macro_score=macro_score,
+                overlap_score=overlap_score,
+                threshold=threshold,
             )
 
     artifact = {
@@ -673,7 +700,10 @@ def collect_score_artifacts(
     artifacts = [store.get_json(key) for key in score_keys]
     if not artifacts:
         raise ValueError("At least one score artifact is required.")
-    scores = [float(artifact["score"]["macro_score"]) for artifact in artifacts]
+    scores = [
+        float(artifact["score"].get("score", artifact["score"]["macro_score"]))
+        for artifact in artifacts
+    ]
     warnings = sorted(
         {
             warning
@@ -740,6 +770,7 @@ def benchmark_result_from_artifacts(
         excluded_classes=score_metadata.get("exclude_classes"),
     )
     overlap = OverlapScoreResult(
+        score=float(score_data.get("score", score_data["macro_score"])),
         macro_score=float(score_data["macro_score"]),
         weighted_score=score_data.get("weighted_score"),
         per_class_scores=score_data.get("per_class_scores", {}),
@@ -749,9 +780,21 @@ def benchmark_result_from_artifacts(
         k_per_class=score_data.get("k_per_class", {}),
         warnings=score_data.get("warnings", []),
         metadata=score_metadata,
+        actual_loss=score_data.get("actual_loss"),
+        null_loss=score_data.get("null_loss"),
+        loss_ratio=score_data.get("loss_ratio"),
+        prototype_scores=score_data.get("prototype_scores", {}),
+        prototype_support=score_data.get("prototype_support", {}),
+        prototype_target_summary=score_data.get("prototype_target_summary", {}),
+        prototype_adjacency=score_data.get("prototype_adjacency", {}),
     )
     recommendation = (
-        recommendation_for_extractor(overlap.macro_score, stability, weakest_score)
+        recommendation_for_extractor(
+            overlap.score,
+            stability,
+            weakest_score,
+            target_type=overlap.metadata.get("target_type", "single_label"),
+        )
         if overlap.metadata.get("aggregate_valid", True)
         else "aggregate_unavailable"
     )
@@ -796,6 +839,12 @@ def benchmark_result_from_artifacts(
             "labelset_counts": label_metadata.get("labelset_counts"),
             "mean_label_cardinality": label_metadata.get("mean_label_cardinality"),
             "label_density": label_metadata.get("label_density"),
+            "n_targets": label_metadata.get("n_targets"),
+            "target_names": label_metadata.get("target_names"),
+            "target_means": label_metadata.get("target_means"),
+            "target_variances": label_metadata.get("target_variances"),
+            "constant_targets": label_metadata.get("constant_targets"),
+            "nonconstant_targets": label_metadata.get("nonconstant_targets"),
             "modality": embedding_metadata.get("modality", "artifact"),
             "label_view": label_metadata.get("label_view"),
         },

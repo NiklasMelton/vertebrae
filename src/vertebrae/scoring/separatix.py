@@ -2,12 +2,16 @@
 
 from dataclasses import dataclass, field
 from math import ceil
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 
-from vertebrae.config import OverlapScoringConfig, SeparatixConfig
-from vertebrae.utils.labels import metric_labels, target_summary
+from vertebrae.config import (
+    ContinuousOverlapScoringConfig,
+    OverlapScoringConfig,
+    SeparatixConfig,
+)
+from vertebrae.utils.labels import REGRESSION_TARGET, metric_labels, target_summary
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix, l2_normalize_rows
 
@@ -40,7 +44,9 @@ class SeparatixScorer:
     def __init__(
         self,
         config: Optional[SeparatixConfig] = None,
-        overlap_config: Optional[OverlapScoringConfig] = None,
+        overlap_config: Optional[
+            Union[OverlapScoringConfig, ContinuousOverlapScoringConfig]
+        ] = None,
     ) -> None:
         self.config = config or SeparatixConfig()
         self.overlap_config = overlap_config or OverlapScoringConfig()
@@ -51,11 +57,18 @@ class SeparatixScorer:
         y: Any,
         label_names: Optional[Any] = None,
         groups: Optional[Any] = None,
+        target_type: str = "auto",
+        target_names: Optional[Any] = None,
     ) -> SeparatixResult:
         """Run Separatix on dense or sparse embeddings and labels."""
 
         embeddings = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
-        labels, label_metadata = metric_labels(y, label_names=label_names)
+        labels, label_metadata = metric_labels(
+            y,
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+        )
         if embeddings.shape[0] != len(labels):
             raise ValueError(
                 "embeddings and labels must have the same length; "
@@ -70,7 +83,12 @@ class SeparatixScorer:
 
         report = self._run_separatix(embeddings, labels, label_metadata, normalized_groups)
         report_dict = make_json_safe(report.to_dict())
-        summary = target_summary(y, label_names=label_metadata.get("label_names"))
+        summary = target_summary(
+            y,
+            label_names=label_metadata.get("label_names"),
+            target_type=label_metadata["target_type"],
+            target_names=label_metadata.get("target_names"),
+        )
         return SeparatixResult(
             ran=True,
             recommendation=report_dict.get("recommendation"),
@@ -90,6 +108,7 @@ class SeparatixScorer:
                 "n_jobs": self.config.n_jobs,
                 "target_type": label_metadata["target_type"],
                 "label_names": label_metadata.get("label_names"),
+                "target_names": label_metadata.get("target_names"),
                 "target_summary": summary,
                 "grouped": normalized_groups is not None,
                 "n_groups": (
@@ -100,7 +119,12 @@ class SeparatixScorer:
             },
         )
 
-    def skipped_result(self, reason: str, macro_score: float) -> SeparatixResult:
+    def skipped_result(
+        self,
+        reason: str,
+        overlap_score: float,
+        threshold: float,
+    ) -> SeparatixResult:
         """Return a structured skipped result for gated runs."""
 
         return SeparatixResult(
@@ -108,8 +132,8 @@ class SeparatixScorer:
             skipped_reason=reason,
             metadata={
                 "normalized_embeddings": self.overlap_config.normalize_embeddings,
-                "overlap_macro_score": float(macro_score),
-                "overlap_threshold": self.config.overlap_threshold,
+                "overlap_score": float(overlap_score),
+                "overlap_threshold": float(threshold),
             },
         )
 
@@ -127,20 +151,35 @@ class SeparatixScorer:
             "budget": self.config.budget or "standard",
             "max_dense_mb": self._max_dense_mb(),
             "max_samples": self.config.max_samples,
+            "mlp_probes": self.config.mlp_probes,
+            "mlp_device": self.config.mlp_device,
+            "mlp_trigger_skill_threshold": self.config.mlp_trigger_skill_threshold,
+            "mlp_min_improvement": self.config.mlp_min_improvement,
+            "mlp_max_parameters": self.config.mlp_max_parameters,
         }
         if label_metadata["target_type"] == "multi_label":
             kwargs["target_mode"] = "multilabel"
+        elif label_metadata["target_type"] == REGRESSION_TARGET:
+            kwargs["target_mode"] = "regression"
+        else:
+            kwargs["target_mode"] = "singlelabel"
         if groups is not None:
             kwargs["groups"] = groups
         if self.config.n_jobs is None:
             return separatix.diagnose(embeddings, labels, **kwargs)
 
         profiler = separatix.ComplexityProfiler(
+            target_mode=kwargs["target_mode"],
             budget=kwargs["budget"],
             max_dense_mb=kwargs["max_dense_mb"],
             max_samples=kwargs["max_samples"],
             random_state=kwargs["random_state"],
             n_jobs=self.config.n_jobs,
+            mlp_probes=self.config.mlp_probes,
+            mlp_device=self.config.mlp_device,
+            mlp_trigger_skill_threshold=self.config.mlp_trigger_skill_threshold,
+            mlp_min_improvement=self.config.mlp_min_improvement,
+            mlp_max_parameters=self.config.mlp_max_parameters,
         )
         fit_kwargs: Dict[str, Any] = {}
         if groups is not None:

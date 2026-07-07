@@ -163,12 +163,22 @@ class LocalArtifactStore:
 
         path = self._path(key)
         label_names = None
+        target_type = "auto"
+        target_names = None
         metadata_path = path / "metadata.json"
         if metadata_path.exists():
             with metadata_path.open("r", encoding="utf-8") as f:
-                label_names = json.load(f).get("label_names")
+                metadata = json.load(f)
+                label_names = metadata.get("label_names")
+                target_type = metadata.get("target_type", "auto")
+                target_names = metadata.get("target_names")
         with (path / "labels.json").open("r", encoding="utf-8") as f:
-            return labels_from_jsonable(json.load(f), label_names=label_names)
+            return labels_from_jsonable(
+                json.load(f),
+                label_names=label_names,
+                target_type=target_type,
+                target_names=target_names,
+            )
 
     def put_json(self, key: str, obj: dict) -> str:
         """Store JSON metadata for an artifact key.

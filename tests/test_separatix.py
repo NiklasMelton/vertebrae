@@ -13,6 +13,8 @@ from vertebrae.scoring.separatix import SeparatixScorer
 def test_separatix_config_validates_threshold_and_limits():
     with pytest.raises(ValueError, match="overlap_threshold"):
         SeparatixConfig(overlap_threshold=1.1)
+    with pytest.raises(ValueError, match="regression_overlap_threshold"):
+        SeparatixConfig(regression_overlap_threshold=1.1)
     with pytest.raises(ValueError, match="budget"):
         SeparatixConfig(budget="tiny")
     with pytest.raises(ValueError, match="max_samples"):
@@ -75,6 +77,35 @@ def test_separatix_scorer_passes_groups_without_serializing_ids(fake_separatix):
     assert result.metadata["grouped"] is True
     assert result.metadata["n_groups"] == 4
     assert "image-a" not in json.dumps(result.to_dict())
+
+
+def test_separatix_scorer_passes_regression_target_mode_and_mlp_settings(fake_separatix):
+    embeddings = np.arange(18, dtype=float).reshape(6, 3)
+    labels = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
+
+    result = SeparatixScorer(
+        config=SeparatixConfig(
+            mlp_probes=True,
+            mlp_device="cpu",
+            mlp_trigger_skill_threshold=0.7,
+            mlp_min_improvement=0.03,
+            mlp_max_parameters=1000,
+        ),
+        overlap_config=OverlapScoringConfig(normalize_embeddings=False),
+    ).score(
+        embeddings,
+        labels,
+        target_type="regression",
+        target_names=["score"],
+    )
+
+    call = fake_separatix.ComplexityProfiler.calls[-1]
+    assert result.metadata["target_type"] == "regression"
+    assert result.metadata["target_names"] == ("score",)
+    assert call["target_mode"] == "regression"
+    assert call["mlp_probes"] is True
+    assert call["mlp_max_parameters"] == 1000
+    assert result.report["metrics"]["mlp_probes"]["status"] == "executed"
 
 
 def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapindex):
@@ -220,3 +251,58 @@ def test_multilabel_benchmark_runs_separatix_and_skips_native_probes(
     assert frame.loc[0, "target_type"] == "multi_label"
     assert "Target type: multi_label" in markdown
     assert "single-label only" in markdown
+
+
+def test_regression_benchmark_uses_regression_threshold_and_skips_native_probes(
+    tmp_path,
+    fake_overlapindex,
+):
+    embeddings = np.arange(18, dtype=float).reshape(6, 3)
+    targets = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings,
+        targets,
+        target_type="regression",
+        target_names=["score"],
+    )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor(name="regression_dense"),
+        separatix_config=SeparatixConfig(regression_overlap_threshold=0.63),
+        stability_config=StabilityConfig(enabled=False),
+        probe_config=ProbeConfig(enabled=True),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+    ).run()
+
+    item = result.extractor_results[0]
+    assert item.overlap.metadata["target_type"] == "regression"
+    assert item.overlap.score == 0.62
+    assert item.separatix is not None
+    assert item.separatix.ran is False
+    assert "below the configured threshold" in (item.separatix.skipped_reason or "")
+    assert item.probes is not None
+    assert item.probes["enabled"] is False
+    assert "classification-only" in item.probes["warnings"][0]
+
+
+def test_reports_include_separatix_mlp_status(tmp_path, fake_overlapindex):
+    embeddings = np.arange(24, dtype=float).reshape(8, 3)
+    labels = np.array(["a"] * 4 + ["b"] * 4)
+    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor(name="dense"),
+        separatix_config=SeparatixConfig(overlap_threshold=0.80, mlp_probes=True),
+        stability_config=StabilityConfig(enabled=False),
+        probe_config=ProbeConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+
+    markdown_path = tmp_path / "report.md"
+    result.save_markdown(str(markdown_path))
+    markdown = markdown_path.read_text(encoding="utf-8")
+
+    assert "MLP status" in markdown
+    assert "executed" in markdown
