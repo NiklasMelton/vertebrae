@@ -130,3 +130,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "realworld: integration tests that exercise real datasets and installed metric dependencies",
+    "publicmodels: manual smoke tests that download and run small public models",
+]

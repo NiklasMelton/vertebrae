@@ -1,5 +1,6 @@
 """Internal OverlapIndex adapters."""
 
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -189,12 +190,15 @@ class OverlapIndexScorer:
             kmeans_kwargs["random_state"] = seed
 
         OverlapIndex = _load_overlap_index()
-        index = OverlapIndex(
-            model_type="MiniBatchKMeans",
-            kmeans_k=k_per_class,
-            kmeans_kwargs=kmeans_kwargs,
-            offline_chunk_size=config.offline_chunk_size,
-            exclude_classes=config.exclude_classes,
+        index = _instantiate_with_supported_kwargs(
+            OverlapIndex,
+            {
+                "model_type": "MiniBatchKMeans",
+                "kmeans_k": k_per_class,
+                "kmeans_kwargs": kmeans_kwargs,
+                "offline_chunk_size": config.offline_chunk_size,
+                "exclude_classes": config.exclude_classes,
+            },
         )
         with _capture_runtime_warnings(warnings):
             raw_score = index.fit_offline(embeddings, labels, reset_state=True)
@@ -382,6 +386,20 @@ def _load_continuous_overlap_index() -> Any:
             "dependencies with Poetry or install overlapindex directly."
         ) from exc
     return ContinuousOverlapIndex
+
+
+def _instantiate_with_supported_kwargs(cls: Any, kwargs: Dict[str, Any]) -> Any:
+    try:
+        signature = inspect.signature(cls)
+    except (TypeError, ValueError):
+        return cls(**kwargs)
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return cls(**kwargs)
+    supported = {name: value for name, value in kwargs.items() if name in signature.parameters}
+    return cls(**supported)
 
 
 def _coerce_classification_config(
