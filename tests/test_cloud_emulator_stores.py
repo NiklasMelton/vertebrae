@@ -1,3 +1,4 @@
+import importlib
 import os
 
 import numpy as np
@@ -16,11 +17,11 @@ pytestmark = [
 
 
 def test_s3_artifact_store_roundtrip_with_moto_emulator():
-    boto3 = pytest.importorskip("boto3")
-    moto = pytest.importorskip("moto")
+    boto3 = _require_module("boto3")
+    moto = _require_module("moto")
     mock_aws = getattr(moto, "mock_aws", None)
     if mock_aws is None:
-        pytest.skip("installed moto does not expose mock_aws")
+        raise AssertionError("Required dependency 'moto' does not expose mock_aws.")
 
     with mock_aws():
         bucket = "vertebrae-emulator"
@@ -36,10 +37,10 @@ def test_s3_artifact_store_roundtrip_with_moto_emulator():
 
 
 def test_gcs_artifact_store_roundtrip_with_fake_gcs_server():
-    pytest.importorskip("google.cloud.storage")
+    _require_module("google.cloud.storage")
     emulator_host = os.environ.get("STORAGE_EMULATOR_HOST")
     if not emulator_host:
-        pytest.skip("STORAGE_EMULATOR_HOST must point at fake-gcs-server")
+        raise AssertionError("STORAGE_EMULATOR_HOST must point at fake-gcs-server.")
 
     from google.auth.credentials import AnonymousCredentials
     from google.cloud import storage
@@ -89,3 +90,13 @@ def _assert_artifact_store_roundtrip(store):
         np.vstack([np.ones((2, 3), dtype=np.float32), np.zeros((2, 3), dtype=np.float32)]),
     )
     assert store.exists("arrays/dense")
+
+
+def _require_module(module_name):
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        raise AssertionError(
+            f"Required dependency {module_name!r} is not installed for enabled "
+            "cloud emulator tests."
+        ) from exc

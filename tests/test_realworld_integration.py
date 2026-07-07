@@ -167,7 +167,7 @@ def test_digits_benchmark_real_metrics_cache_compression_reports(tmp_path):
 
 def test_diabetes_regression_real_continuous_overlap(tmp_path):
     if not hasattr(overlapindex, "ContinuousOverlapIndex"):
-        pytest.skip("installed overlapindex does not expose ContinuousOverlapIndex")
+        raise AssertionError("Installed overlapindex does not expose ContinuousOverlapIndex.")
 
     data = load_diabetes()
     X = data.data.astype(np.float32)

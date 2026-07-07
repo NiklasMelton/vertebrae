@@ -133,4 +133,8 @@ pythonpath = ["src"]
 markers = [
     "realworld: integration tests that exercise real datasets and installed metric dependencies",
     "publicmodels: manual smoke tests that download and run small public models",
+    "cloudemulators: manual integration tests for S3/GCS-compatible local emulators",
+    "distributedruntime: manual smoke tests for real local Ray/Dask runtimes",
+    "devicesmoke: manual smoke tests for real CPU/GPU device execution paths",
+    "memorystress: manual stress tests for larger memory/subsampling workflows",
 ]

@@ -1,3 +1,4 @@
+import importlib
 import json
 import os
 
@@ -31,8 +32,8 @@ pytestmark = [
 
 
 def test_public_hf_text_model_smoke(tmp_path):
-    pytest.importorskip("transformers")
-    pytest.importorskip("torch")
+    _require_module("transformers")
+    _require_module("torch")
     model_id = os.environ.get("VERTABRAE_PUBLIC_TEXT_MODEL", "hf-internal-testing/tiny-random-bert")
     dataset = BenchmarkDataset.from_arrays(
         [
@@ -58,7 +59,7 @@ def test_public_hf_text_model_smoke(tmp_path):
 
 
 def test_public_sentence_transformer_model_smoke(tmp_path):
-    pytest.importorskip("sentence_transformers")
+    _require_module("sentence_transformers")
     model_id = os.environ.get(
         "VERTABRAE_PUBLIC_SENTENCE_MODEL",
         "sentence-transformers/paraphrase-MiniLM-L3-v2",
@@ -86,9 +87,9 @@ def test_public_sentence_transformer_model_smoke(tmp_path):
 
 
 def test_public_hf_vision_model_smoke(tmp_path):
-    pytest.importorskip("transformers")
-    pytest.importorskip("torch")
-    pytest.importorskip("PIL")
+    _require_module("transformers")
+    _require_module("torch")
+    _require_module("PIL")
     model_id = os.environ.get(
         "VERTABRAE_PUBLIC_VISION_MODEL",
         "hf-internal-testing/tiny-random-vit",
@@ -110,8 +111,8 @@ def test_public_hf_vision_model_smoke(tmp_path):
 
 
 def test_public_hf_audio_model_smoke(tmp_path):
-    pytest.importorskip("transformers")
-    pytest.importorskip("torch")
+    _require_module("transformers")
+    _require_module("torch")
     model_id = os.environ.get(
         "VERTABRAE_PUBLIC_AUDIO_MODEL",
         "hf-internal-testing/tiny-random-wav2vec2",
@@ -144,9 +145,9 @@ def test_public_hf_audio_model_smoke(tmp_path):
 
 
 def test_public_hf_multimodal_model_smoke(tmp_path):
-    pytest.importorskip("transformers")
-    pytest.importorskip("torch")
-    pytest.importorskip("PIL")
+    _require_module("transformers")
+    _require_module("torch")
+    _require_module("PIL")
     model_id = os.environ.get(
         "VERTABRAE_PUBLIC_MULTIMODAL_MODEL",
         "hf-internal-testing/tiny-random-CLIPModel",
@@ -213,3 +214,13 @@ def _run_public_model_benchmark(dataset, extractor, tmp_path):
     result.save_json(str(json_path))
     assert json.loads(json_path.read_text(encoding="utf-8"))["extractor_results"]
     return item
+
+
+def _require_module(module_name):
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        raise AssertionError(
+            f"Required dependency {module_name!r} is not installed for enabled "
+            "public model smoke tests."
+        ) from exc
