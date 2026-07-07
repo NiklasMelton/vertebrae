@@ -76,23 +76,17 @@ class ContinuousOverlapScoringConfig:
             raise ValueError("max_dense_bytes must be >= 1.")
         allowed_target_cover = {"auto", "quantile", "kmeans"}
         if self.target_cover not in allowed_target_cover:
-            raise ValueError(
-                f"target_cover must be one of {sorted(allowed_target_cover)}."
-            )
+            raise ValueError(f"target_cover must be one of {sorted(allowed_target_cover)}.")
         if isinstance(self.n_target_cells, str) and self.n_target_cells != "auto":
             raise ValueError("n_target_cells must be an int or 'auto'.")
         if isinstance(self.n_target_cells, int) and self.n_target_cells < 1:
             raise ValueError("n_target_cells must be >= 1.")
         allowed_target_distance = {"auto", "wasserstein", "sliced_wasserstein"}
         if self.target_distance not in allowed_target_distance:
-            raise ValueError(
-                f"target_distance must be one of {sorted(allowed_target_distance)}."
-            )
+            raise ValueError(f"target_distance must be one of {sorted(allowed_target_distance)}.")
         allowed_target_scaling = {"standard", "none", "minmax", "robust"}
         if self.target_scaling not in allowed_target_scaling:
-            raise ValueError(
-                f"target_scaling must be one of {sorted(allowed_target_scaling)}."
-            )
+            raise ValueError(f"target_scaling must be one of {sorted(allowed_target_scaling)}.")
         if self.n_projections < 1:
             raise ValueError("n_projections must be >= 1.")
         if self.n_null_permutations < 1:
@@ -158,9 +152,7 @@ class SeparatixConfig:
                 f"SeparatixConfig.mlp_device must be one of {sorted(allowed_devices)}."
             )
         if not 0.0 <= self.mlp_trigger_skill_threshold <= 1.0:
-            raise ValueError(
-                "SeparatixConfig.mlp_trigger_skill_threshold must be between 0 and 1."
-            )
+            raise ValueError("SeparatixConfig.mlp_trigger_skill_threshold must be between 0 and 1.")
         if self.mlp_min_improvement < 0.0:
             raise ValueError("SeparatixConfig.mlp_min_improvement must be >= 0.")
         if self.mlp_max_parameters is not None and self.mlp_max_parameters < 1:

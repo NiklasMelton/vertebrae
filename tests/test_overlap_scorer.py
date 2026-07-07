@@ -90,9 +90,7 @@ def test_overlap_scorer_supports_explicit_regression_targets(fake_overlapindex):
     )
     y = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
 
-    result = OverlapIndexScorer(
-        ContinuousOverlapScoringConfig(k=3, n_null_permutations=5)
-    ).score(
+    result = OverlapIndexScorer(ContinuousOverlapScoringConfig(k=3, n_null_permutations=5)).score(
         Z,
         y,
         seed=11,

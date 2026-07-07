@@ -556,9 +556,7 @@ def _target_metadata(
             for index, variance in enumerate(variances.tolist())
             if float(variance) <= 0.0
         )
-        nonconstant_targets = tuple(
-            name for name in resolved_names if name not in constant_targets
-        )
+        nonconstant_targets = tuple(name for name in resolved_names if name not in constant_targets)
         return {
             "target_type": REGRESSION_TARGET,
             "n_classes": 0,
