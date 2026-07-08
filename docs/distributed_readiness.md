@@ -4,7 +4,8 @@ Distributed execution starts with local, artifact-backed sharding. The package k
 the same boundaries needed for future HPC, Ray, Dask, and multi-GPU backends:
 
 - Dataset validation is separate from feature extraction.
-- Extractors produce dense embedding artifacts.
+- Extractors produce dense or sparse embedding artifacts, with one artifact per
+  named output when the extractor is multi-output.
 - Streaming-safe extractors can embed deterministic sample batches and materialize
   embeddings without keeping the full raw dataset in memory.
 - Scoring consumes embeddings and labels through `OverlapIndexScorer`.
@@ -21,10 +22,10 @@ pickles preserve structured fields and multi-output extractors still materialize
 ordinary per-output embedding artifacts. Missing modalities are not supported in
 v1; workers should receive complete aligned samples.
 
-Distributed backends can shard embedding generation across workers, then submit scoring
-jobs over saved embedding and label artifacts. New extractors should keep deterministic
-row order, avoid hidden global state, and include all model/preprocessing settings in
-`recipe()`.
+Distributed backends can shard embedding generation across workers, then submit
+compression, scoring, and optional diagnostic jobs over saved embedding, label, and
+group artifacts. New extractors should keep deterministic row order, avoid hidden
+global state, and include all model/preprocessing settings in `recipe()`.
 
 Label artifacts support single-label, multi-label, and explicit regression targets.
 Multi-label artifacts store one JSON list of labels per sample and preserve
@@ -89,6 +90,14 @@ vertebrae write-labels \
   --dataset-pickle dataset.pkl \
   --cache-dir .vertebrae_cache
 
+vertebrae write-groups \
+  --dataset-pickle dataset.pkl \
+  --cache-dir .vertebrae_cache
+
+vertebrae compress \
+  --cache-dir .vertebrae_cache \
+  --embedding-key "$(jq -r .output_key plan.json)"
+
 vertebrae score \
   --cache-dir .vertebrae_cache \
   --plan-json plan.json
@@ -112,6 +121,12 @@ vertebrae benchmark-from-artifacts \
   --json-output result.json \
   --markdown-output report.md
 ```
+
+For segmentation datasets, `vertebrae materialize-segmentation` aligns saved
+spatial embedding outputs to raster annotations and writes token-level embedding,
+label, and group artifacts. Those artifacts then follow the same `score`,
+`diagnose-complexity`, `score-repeats`, and `benchmark-from-artifacts` stages as
+ordinary embedding workflows.
 
 To execute shards or score repeats through Ray or Dask instead of the local backend:
 

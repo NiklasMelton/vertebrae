@@ -13,18 +13,20 @@
     </td>
     <td valign="top">
 
-`vertebrae` is a Python package for evaluating feature extractors and 
-transfer-learning backbones on labeled datasets. It supports precomputed embeddings, 
-scikit-learn pipelines, custom callable extractors, ONNX models, local PyTorch 
-and 
-Keras modules, optional embedding compression, and optional Hugging Face and
-sentence-transformers workflows.
+`vertebrae` is a Python package for evaluating feature extractors and
+transfer-learning backbones on labeled datasets. It supports dense and sparse
+precomputed embeddings, scikit-learn pipelines, custom callable extractors, ONNX
+models, local PyTorch and Keras modules, segmentation token workflows, optional
+embedding compression, and optional model families spanning Hugging Face,
+sentence-transformers, timm, torchvision, OpenCLIP/SigLIP, TensorFlow Hub,
+JAX/Flax, tree ensembles, graph models, and hosted embedding APIs.
 
 The package uses the `overlapindex` library as its primary separation metric and
 adds a `separatix` complexity diagnostic to reports when an evaluated embedding
 clears a configurable overlap-quality threshold. The full evaluation flow wraps
-those diagnostics with practical dataset handling, caching, stability analysis,
-probe classifiers, and report generation.
+those diagnostics with practical dataset handling, caching, memory-aware
+subsampling, stability analysis, probe classifiers, artifact-backed execution,
+and report generation.
 
 </tr>
 </table>
@@ -71,6 +73,9 @@ Optional local PyTorch model support:
 
 ```bash
 pip install "vertebrae[torch]"
+pip install "vertebrae[timm]"
+pip install "vertebrae[torchvision]"
+pip install "vertebrae[openclip]"
 ```
 
 Optional local Keras model support:
@@ -78,12 +83,21 @@ Optional local Keras model support:
 ```bash
 pip install "vertebrae[keras]"
 pip install "vertebrae[tensorflow]"
+pip install "vertebrae[tensorflow-hub]"
 ```
 
 Optional ONNX Runtime support:
 
 ```bash
 pip install "vertebrae[onnx]"
+```
+
+Optional JAX/Flax, tree ensemble, and graph model support:
+
+```bash
+pip install "vertebrae[jax]"
+pip install "vertebrae[trees]"
+pip install "vertebrae[graph]"
 ```
 
 Optional distributed execution backends:
@@ -149,6 +163,24 @@ result = Evaluator(dataset=dataset, extractor=PrecomputedExtractor()).run()
 OverlapIndex receives a dense multi-label indicator target internally, and
 Separatix runs with `target_mode="multilabel"`. Native vertebrae probes are
 currently single-label only and are skipped with a warning on multi-label data.
+
+Regression targets are supported when explicitly requested so numeric class
+identifiers are not accidentally interpreted as continuous targets:
+
+```python
+dataset = BenchmarkDataset.from_arrays(
+    X=samples,
+    y=targets,
+    modality="tabular",
+    target_type="regression",
+    target_names=["quality_score"],
+)
+
+result = Evaluator(dataset=dataset, extractor=extractor).run()
+```
+
+Regression scoring uses `ContinuousOverlapIndex` through vertebrae's internal
+scoring adapter and appears in reports as continuous overlap diagnostics.
 
 ### Optional embedding compression
 
@@ -406,21 +438,74 @@ downloads a laptop-sized Caltech-101 subset with a few related category pairs,
 compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
 embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 
+### Dense segmentation tokens
+
+Dense segmentation evaluation scores spatial feature cells after they are aligned
+to semantic mask labels. It measures representation organization for retained
+tokens; it is not an IoU, mask-accuracy, or boundary-quality metric.
+
+```python
+from vertebrae import (
+    Benchmark,
+    CallableSpatialExtractor,
+    SegmentationConfig,
+    SegmentationDataset,
+    SpatialLayout,
+    SpatialOutputSpec,
+)
+
+dataset = SegmentationDataset.from_arrays(
+    images=images,
+    semantic_masks=masks,
+)
+
+extractor = CallableSpatialExtractor(
+    "encoder",
+    transform_fn=extract_spatial_features,
+    output_specs=[
+        SpatialOutputSpec(
+            name="stage_4",
+            layout=SpatialLayout(grid_height=14, grid_width=14),
+        )
+    ],
+)
+
+result = Benchmark(
+    dataset=dataset,
+    extractors=[extractor],
+    segmentation_config=SegmentationConfig(max_tokens_per_class=10_000),
+).run()
+```
+
+See `docs/segmentation.md` for background handling, ambiguity filtering,
+instance caps, grouped diagnostics, and precomputed segmentation embeddings.
+
 ## Supported Workflows
 
 `vertebrae` is designed for:
 
 - precomputed dense or sparse embeddings,
 - NumPy arrays and pandas DataFrames,
+- single-label classification, multi-label classification, and explicit regression targets,
+- label hierarchy views for scoring different taxonomy levels,
+- graph-node, graph-edge, entity, pair, and triplet-derived embedding diagnostics,
 - scikit-learn transformers and pipelines,
 - custom Python callable extractors,
+- dense segmentation token materialization from spatial feature maps,
+- Hugging Face text backbones through `HFTextExtractor`,
+- Hugging Face vision backbones through `HFVisionExtractor`,
 - Hugging Face audio backbones through `HFAudioExtractor`,
 - Hugging Face image-text and other structured multi-modal backbones through
   `HFMultimodalExtractor`,
 - Hugging Face video backbones through `HFVideoExtractor`,
 - Hugging Face time-series backbones through `HFTimeSeriesExtractor`,
+- sentence-transformers through `SentenceTransformerExtractor`,
+- timm, torchvision, OpenCLIP, SigLIP, TensorFlow Hub, JAX/Flax, tree-leaf,
+  graph, and hosted embedding API extractors,
 - local PyTorch modules through `TorchExtractor`,
 - local Keras modules through `KerasExtractor`,
+- local ONNX Runtime sessions through `ONNXExtractor`,
+- single-output and multi-output extractor evaluation,
 - single-extractor evaluation,
 - multi-extractor comparisons,
 - JSON and Markdown reports,
@@ -434,10 +519,12 @@ embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 - local paths, `s3://...`, and `gs://...` artifact stores.
 
 Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
-`vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae compress`, `vertebrae score`,
-`vertebrae diagnose-complexity`, `vertebrae score-repeats`, `vertebrae collect-scores`,
-`vertebrae benchmark-from-artifacts`, `vertebrae slurm-array`, `vertebrae slurm-score-array`,
-and `vertebrae run-embedding-shards`.
+`vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae write-groups`,
+`vertebrae materialize-segmentation`, `vertebrae compress`, `vertebrae score`,
+`vertebrae diagnose-complexity`, `vertebrae score-repeats`,
+`vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
+`vertebrae slurm-array`, `vertebrae slurm-score-array`, and
+`vertebrae run-embedding-shards`.
 
 For Ray or Dask cluster runs, the configured `cache_dir` can be either a shared local
 path or a cloud object-store URI such as `s3://team-bucket/vertebrae/run-001` or
@@ -449,8 +536,9 @@ Each benchmark run returns structured results that include:
 
 - dataset summary,
 - extractor summary and recipe metadata,
-- overlap scores and per-class scores,
+- overlap scores plus per-class, per-label, or per-target diagnostics,
 - Separatix recommendation, confidence, and report details when the overlap gate passes,
+- label-view, segmentation, grouping, and target-type metadata when present,
 - compression metadata and compressed dimensions,
 - stability summaries,
 - native probe results when explicitly enabled,
@@ -514,7 +602,9 @@ embedding is promising but may benefit from a more flexible decision boundary.
 
 ## Optional Extractors
 
-Optional integrations are available through the `torch`, `keras`, `tensorflow`, `onnx`, and `hf` extras:
+Optional integrations are available through extras such as `torch`, `keras`,
+`tensorflow`, `onnx`, `hf`, `timm`, `torchvision`, `openclip`,
+`tensorflow-hub`, `jax`, `trees`, and `graph`:
 
 - `TorchExtractor`
 - `KerasExtractor`
@@ -522,6 +612,21 @@ Optional integrations are available through the `torch`, `keras`, `tensorflow`, 
 - `SentenceTransformerExtractor`
 - `HFTextExtractor`
 - `HFVisionExtractor`
+- `HFAudioExtractor`
+- `HFTimeSeriesExtractor`
+- `HFVideoExtractor`
+- `HFMultimodalExtractor`
+- `TimmVisionExtractor`
+- `TorchvisionVisionExtractor`
+- `OpenCLIPExtractor`
+- `SigLIPExtractor`
+- `TFHubExtractor`
+- `JAXFlaxExtractor`
+- `TreeLeafEmbeddingExtractor`
+- `GraphModelExtractor`
+- `HostedEmbeddingExtractor`
+- `CallableSpatialExtractor`
+- `PrecomputedSpatialExtractor`
 
 These workflows rely on optional dependencies and lazy imports, so the core package stays lightweight.
 See `examples/onnx_extractor.py` for a local ONNX export workflow.
@@ -533,7 +638,9 @@ workflow with automatic local data reuse/downloads and a less trivial default
 class slice. See
 `examples/sklearn_wine_pipeline.py` for a network-free real-data scikit-learn
 pipeline comparison.
-See the compression guide in `docs/compression.md` for compression options and guidance.
+See `docs/feature_extractors.md` for the full extractor matrix and install
+mapping, `docs/segmentation.md` for dense spatial workflows, and
+`docs/compression.md` for compression options and guidance.
 
 ## Command Line Interface
 
@@ -548,7 +655,9 @@ provider options such as `--s3-endpoint-url`, `--s3-profile`, `--s3-region`, and
 ## Notes
 
 - The package targets Python `>=3.9,<3.15`.
-- The public API is centered on `BenchmarkDataset`, `Evaluator`, `Benchmark`, extractor wrappers, and structured result objects.
+- The public API is centered on `BenchmarkDataset`, `SegmentationDataset`,
+  `Evaluator`, `Benchmark`, extractor wrappers, config dataclasses, and structured
+  result objects.
 
 ## License
 
