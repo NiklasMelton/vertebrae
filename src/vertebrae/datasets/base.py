@@ -39,6 +39,22 @@ class TargetView:
 
 
 @dataclass
+class UnitAnnotation:
+    """Declarative per-parent unit targets and provenance."""
+
+    labels: Any
+    unit_ids: Any = None
+    positions: Any = None
+    spans: Any = None
+    coordinates: Any = None
+    provenance: Any = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    label_names: Optional[Iterable[Any]] = None
+    target_type: str = "auto"
+    target_names: Optional[Iterable[str]] = None
+
+
+@dataclass
 class BenchmarkDataset:
     """A labeled dataset prepared for feature extraction or scoring.
 
@@ -1144,6 +1160,40 @@ class BenchmarkDataset:
             return default_target_view_metadata()
         return dict(view)
 
+    def with_unit_annotations(
+        self,
+        annotations: Iterable[UnitAnnotation],
+        unit_type: str = "unit",
+    ) -> "BenchmarkDataset":
+        """Return a dataset with aligned per-parent structured unit annotations."""
+
+        resolved = _normalize_unit_annotations(
+            annotations=annotations,
+            n_samples=len(self.y),
+            unit_type=unit_type,
+        )
+        metadata = dict(self.metadata)
+        metadata["unit_annotations"] = resolved
+        metadata["unit_annotation_unit_type"] = str(unit_type)
+        dataset = type(self)(
+            X=self.X,
+            y=coerce_label_input(self.y),
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            metadata=metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    def unit_annotations(self) -> Optional[list[Dict[str, Any]]]:
+        """Return aligned structured unit annotations when configured."""
+
+        annotations = self.metadata.get("unit_annotations")
+        if annotations is None:
+            return None
+        return [dict(annotation) for annotation in annotations]
+
     def with_groups(self, groups: Any, name: str = "group") -> "BenchmarkDataset":
         """Return a dataset with aligned independence-group identifiers."""
 
@@ -1320,6 +1370,11 @@ class BenchmarkDataset:
                     dataset_type=type(self),
                 )
             merged_metadata["target_views"] = subset_views
+        unit_annotations = merged_metadata.get("unit_annotations")
+        if unit_annotations is not None:
+            merged_metadata["unit_annotations"] = [
+                dict(unit_annotations[int(index)]) for index in index_array.tolist()
+            ]
         merged_metadata.update(metadata or {})
         dataset = type(self)(
             X=_take_samples(self.X, index_array),
@@ -1354,6 +1409,7 @@ class BenchmarkDataset:
         unit_spans = report_metadata.pop("unit_spans", None)
         unit_coordinates = report_metadata.pop("unit_coordinates", None)
         unit_provenance = report_metadata.pop("unit_provenance", None)
+        unit_annotations = report_metadata.pop("unit_annotations", None)
         summary = {
             "n_samples": int(len(self.y)),
             "n_classes": labels["n_classes"],
@@ -1391,6 +1447,15 @@ class BenchmarkDataset:
             }
             if parent_ids is not None:
                 summary["units"]["n_parents"] = int(len(set(parent_ids)))
+        if unit_annotations is not None:
+            summary["structured_units"] = {
+                "provided": True,
+                "unit_type": self.metadata.get("unit_annotation_unit_type", "unit"),
+                "n_parents": int(len(unit_annotations)),
+                "n_units": int(
+                    sum(len(annotation.get("labels", [])) for annotation in unit_annotations)
+                ),
+            }
         if groups is not None:
             summary["grouping"] = {
                 "provided": True,
@@ -1500,6 +1565,61 @@ class EmbeddingUnitDataset(BenchmarkDataset):
         if target_views is not None:
             dataset = cast(EmbeddingUnitDataset, dataset.with_target_views(target_views))
         return dataset
+
+
+def _normalize_unit_annotations(
+    annotations: Iterable[UnitAnnotation],
+    n_samples: int,
+    unit_type: str,
+) -> list[Dict[str, Any]]:
+    resolved = list(annotations)
+    if len(resolved) != n_samples:
+        raise ValueError(
+            "unit annotations must align to dataset samples; "
+            f"got {len(resolved)} annotations for {n_samples} samples."
+        )
+    entries = []
+    for index, annotation in enumerate(resolved):
+        if not isinstance(annotation, UnitAnnotation):
+            raise ValueError("unit annotations must contain UnitAnnotation entries.")
+        labels = coerce_label_input(annotation.labels)
+        if labels.ndim != 1:
+            raise ValueError(
+                f"{unit_type} annotation labels for sample {index} must be one-dimensional."
+            )
+        unit_count = int(len(labels))
+        if unit_count < 1:
+            raise ValueError(
+                f"{unit_type} annotations for sample {index} must contain at least one unit."
+            )
+        entry = {
+            "labels": labels_to_jsonable(
+                labels,
+                label_names=annotation.label_names,
+                target_type=annotation.target_type,
+                target_names=annotation.target_names,
+            ),
+            "label_names": (
+                list(annotation.label_names) if annotation.label_names is not None else None
+            ),
+            "target_type": annotation.target_type,
+            "target_names": (
+                list(annotation.target_names) if annotation.target_names is not None else None
+            ),
+            "metadata": dict(annotation.metadata),
+        }
+        for key, values in (
+            ("unit_ids", annotation.unit_ids),
+            ("positions", annotation.positions),
+            ("spans", annotation.spans),
+            ("coordinates", annotation.coordinates),
+            ("provenance", annotation.provenance),
+        ):
+            resolved_values = _optional_aligned_values(values, n_units=unit_count, name=key)
+            if resolved_values is not None:
+                entry[key] = resolved_values
+        entries.append(entry)
+    return entries
 
 
 def _metadata_with_target_metadata(

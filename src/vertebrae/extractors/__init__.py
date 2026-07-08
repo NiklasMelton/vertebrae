@@ -25,6 +25,12 @@ from vertebrae.extractors.spatial import (
     SpatialLayout,
     SpatialOutputSpec,
 )
+from vertebrae.extractors.structured import (
+    CallableStructuredExtractor,
+    PrecomputedStructuredExtractor,
+    StructuredEmbeddingOutput,
+    StructuredOutputSpec,
+)
 from vertebrae.extractors.tensorflow_hub import TFHubExtractor
 from vertebrae.extractors.timm import TimmVisionExtractor
 from vertebrae.extractors.torch import TorchExtractor
@@ -56,8 +62,12 @@ __all__ = [
     "TorchvisionVisionExtractor",
     "TreeLeafEmbeddingExtractor",
     "CallableSpatialExtractor",
+    "CallableStructuredExtractor",
     "PrecomputedSpatialExtractor",
+    "PrecomputedStructuredExtractor",
     "SpatialEmbeddingOutput",
     "SpatialLayout",
     "SpatialOutputSpec",
+    "StructuredEmbeddingOutput",
+    "StructuredOutputSpec",
 ]

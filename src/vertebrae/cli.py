@@ -29,6 +29,7 @@ from vertebrae.execution import (
     materialize_group_artifact,
     materialize_label_artifact,
     materialize_segmentation_artifacts,
+    materialize_structured_artifacts,
     merge_embedding_shards,
     plan_compression_job,
     plan_embedding_shard_jobs,
@@ -121,6 +122,16 @@ def build_parser() -> argparse.ArgumentParser:
     segmentation.add_argument("--batch-size", type=int, default=16)
     segmentation.add_argument("--output-json")
     segmentation.set_defaults(func=_cmd_materialize_segmentation)
+
+    structured = subparsers.add_parser(
+        "materialize-structured",
+        help="Materialize structured unit embeddings, labels, groups, and provenance.",
+    )
+    _add_object_args(structured)
+    _add_cache_arg(structured)
+    structured.add_argument("--batch-size", type=int, default=16)
+    structured.add_argument("--output-json")
+    structured.set_defaults(func=_cmd_materialize_structured)
 
     score = subparsers.add_parser("score", help="Score persisted embeddings and labels.")
     _add_cache_arg(score)
@@ -388,10 +399,25 @@ def _cmd_materialize_segmentation(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_materialize_structured(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    return materialize_structured_artifacts(
+        dataset,
+        extractor,
+        _store_from_args(args),
+        batch_size=args.batch_size,
+    )
+
+
 def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
     plan = _load_json(args.plan_json) if args.plan_json else {}
     embedding_key = args.embedding_key or _resolve_embedding_key_from_plan(plan)
-    labels_key = args.labels_key or plan.get("labels_key")
+    labels_key = args.labels_key or _resolve_related_key_from_plan(
+        plan,
+        embedding_key,
+        "labels_key",
+    )
     if embedding_key is None:
         raise ValueError("score requires --embedding-key or --plan-json.")
     if labels_key is None:
@@ -415,8 +441,16 @@ def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_diagnose_complexity(args: argparse.Namespace) -> dict[str, Any]:
     plan = _load_json(args.plan_json) if args.plan_json else {}
     embedding_key = args.embedding_key or _resolve_embedding_key_from_plan(plan)
-    labels_key = args.labels_key or plan.get("labels_key")
-    groups_key = args.groups_key or plan.get("groups_key")
+    labels_key = args.labels_key or _resolve_related_key_from_plan(
+        plan,
+        embedding_key,
+        "labels_key",
+    )
+    groups_key = args.groups_key or _resolve_related_key_from_plan(
+        plan,
+        embedding_key,
+        "groups_key",
+    )
     if embedding_key is None:
         raise ValueError("diagnose-complexity requires --embedding-key or --plan-json.")
     if labels_key is None:
@@ -783,7 +817,11 @@ def _cache_flag_lines(args: argparse.Namespace, indent: bool = True) -> list[str
 def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]:
     plan = _load_json(args.plan_json) if getattr(args, "plan_json", None) else {}
     embedding_key = getattr(args, "embedding_key", None) or _resolve_embedding_key_from_plan(plan)
-    labels_key = getattr(args, "labels_key", None) or plan.get("labels_key")
+    labels_key = getattr(args, "labels_key", None) or _resolve_related_key_from_plan(
+        plan,
+        embedding_key,
+        "labels_key",
+    )
     if embedding_key is None:
         raise ValueError("An embedding key or plan JSON is required.")
     if labels_key is None:
@@ -792,15 +830,10 @@ def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]
 
 
 def _resolve_embedding_key_from_plan(plan: dict[str, Any]) -> Optional[str]:
-    outputs = plan.get("outputs", [])
-    if not outputs:
+    output = _resolve_plan_output(plan)
+    if output is None:
         return plan.get("output_key")
-    if len(outputs) == 1:
-        return outputs[0].get("output_key")
-    raise ValueError(
-        "This plan contains multiple embedding outputs. Pass --embedding-key with one of the "
-        "output keys listed in the plan JSON."
-    )
+    return output.get("output_key")
 
 
 def _multi_output_plan_names(extractor: Any) -> list[str]:
@@ -866,13 +899,50 @@ def _benchmark_result_from_dict(
 
 
 def _resolve_score_key_from_plan(plan: dict[str, Any], embedding_key: str) -> str:
+    return _resolve_related_key_from_plan(plan, embedding_key, "score_key") or scoring_artifact_key(
+        embedding_key
+    )
+
+
+def _resolve_related_key_from_plan(
+    plan: dict[str, Any],
+    embedding_key: Optional[str],
+    field: str,
+) -> Optional[str]:
     outputs = plan.get("outputs", [])
     if not outputs:
-        return plan.get("score_key") or scoring_artifact_key(embedding_key)
+        return plan.get(field)
+    output = _resolve_plan_output(plan, embedding_key, require_match=False)
+    if output is None:
+        return None
+    if output is not None and output.get(field) is not None:
+        return output.get(field)
+    return plan.get(field)
+
+
+def _resolve_plan_output(
+    plan: dict[str, Any],
+    embedding_key: Optional[str] = None,
+    require_match: bool = True,
+) -> Optional[dict[str, Any]]:
+    outputs = plan.get("outputs", [])
+    if not outputs:
+        return None
+    if embedding_key is None:
+        if len(outputs) == 1:
+            return outputs[0]
+        raise ValueError(
+            "This plan contains multiple embedding outputs. Pass --embedding-key with one of "
+            "the output keys listed in the plan JSON."
+        )
     for output in outputs:
         if output.get("output_key") == embedding_key:
-            return output.get("score_key") or scoring_artifact_key(embedding_key)
-    return scoring_artifact_key(embedding_key)
+            return output
+    if require_match:
+        raise ValueError(
+            "The requested --embedding-key was not found in the plan JSON outputs."
+        )
+    return None
 
 
 def _write_json_payload(payload: dict[str, Any], output_json: Optional[str]) -> None:

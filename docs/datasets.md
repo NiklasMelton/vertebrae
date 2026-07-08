@@ -213,6 +213,103 @@ targets for the same representation. Named target views still describe embedding
 efficacy only; they do not add mAP, IoU, WER, CER, OKS, depth-error, or other
 task-native metrics.
 
+## Raw structured unit annotations
+
+When you want `vertebrae` to materialize raw token, frame, region, keypoint, or
+other structured outputs from an extractor directly, attach per-parent unit
+annotations to the source dataset with `with_unit_annotations(...)`. Each
+annotation describes the aligned supervised unit labels plus optional unit ids,
+positions, spans, coordinates, and provenance.
+
+```python
+from vertebrae import BenchmarkDataset, UnitAnnotation
+
+dataset = BenchmarkDataset.from_arrays(
+    X=texts,
+    y=document_labels,
+    modality="text",
+).with_unit_annotations(
+    [
+        UnitAnnotation(labels=["title", "body"], spans=[[0, 5], [6, 42]]),
+        UnitAnnotation(labels=["body", "footer"], spans=[[0, 30], [31, 40]]),
+    ],
+    unit_type="token",
+)
+```
+
+This keeps the original parent-sample dataset intact until a structured
+extractor materializes one embedding row per retained unit. The same pattern
+works across several structured domains:
+
+- OCR/document layout regions: use `coordinates`, stable `unit_ids`, and page or
+  document provenance per region.
+- ASR or NLP tokens: use `positions`, `spans`, and utterance or sequence
+  provenance per token.
+- Pose or keypoint workflows: use `coordinates` plus frame/person provenance per
+  keypoint.
+
+```python
+layout_dataset = BenchmarkDataset.from_arrays(
+    X=page_images,
+    y=document_labels,
+    modality="image",
+).with_unit_annotations(
+    [
+        UnitAnnotation(
+            labels=["header", "table", "footer"],
+            unit_ids=["page-0:h", "page-0:t", "page-0:f"],
+            coordinates=[
+                [0.05, 0.05, 0.95, 0.18],
+                [0.08, 0.22, 0.92, 0.76],
+                [0.10, 0.82, 0.85, 0.92],
+            ],
+            provenance=[{"page": 0}] * 3,
+        ),
+    ],
+    unit_type="document_region",
+)
+```
+
+```python
+asr_dataset = BenchmarkDataset.from_arrays(
+    X=waveforms,
+    y=utterance_labels,
+    modality="audio",
+).with_unit_annotations(
+    [
+        UnitAnnotation(
+            labels=["greeting", "intent", "entity"],
+            positions=[0, 1, 2],
+            spans=[[0.0, 0.2], [0.2, 0.5], [0.5, 0.9]],
+            provenance=[{"utterance_id": "utt-0"}] * 3,
+        ),
+    ],
+    unit_type="token",
+)
+```
+
+```python
+pose_dataset = BenchmarkDataset.from_arrays(
+    X=frames,
+    y=activity_labels,
+    modality="image",
+).with_unit_annotations(
+    [
+        UnitAnnotation(
+            labels=["shoulder", "elbow", "wrist"],
+            coordinates=[[0.30, 0.20], [0.42, 0.34], [0.55, 0.48]],
+            provenance=[{"frame": 0, "person": "p0"}] * 3,
+        ),
+    ],
+    unit_type="keypoint",
+)
+```
+
+These materialized unit datasets still evaluate embedding efficacy only. They do
+not add native task metrics such as mAP, IoU, WER/CER, OKS, or depth error. The
+downstream workflow is still an embedding-efficacy diagnostic over the flattened
+units, not a task-native OCR, ASR, detection, pose, or depth benchmark.
+
 ## Validation rules
 
 Every constructor validates the dataset immediately. Current validation checks

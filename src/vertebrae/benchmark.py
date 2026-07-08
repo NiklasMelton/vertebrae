@@ -137,6 +137,11 @@ class Benchmark:
             raise ValueError("At least one extractor must be provided.")
         if getattr(self.dataset, "modality", None) == "segmentation":
             return self._run_segmentation()
+        if self.dataset.unit_annotations() and any(
+            callable(getattr(extractor, "transform_structured", None))
+            for extractor in self.extractors
+        ):
+            return self._run_structured()
 
         self._validate_view_config_compatibility()
         evaluation_datasets, label_view_warnings, target_view_warnings = self._evaluation_datasets()
@@ -254,6 +259,94 @@ class Benchmark:
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "scoring_config": asdict(scoring_config),
                 "segmentation_config": asdict(self.segmentation_config),
+                "separatix_config": asdict(self.separatix_config),
+                "compression_configs": [asdict(config) for config in self.compression_configs],
+                "embedding_config": asdict(self.embedding_config),
+                "memory_config": asdict(self.memory_config),
+            },
+        )
+
+    def _run_structured(self) -> BenchmarkResult:
+        from vertebrae.extractors import PrecomputedExtractor
+        from vertebrae.structured import materialize_structured_outputs
+
+        extractor_results: List[ExtractorResult] = []
+        materialization_summaries = []
+        store = create_artifact_store(
+            self.cache_config.cache_dir,
+            **self.cache_config.storage_options,
+        )
+        for extractor in self.extractors:
+            if not callable(getattr(extractor, "transform_structured", None)):
+                raise ValueError(
+                    f"Extractor '{extractor.name}' does not support structured outputs."
+                )
+            materializations = materialize_structured_outputs(
+                dataset=self.dataset,
+                extractor=extractor,
+                batch_size=self.embedding_config.batch_size,
+            )
+            for materialization in materializations:
+                output_dataset: Any = materialization.dataset
+                if materialization.name in self.target_view_config.output_views:
+                    output_dataset = self._mapped_output_dataset(
+                        dataset=materialization.dataset,
+                        output_name=materialization.name,
+                        label_view_warnings=[],
+                        target_view_warnings=[],
+                    )
+                    if output_dataset is None:
+                        continue
+                result = Benchmark(
+                    dataset=output_dataset,
+                    extractors=[
+                        PrecomputedExtractor(
+                            name=_qualified_output_name(extractor.name, materialization.name)
+                        )
+                    ],
+                    scoring_config=self._resolved_scoring_config(output_dataset),
+                    stability_config=self.stability_config,
+                    target_view_config=(
+                        TargetViewConfig()
+                        if materialization.name in self.target_view_config.output_views
+                        else self.target_view_config
+                    ),
+                    separatix_config=self.separatix_config,
+                    cache_config=self.cache_config,
+                    compression_configs=self.compression_configs,
+                    embedding_config=self.embedding_config,
+                    memory_config=self.memory_config,
+                    execution=self.execution,
+                ).run()
+                for item in result.extractor_results:
+                    item.extractor_type = getattr(extractor, "extractor_type", "structured")
+                    item.embedding_metadata["structured"] = materialization.metadata
+                    item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
+                    provenance_key = f"{item.embedding_metadata['cache_key']}/provenance"
+                    item.embedding_metadata["provenance_key"] = provenance_key
+                    if self.cache_config.enabled:
+                        store.put_json(provenance_key, {"rows": materialization.provenance})
+                    extractor_results.append(item)
+                materialization_summaries.append(
+                    {
+                        "extractor": extractor.name,
+                        "output": materialization.name,
+                        **materialization.metadata,
+                    }
+                )
+
+        recommendations = recommendations_for_benchmark(extractor_results)
+        return BenchmarkResult(
+            dataset_summary={
+                **self.dataset.summary(),
+                "structured_outputs": materialization_summaries,
+            },
+            extractor_results=extractor_results,
+            recommendations=recommendations,
+            metadata={
+                "vertebrae_version": __version__,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "scoring_config": asdict(self.scoring_config),
                 "separatix_config": asdict(self.separatix_config),
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),

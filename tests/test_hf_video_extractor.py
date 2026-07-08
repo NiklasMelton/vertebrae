@@ -262,6 +262,22 @@ def test_hf_video_rejects_out_of_range_hidden_layer(fake_video_modules):
         extractor.transform([np.zeros((4, 2, 2, 3), dtype=np.uint8)])
 
 
+def test_hf_video_supports_structured_frame_outputs(fake_video_modules):
+    extractor = HFVideoExtractor(
+        "video",
+        "fake-video",
+        batch_size=2,
+        structured_outputs=[{"name": "frames", "hidden_layer": 2, "special_tokens": 1}],
+    )
+
+    output = extractor.transform_structured([np.zeros((4, 2, 2, 3), dtype=np.uint8)] * 2)[0]
+
+    assert output.name == "frames"
+    assert output.unit_type == "frame"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (4, 6)
+
+
 def test_hf_video_flattens_spatial_pooler_output(fake_video_modules, monkeypatch):
     monkeypatch.setitem(
         sys.modules,

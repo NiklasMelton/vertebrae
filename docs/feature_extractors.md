@@ -33,6 +33,16 @@ Dense segmentation workflows use `SpatialOutputSpec`, `SpatialLayout`, and
 `spatial_outputs`. Spatial geometry must be declared rather than inferred from
 ambiguous model outputs.
 
+Structured unit workflows use `StructuredOutputSpec` and
+`StructuredEmbeddingOutput`. `CallableStructuredExtractor` and
+`PrecomputedStructuredExtractor` cover explicit adapters, while
+`TorchExtractor`, `KerasExtractor`, `HFTextExtractor`, `HFAudioExtractor`,
+`HFVisionExtractor`, and `HFVideoExtractor` can expose native
+`transform_structured(...)` outputs alongside ordinary pooled embeddings.
+Structured outputs are intended for raw token, frame, region, keypoint, or
+other per-parent unit matrices that should be materialized and scored as unit
+embeddings without first precomputing a flat embedding dataset by hand.
+
 Every extractor implements:
 
 ```python

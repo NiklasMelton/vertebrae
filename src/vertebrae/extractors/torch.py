@@ -9,6 +9,11 @@ from vertebrae.extractors.spatial import (
     SpatialOutputSpec,
     _per_image_values,
 )
+from vertebrae.extractors.structured import (
+    StructuredEmbeddingOutput,
+    StructuredOutputSpec,
+    _per_parent_structured_values,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -46,6 +51,8 @@ class TorchExtractor:
         move_model_to_device: bool = True,
         spatial_output_fn: Optional[Callable[[Any], Any]] = None,
         spatial_output_specs: Optional[Iterable[SpatialOutputSpec]] = None,
+        structured_output_fn: Optional[Callable[[Any], Any]] = None,
+        structured_output_specs: Optional[Iterable[StructuredOutputSpec]] = None,
     ) -> None:
         self.name = name
         self.model = model
@@ -61,9 +68,15 @@ class TorchExtractor:
         self.move_model_to_device = move_model_to_device
         self.spatial_output_fn = spatial_output_fn
         self._spatial_output_specs = list(spatial_output_specs or [])
+        self.structured_output_fn = structured_output_fn
+        self._structured_output_specs = list(structured_output_specs or [])
         if (self.spatial_output_fn is None) != (not self._spatial_output_specs):
             raise ValueError(
                 "spatial_output_fn and spatial_output_specs must be provided together."
+            )
+        if (self.structured_output_fn is None) != (not self._structured_output_specs):
+            raise ValueError(
+                "structured_output_fn and structured_output_specs must be provided together."
             )
         self._torch: Any = None
         self._model_moved = False
@@ -123,6 +136,33 @@ class TorchExtractor:
             for spec in self._spatial_output_specs
         ]
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if self.structured_output_fn is None:
+            raise ValueError("TorchExtractor was not configured with structured outputs.")
+        torch_module = self._load_torch()
+        self._maybe_move_model(torch_module)
+        batch = self.collate_fn(X)
+        if self.device is not None and self.move_batch_to_device:
+            batch = self._move_to_device(batch, torch_module)
+        values = self._to_numpy_nested(self.structured_output_fn(self._call_model(batch)))
+        if not isinstance(values, dict) and len(self._structured_output_specs) == 1:
+            values = {self._structured_output_specs[0].name: values}
+        if not isinstance(values, dict):
+            raise ValueError("Multi-output Torch structured adapters must return a mapping.")
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=_per_parent_structured_values(values[spec.name], spec.unit_type),
+                unit_type=spec.unit_type,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable recipe for this extractor."""
 
@@ -152,6 +192,20 @@ class TorchExtractor:
                     "metadata": spec.metadata,
                 }
                 for spec in self._spatial_output_specs
+            ],
+            "structured_output_fn": (
+                _callable_name(self.structured_output_fn)
+                if self.structured_output_fn is not None
+                else None
+            ),
+            "structured_outputs": [
+                {
+                    "name": spec.name,
+                    "unit_type": spec.unit_type,
+                    "hidden_layer": spec.hidden_layer,
+                    "metadata": spec.metadata,
+                }
+                for spec in self._structured_output_specs
             ],
         }
 

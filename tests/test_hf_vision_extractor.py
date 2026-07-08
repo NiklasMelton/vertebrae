@@ -263,6 +263,22 @@ def test_hf_vision_rejects_pooler_with_hidden_layer(fake_vision_modules):
         extractor.transform([np.zeros((4, 4, 3), dtype=np.uint8)])
 
 
+def test_hf_vision_supports_structured_region_outputs(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        structured_outputs=[{"name": "regions", "hidden_layer": 2, "special_tokens": 1}],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured([np.zeros((4, 4, 3), dtype=np.uint8)] * 2)[0]
+
+    assert output.name == "regions"
+    assert output.unit_type == "region"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (4, 6)
+
+
 def test_hf_vision_rejects_out_of_range_hidden_layer(fake_vision_modules):
     extractor = HFVisionExtractor(
         "vit",

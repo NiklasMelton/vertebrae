@@ -11,6 +11,7 @@ from vertebrae.extractors.spatial import (
     SpatialLayout,
     SpatialOutputSpec,
 )
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 
 class HFVisionExtractor:
@@ -53,6 +54,7 @@ class HFVisionExtractor:
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         spatial_outputs: Optional[List[Dict[str, Any]]] = None,
+        structured_outputs: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         if pooling not in {"cls", "mean", "pooler"}:
             raise ValueError("pooling must be one of: cls, mean, pooler.")
@@ -79,6 +81,7 @@ class HFVisionExtractor:
         self.processor_kwargs = processor_kwargs or {}
         self.model_kwargs = model_kwargs or {}
         self._spatial_output_specs = _resolve_spatial_output_specs(spatial_outputs)
+        self._structured_output_specs = _resolve_structured_output_specs(structured_outputs)
         self.modality = "image"
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
@@ -227,6 +230,43 @@ class HFVisionExtractor:
             for spec in self._spatial_output_specs
         ]
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError("HFVisionExtractor was not configured with structured_outputs.")
+        processor, model, torch, image_module = self._load_model()
+        collected: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._structured_output_specs
+        }
+        model.eval()
+        with torch.no_grad():
+            for items in _iter_chunks(_as_iterable(X), self.batch_size):
+                batch = [
+                    _coerce_image(item, image_module, self.image_mode, self.alpha_mode)
+                    for item in items
+                ]
+                encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
+                encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
+                model_output = model(**encoded, output_hidden_states=True)
+                for spec in self._structured_output_specs:
+                    hidden = self._select_hidden_state(model_output, spec.hidden_layer or -1)
+                    values = hidden.detach().cpu().numpy().astype(np.float32, copy=False)
+                    special_tokens = int(spec.metadata.get("special_tokens", 1))
+                    for index in range(values.shape[0]):
+                        collected[spec.name].append(values[index, special_tokens:])
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=collected[spec.name],
+                unit_type=spec.unit_type,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable Hugging Face vision recipe.
 
@@ -274,6 +314,10 @@ class HFVisionExtractor:
                     ),
                 }
                 for spec in self._spatial_output_specs
+            ]
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                _structured_spec_to_dict(spec) for spec in self._structured_output_specs
             ]
         return recipe
 
@@ -448,6 +492,39 @@ def _resolve_spatial_output_specs(
     if len(names) != len(set(names)):
         raise ValueError("HFVisionExtractor spatial output names must be unique.")
     return specs
+
+
+def _resolve_structured_output_specs(
+    outputs: Optional[List[Dict[str, Any]]],
+) -> List[StructuredOutputSpec]:
+    specs = []
+    for raw in outputs or []:
+        if "name" not in raw:
+            raise ValueError("HFVisionExtractor structured outputs must include a name.")
+        specs.append(
+            StructuredOutputSpec(
+                name=str(raw["name"]),
+                unit_type=str(raw.get("unit_type", "region")),
+                hidden_layer=raw.get("hidden_layer"),
+                metadata={
+                    "special_tokens": int(raw.get("special_tokens", 1)),
+                    **dict(raw.get("metadata", {})),
+                },
+            )
+        )
+    names = [spec.name for spec in specs]
+    if len(names) != len(set(names)):
+        raise ValueError("HFVisionExtractor structured output names must be unique.")
+    return specs
+
+
+def _structured_spec_to_dict(spec: StructuredOutputSpec) -> Dict[str, Any]:
+    return {
+        "name": spec.name,
+        "unit_type": spec.unit_type,
+        "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
+    }
 
 
 _IMAGE_MODES = {"auto", "rgb", "grayscale", "preserve"}
