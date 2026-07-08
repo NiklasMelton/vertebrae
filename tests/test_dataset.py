@@ -28,6 +28,146 @@ def test_from_arrays_rejects_missing_labels():
         )
 
 
+def test_from_graphs_preserves_modality_and_metadata():
+    graphs = [{"nodes": 3}, {"nodes": 4}, {"nodes": 5}, {"nodes": 6}]
+
+    dataset = BenchmarkDataset.from_graphs(
+        graphs,
+        ["a", "a", "b", "b"],
+        metadata={"split": "train"},
+    )
+
+    assert dataset.modality == "graph"
+    assert dataset.metadata["source"] == "graphs"
+    assert dataset.metadata["split"] == "train"
+    assert dataset.X.dtype == object
+
+
+def test_from_node_embeddings_preserves_node_provenance_and_subsets():
+    embeddings = np.arange(24, dtype=float).reshape(6, 4)
+    labels = ["a", "a", "a", "b", "b", "b"]
+
+    dataset = BenchmarkDataset.from_node_embeddings(
+        embeddings,
+        labels,
+        node_ids=["n0", "n1", "n2", "n3", "n4", "n5"],
+        edge_index=[["n0", "n1"], ["n2", "n3"]],
+    )
+    subset = dataset.subset([1, 2, 4, 5])
+
+    assert dataset.modality == "embeddings"
+    assert dataset.metadata["relational_unit"] == "node"
+    assert dataset.metadata["node_ids"] == ["n0", "n1", "n2", "n3", "n4", "n5"]
+    assert dataset.metadata["edge_index"] == [["n0", "n1"], ["n2", "n3"]]
+    assert subset.metadata["node_ids"] == ["n1", "n2", "n4", "n5"]
+    assert subset.summary()["metadata"]["modality_detail"] == "graph_node_embeddings"
+
+
+def test_from_entity_embeddings_supports_regression_targets():
+    dataset = BenchmarkDataset.from_entity_embeddings(
+        np.arange(18, dtype=float).reshape(6, 3),
+        np.linspace(0.0, 1.0, 6),
+        entity_ids=["u0", "u1", "u2", "u3", "u4", "u5"],
+        entity_type="user",
+        target_type="regression",
+        target_names=["retention"],
+    )
+
+    assert dataset.metadata["relational_unit"] == "entity"
+    assert dataset.metadata["entity_type"] == "user"
+    assert dataset.metadata["entity_ids"] == ["u0", "u1", "u2", "u3", "u4", "u5"]
+    assert dataset.summary()["target_type"] == "regression"
+
+
+def test_from_edge_embeddings_composes_node_pairs():
+    node_embeddings = np.array(
+        [
+            [1.0, 2.0],
+            [3.0, 5.0],
+            [2.0, 7.0],
+            [11.0, 13.0],
+        ]
+    )
+
+    dataset = BenchmarkDataset.from_edge_embeddings(
+        labels=["same", "same", "diff", "diff"],
+        edge_index=[["a", "b"], ["b", "c"], ["a", "d"], ["c", "d"]],
+        node_embeddings=node_embeddings,
+        node_ids=["a", "b", "c", "d"],
+        composition="hadamard",
+    )
+
+    assert dataset.metadata["relational_unit"] == "edge"
+    assert dataset.metadata["embedding_source"] == "composed_node_embeddings"
+    assert dataset.X.tolist()[0] == [3.0, 10.0]
+    assert dataset.X.shape == (4, 2)
+
+
+def test_from_pair_embeddings_composes_entity_pairs_with_abs_diff():
+    entity_embeddings = np.array(
+        [
+            [1.0, 2.0, 3.0],
+            [3.0, 1.0, 7.0],
+            [4.0, 4.0, 4.0],
+            [9.0, 1.0, 2.0],
+        ]
+    )
+
+    dataset = BenchmarkDataset.from_pair_embeddings(
+        labels=["near", "near", "far", "far"],
+        pairs=[["q0", "d0"], ["q0", "d1"], ["q1", "d0"], ["d1", "d0"]],
+        entity_embeddings=entity_embeddings,
+        entity_ids=["q0", "d0", "q1", "d1"],
+    )
+
+    assert dataset.metadata["relational_unit"] == "pair"
+    assert dataset.metadata["pair_ids"][0] == ["q0", "d0"]
+    assert dataset.X.tolist()[0] == [2.0, 1.0, 4.0]
+
+
+def test_from_triplet_embeddings_composes_positive_and_negative_pairs():
+    entity_embeddings = np.array(
+        [
+            [1.0, 1.0],
+            [2.0, 1.0],
+            [5.0, 8.0],
+            [3.0, 1.0],
+        ]
+    )
+
+    dataset = BenchmarkDataset.from_triplet_embeddings(
+        labels=["ok", "ok", "bad", "bad"],
+        triplets=[[0, 1, 2], [0, 3, 2], [2, 1, 0], [2, 3, 0]],
+        entity_embeddings=entity_embeddings,
+        composition="abs_diff",
+    )
+
+    assert dataset.metadata["relational_unit"] == "triplet"
+    assert dataset.X.shape == (4, 4)
+    assert dataset.X.tolist()[0] == [1.0, 0.0, 4.0, 7.0]
+
+
+def test_relational_constructors_validate_alignment():
+    with pytest.raises(ValueError, match="node_ids must have length"):
+        BenchmarkDataset.from_node_embeddings(
+            np.zeros((4, 2)),
+            ["a", "a", "b", "b"],
+            node_ids=["n0"],
+        )
+    with pytest.raises(ValueError, match="unknown ids"):
+        BenchmarkDataset.from_pair_embeddings(
+            labels=["a", "a", "b", "b"],
+            pairs=[
+                ["known", "missing"],
+                ["known", "known"],
+                ["known", "known"],
+                ["known", "known"],
+            ],
+            entity_embeddings=np.zeros((2, 2)),
+            entity_ids=["known", "other"],
+        )
+
+
 def test_from_dataframe_preserves_columns_and_counts():
     df = pd.DataFrame({"text": ["one", "two", "three", "four"], "label": ["a", "a", "b", "b"]})
 

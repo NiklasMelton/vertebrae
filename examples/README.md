@@ -10,6 +10,7 @@ Run them from the project root:
 ```bash
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/precomputed_embeddings.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/multilabel_precomputed_embeddings.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/relational_embeddings.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_text_pipeline.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_tabular_pipeline.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_wine_pipeline.py
@@ -30,6 +31,9 @@ Each script writes reports to `examples/output/`.
   elsewhere.
 - `multilabel_precomputed_embeddings.py`: evaluate precomputed embeddings against
   a small multi-label classification target.
+- `relational_embeddings.py`: evaluate graph node and edge embeddings through the
+  same overlap-based transfer-learning diagnostics as other precomputed
+  embeddings. This is not a graph-link, retrieval, or ranking benchmark.
 - `sklearn_text_pipeline.py`: build embeddings from a pandas text dataframe with a
   scikit-learn pipeline.
 - `sklearn_tabular_pipeline.py`: build embeddings from mixed numeric/categorical
@@ -67,6 +71,12 @@ Each script writes reports to `examples/output/`.
   is not already present locally.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
+
+The library also now exposes first-class adapters for timm, torchvision,
+OpenCLIP/SigLIP-style image-text models, TensorFlow Hub, JAX/Flax, tree leaf
+embeddings, graph models, and hosted embedding APIs. Those integrations are
+covered in unit tests with fake modules today; dedicated runnable example
+scripts can be added as the public ergonomics settle.
 
 The examples configure small `k` values and a few stability repeats so they finish
 quickly while still exercising the real MiniBatchKMeans-backed OverlapIndex path.

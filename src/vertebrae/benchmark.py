@@ -849,8 +849,9 @@ class Benchmark:
         dataset_key = dataset.fingerprint()
         extractor_key = fingerprint_extractor_recipe(recipe)
         cache_key = f"embeddings/{dataset_key}/{extractor_key}"
+        embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
         if (
-            self.cache_config.enabled
+            embedding_cache_enabled
             and not self.cache_config.force_recompute
             and store.exists(cache_key)
         ):
@@ -871,7 +872,7 @@ class Benchmark:
                 probe_plan,
             )
             metadata.update(subsampling_metadata or {})
-            if self.cache_config.enabled:
+            if embedding_cache_enabled:
                 store.put_json(cache_key, metadata)
             return embeddings, metadata
 
@@ -900,7 +901,7 @@ class Benchmark:
             ),
         )
         metadata.update(subsampling_metadata or {})
-        if self.cache_config.enabled:
+        if embedding_cache_enabled:
             store.put_array(cache_key, embeddings)
             store.put_json(cache_key, metadata)
         return embeddings, metadata
@@ -917,7 +918,8 @@ class Benchmark:
         base_key = f"embeddings/{dataset.fingerprint()}/{fingerprint_extractor_recipe(recipe)}"
         specs = self._output_specs(extractor)
         cache_keys = {spec.name: self._output_cache_key(base_key, spec.name) for spec in specs}
-        if self.cache_config.enabled and not self.cache_config.force_recompute:
+        embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
+        if embedding_cache_enabled and not self.cache_config.force_recompute:
             if all(store.exists(cache_key) for cache_key in cache_keys.values()):
                 variants = []
                 for spec in specs:
@@ -940,7 +942,7 @@ class Benchmark:
             )
             for variant in variants:
                 variant["metadata"].update(subsampling_metadata or {})
-            if self.cache_config.enabled:
+            if embedding_cache_enabled:
                 for variant in variants:
                     store.put_json(variant["metadata"]["cache_key"], variant["metadata"])
             return variants
@@ -969,7 +971,7 @@ class Benchmark:
                 output_metadata=output.metadata,
             )
             metadata.update(subsampling_metadata or {})
-            if self.cache_config.enabled:
+            if embedding_cache_enabled:
                 store.put_array(cache_key, output.embeddings)
                 store.put_json(cache_key, metadata)
             variants.append({"embeddings": output.embeddings, "metadata": metadata})
@@ -1031,6 +1033,7 @@ class Benchmark:
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None,
     ) -> Tuple[Any, dict]:
         n_samples = len(dataset.y)
+        embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
         batch_iterator = iter(
             dataset.iter_batches(
                 batch_size=self.embedding_config.batch_size,
@@ -1064,7 +1067,7 @@ class Benchmark:
             first_embeddings,
             self._embedding_batches_from(extractor, batch_iterator),
         )
-        if self.cache_config.enabled:
+        if embedding_cache_enabled:
             store.put_array_batches(
                 cache_key,
                 batch_pairs,
@@ -1076,8 +1079,8 @@ class Benchmark:
             if memory_estimate.strategy == "stream_to_disk":
                 raise ValueError(
                     "Embedding artifact is estimated to exceed the memory budget, but "
-                    "CacheConfig.enabled=False prevents streaming it to disk. Enable "
-                    "the cache or increase MemoryConfig.max_memory_bytes."
+                    "embedding caching is disabled for this extractor. Enable caching for "
+                    "the extractor or increase MemoryConfig.max_memory_bytes."
                 )
             embeddings = _combine_embedding_batches(
                 batch_pairs,
@@ -1110,6 +1113,7 @@ class Benchmark:
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None,
     ) -> List[dict]:
         n_samples = len(dataset.y)
+        embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
         batch_iterator = iter(
             dataset.iter_batches(
                 batch_size=self.embedding_config.batch_size,
@@ -1177,7 +1181,7 @@ class Benchmark:
             metadata["multi_output_memory_estimate"] = {
                 key: value for key, value in aggregate.items() if key != "per_output"
             }
-            if self.cache_config.enabled:
+            if embedding_cache_enabled:
                 store.put_array(cache_key, embeddings)
             variants.append({"embeddings": embeddings, "metadata": metadata})
         return variants
@@ -1418,6 +1422,9 @@ class Benchmark:
             self.memory_config,
             purpose="Dense scoring input",
         )
+
+    def _cache_embeddings_enabled(self, extractor: Any) -> bool:
+        return self.cache_config.enabled and bool(getattr(extractor, "cache_embeddings", True))
 
     def _output_cache_key(self, base_key: str, output_name: str) -> str:
         safe_name = str(output_name).replace("/", "_")

@@ -3,6 +3,8 @@
 Runnable examples live in `examples/`:
 
 - `precomputed_embeddings.py`: score synthetic precomputed embeddings.
+- `relational_embeddings.py`: evaluate graph node and edge embeddings as
+  supervised transfer-learning diagnostics.
 - `sklearn_text_pipeline.py`: evaluate a TF-IDF + SVD text pipeline.
 - `sklearn_tabular_pipeline.py`: evaluate mixed numeric/categorical tabular features.
 - `sklearn_wine_pipeline.py`: compare real scaling/projection pipelines on the
@@ -23,6 +25,12 @@ Runnable examples live in `examples/`:
   and optional gated DINOv3 embeddings. It reuses a local Caltech-101 download
   when available, otherwise it downloads the dataset archive.
 - `sentence_transformer_extractor.py`: demonstrate the sentence-transformers API.
+
+Additional first-class extractor families now supported by the library include
+timm, torchvision, OpenCLIP/SigLIP-style image-text models, TensorFlow Hub,
+JAX/Flax adapters, tree leaf embeddings, graph models, and hosted embedding
+APIs. The test suite covers these with fake modules and synthetic inputs; the
+repository does not yet ship dedicated runnable example scripts for each one.
 
 Run local examples from the repository root:
 

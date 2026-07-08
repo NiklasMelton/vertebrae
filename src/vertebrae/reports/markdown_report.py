@@ -66,6 +66,12 @@ def render_markdown_report(result: Any) -> str:
         lines.append(f"- Modalities: {dataset_metadata['modalities']}")
     if dataset_metadata.get("input_fields"):
         lines.append(f"- Input fields: {dataset_metadata['input_fields']}")
+    if dataset_metadata.get("relational_unit"):
+        lines.append(f"- Relational unit: {dataset_metadata['relational_unit']}")
+    if dataset_metadata.get("entity_type"):
+        lines.append(f"- Entity type: {dataset_metadata['entity_type']}")
+    if dataset_metadata.get("composition"):
+        lines.append(f"- Embedding composition: {dataset_metadata['composition']}")
     lines.extend(
         [
             "",
