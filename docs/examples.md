@@ -3,6 +3,8 @@
 Runnable examples live in `examples/`:
 
 - `precomputed_embeddings.py`: score synthetic precomputed embeddings.
+- `relational_embeddings.py`: evaluate graph node and edge embeddings as
+  supervised transfer-learning diagnostics.
 - `sklearn_text_pipeline.py`: evaluate a TF-IDF + SVD text pipeline.
 - `sklearn_tabular_pipeline.py`: evaluate mixed numeric/categorical tabular features.
 - `sklearn_wine_pipeline.py`: compare real scaling/projection pipelines on the

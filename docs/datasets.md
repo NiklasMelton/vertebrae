@@ -31,6 +31,15 @@ Use the constructor that matches the form of your source data:
   such as image-text or audio-text classification datasets.
 - `BenchmarkDataset.from_graphs(...)` for aligned graph objects used by
   graph-level PyG or DGL extractors.
+- `BenchmarkDataset.from_node_embeddings(...)` for labeled graph-node embeddings.
+- `BenchmarkDataset.from_edge_embeddings(...)` for labeled graph-edge embeddings
+  or edge rows composed from node embeddings.
+- `BenchmarkDataset.from_entity_embeddings(...)` for labeled user, item, query,
+  document, or other entity embeddings.
+- `BenchmarkDataset.from_pair_embeddings(...)` for labeled pair embeddings or pair
+  rows composed from entity embeddings.
+- `BenchmarkDataset.from_triplet_embeddings(...)` for supervised triplet-derived
+  embedding rows.
 
 Regression datasets are opt-in. Pass `target_type="regression"` so numeric class
 identifiers are not reinterpreted as continuous targets by accident:
@@ -78,6 +87,41 @@ embedding_dataset = BenchmarkDataset.from_embeddings(
     metadata={"backbone": "resnet50"},
 )
 ```
+
+Relational embedding constructors are still ordinary supervised embedding
+datasets. They are intended for transfer-learning diagnostics where each node,
+edge, entity, pair, or triplet-derived row has an aligned label or regression
+target. They do not run retrieval, recommender, ranking, mAP, NDCG, MRR, or
+candidate-set evaluation.
+
+```python
+from vertebrae import BenchmarkDataset
+
+node_dataset = BenchmarkDataset.from_node_embeddings(
+    embeddings=node_z,
+    labels=node_labels,
+    node_ids=node_ids,
+    edge_index=edge_index,
+)
+```
+
+For edge or pair labels, you can either pass precomputed row embeddings or compose
+them from endpoint/entity embeddings:
+
+```python
+edge_dataset = BenchmarkDataset.from_edge_embeddings(
+    labels=edge_labels,
+    edge_index=edge_index,
+    node_embeddings=node_z,
+    node_ids=node_ids,
+    composition="hadamard",
+)
+```
+
+Supported composition methods are `concat`, `hadamard`, `abs_diff`, and
+`average`. Triplet construction composes anchor-positive and anchor-negative pairs
+with the selected method, then concatenates those two pair representations into one
+supervised row.
 
 Multi-label datasets can use per-sample label sequences:
 
@@ -148,6 +192,10 @@ Common values are:
 - `"embeddings"`
 - `"multimodal"`
 - `"graph"`
+
+Relational embedding constructors use modality `"embeddings"` and preserve a
+`relational_unit` metadata field such as `"node"`, `"edge"`, `"entity"`,
+`"pair"`, or `"triplet"`.
 
 `metadata` is preserved through benchmarking so reports can retain source context
 such as dataset name, split, backbone provenance, or collection notes.

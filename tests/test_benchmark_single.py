@@ -51,3 +51,33 @@ def test_native_probes_are_disabled_by_default(fake_overlapindex):
     item = result.extractor_results[0]
     assert item.probes is None
     assert result.metadata["probe_config"]["enabled"] is False
+
+
+def test_node_embedding_dataset_runs_through_existing_benchmark(tmp_path, fake_overlapindex):
+    embeddings = np.vstack(
+        [
+            np.random.default_rng(2).normal(loc=0, scale=0.1, size=(6, 3)),
+            np.random.default_rng(3).normal(loc=3, scale=0.1, size=(6, 3)),
+        ]
+    )
+    labels = np.array(["low"] * 6 + ["high"] * 6)
+    dataset = BenchmarkDataset.from_node_embeddings(
+        embeddings,
+        labels,
+        node_ids=[f"node-{idx}" for idx in range(12)],
+    )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor(name="node-embeddings"),
+        stability_config=StabilityConfig(enabled=False),
+        probe_config=ProbeConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+    markdown_path = tmp_path / "node_report.md"
+    result.save_markdown(str(markdown_path))
+
+    item = result.extractor_results[0]
+    assert item.overlap.metadata["target_type"] == "single_label"
+    assert result.dataset_summary["metadata"]["relational_unit"] == "node"
+    assert "Relational unit: node" in markdown_path.read_text(encoding="utf-8")

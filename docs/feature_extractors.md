@@ -140,9 +140,19 @@ shape `(time, height, width, channels)`, or structured dictionaries containing
 or `(n, time, channels)`, plus optional structured fields such as
 `observed_mask` and `time_features`.
 
-Graph extractors operate at graph level in this release: each sample corresponds
-to one graph object and each output row corresponds to one graph embedding.
-Use `BenchmarkDataset.from_graphs(...)` for graph-level workflows. Hosted API
+Graph extractors operate at graph level by default: each sample corresponds to one
+graph object and each output row corresponds to one graph embedding. Use
+`BenchmarkDataset.from_graphs(...)` for graph-level workflows.
+
+For transfer-learning diagnostics over node or edge embeddings, keep the same
+embedding-efficacy contract: materialize one embedding row per labeled node or
+edge and evaluate it with `BenchmarkDataset.from_node_embeddings(...)` or
+`BenchmarkDataset.from_edge_embeddings(...)`. `GraphModelExtractor` accepts
+`output_level="graph"`, `"node"`, or `"edge"` as recipe metadata for wrappers whose
+model/output adapter already returns that level, but it does not add graph task
+metrics or ranking protocols.
+
+Hosted API
 extractors are streaming-safe, but benchmark artifact reuse is only enabled when
 the extractor sets `cache_embeddings=True`.
 

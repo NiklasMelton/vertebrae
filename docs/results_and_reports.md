@@ -97,6 +97,12 @@ At a high level, reports include:
 Segmentation reports also include source-image counts, candidate and retained
 tokens, ignored-token reasons, background counts, and spatial layout metadata.
 
+Relational embedding datasets report their `relational_unit` metadata, such as
+`node`, `edge`, `entity`, `pair`, or `triplet`, plus composition metadata when rows
+were derived from endpoint embeddings. These reports still describe supervised
+embedding efficacy through overlap or continuous overlap scores; they are not
+retrieval, recommender, or ranking benchmark reports.
+
 Separatix is the default classifier-complexity diagnostic when the overlap gate
 passes, including multi-label datasets. Native vertebrae probes remain available
 as an explicit quick-check option through `ProbeConfig(enabled=True)`; they skip

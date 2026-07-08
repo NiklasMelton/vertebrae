@@ -25,11 +25,14 @@ class GraphModelExtractor:
         recipe_data: Optional[Dict[str, Any]] = None,
         allow_sparse: bool = False,
         streaming_safe: bool = True,
+        output_level: str = "graph",
         move_batch_to_device: bool = True,
         move_model_to_device: bool = True,
     ) -> None:
         if framework not in {None, "dgl", "pyg"}:
             raise ValueError("framework must be one of: None, 'pyg', 'dgl'.")
+        if output_level not in {"graph", "node", "edge"}:
+            raise ValueError("output_level must be one of: 'graph', 'node', 'edge'.")
         self.name = name
         self.model = model
         self.collate_fn = collate_fn
@@ -39,6 +42,7 @@ class GraphModelExtractor:
         self.recipe_data = recipe_data or {}
         self.allow_sparse = allow_sparse
         self.streaming_safe = streaming_safe
+        self.output_level = output_level
         self.move_batch_to_device = move_batch_to_device
         self.move_model_to_device = move_model_to_device
         self.modality = "graph"
@@ -83,6 +87,7 @@ class GraphModelExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
+            "output_level": self.output_level,
             "move_batch_to_device": self.move_batch_to_device,
             "move_model_to_device": self.move_model_to_device,
         }
