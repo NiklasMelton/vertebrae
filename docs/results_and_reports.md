@@ -102,6 +102,12 @@ At a high level, reports include:
 Segmentation reports also include source-image counts, candidate and retained
 tokens, ignored-token reasons, background counts, and spatial layout metadata.
 
+Structured-output reports and tabular summaries also surface `task_family`,
+`alignment_mode`, and `alignment_recipe` when raw token, frame, region,
+keypoint, depth, or latent-unit outputs were materialized before scoring. The
+same fields are preserved in structured artifact manifests so artifact-backed
+workflows can inspect alignment choices without reopening Python objects.
+
 Relational embedding datasets report their `relational_unit` metadata, such as
 `node`, `edge`, `entity`, `pair`, or `triplet`, plus composition metadata when rows
 were derived from endpoint embeddings. These reports still describe supervised

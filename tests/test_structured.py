@@ -6,6 +6,7 @@ from vertebrae import (
     CallableStructuredExtractor,
     TargetView,
     UnitAnnotation,
+    drop_special_rows,
 )
 from vertebrae.cache import LocalArtifactStore
 from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
@@ -45,7 +46,7 @@ def _dataset():
         ["doc_a", "doc_a", "doc_b", "doc_b"],
         modality="text",
     ).with_target_views([TargetView(name="coarse", targets=["left", "left", "right", "right"])])
-    return dataset.with_unit_annotations(_annotations(), unit_type="token")
+    return dataset.with_unit_annotations(_annotations(), unit_type="token", task_family="sequence")
 
 
 def _extractor():
@@ -103,12 +104,31 @@ def test_structured_benchmark_reuses_standard_scoring_pipeline(tmp_path, fake_ov
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         stability_config=StabilityConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
+        structured_aligners={"tokens": drop_special_rows()},
     ).run()
 
     item = result.extractor_results[0]
     assert item.name == "structured:tokens"
     assert item.embedding_metadata["structured"]["n_units"] == 8
     assert result.dataset_summary["structured_outputs"][0]["unit_type"] == "token"
+    assert result.dataset_summary["structured_outputs"][0]["task_family"] == "sequence"
+    assert result.dataset_summary["structured_outputs"][0]["alignment_mode"] == "explicit"
+    assert (
+        item.embedding_metadata["structured"]["alignment_recipe"]["name"]
+        == "drop_special_rows"
+    )
+    frame = result.to_dataframe()
+    assert frame.loc[0, "task_family"] == "sequence"
+    assert frame.loc[0, "alignment_mode"] == "explicit"
+    assert frame.loc[0, "alignment_recipe"]["name"] == "drop_special_rows"
+
+    markdown_path = tmp_path / "structured_report.md"
+    result.save_markdown(str(markdown_path))
+    report = markdown_path.read_text(encoding="utf-8")
+    assert "## Structured outputs" in report
+    assert "Structured task family: sequence" in report
+    assert "Alignment mode: explicit" in report
+    assert "drop_special_rows (drop_special_rows)" in report
 
 
 def test_structured_artifacts_have_independent_output_boundaries(tmp_path):
@@ -122,3 +142,6 @@ def test_structured_artifacts_have_independent_output_boundaries(tmp_path):
     assert store.get_labels(output["labels_key"]).shape == (8,)
     assert store.get_labels(output["groups_key"]).tolist() == [0, 0, 1, 1, 2, 2, 3, 3]
     assert len(store.get_json(output["provenance_key"])["rows"]) == 8
+    assert output["task_family"] == "sequence"
+    assert output["alignment_mode"] == "strict"
+    assert output["alignment_recipe"] is None

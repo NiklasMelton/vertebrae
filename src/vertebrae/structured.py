@@ -53,6 +53,139 @@ class StructuredUnitAligner:
         }
 
 
+def drop_special_rows(
+    leading: int = 0,
+    trailing: int = 0,
+    *,
+    name: str = "drop_special_rows",
+) -> StructuredUnitAligner:
+    """Return an aligner that drops fixed leading/trailing embedding rows."""
+
+    if int(leading) < 0:
+        raise ValueError("drop_special_rows(...) requires leading >= 0.")
+    if int(trailing) < 0:
+        raise ValueError("drop_special_rows(...) requires trailing >= 0.")
+    policy = _DropSpecialRowsPolicy(leading=int(leading), trailing=int(trailing))
+    return StructuredUnitAligner(
+        name=name,
+        align_fn=policy,
+        recipe_data={
+            "policy": "drop_special_rows",
+            "leading": int(leading),
+            "trailing": int(trailing),
+        },
+    )
+
+
+def keep_row_indices(
+    embedding_indices: Sequence[int],
+    annotation_indices: Optional[Sequence[int]] = None,
+    *,
+    name: str = "keep_row_indices",
+) -> StructuredUnitAligner:
+    """Return an aligner that keeps an explicit subset of embedding rows."""
+
+    resolved_embedding_indices = _coerce_index_array(
+        embedding_indices,
+        arg_name="embedding_indices",
+        helper_name="keep_row_indices",
+    )
+    if annotation_indices is None:
+        resolved_annotation_indices = np.arange(len(resolved_embedding_indices), dtype=int)
+    else:
+        resolved_annotation_indices = _coerce_index_array(
+            annotation_indices,
+            arg_name="annotation_indices",
+            helper_name="keep_row_indices",
+        )
+        if len(resolved_annotation_indices) != len(resolved_embedding_indices):
+            raise ValueError(
+                "keep_row_indices(...) requires annotation_indices and "
+                "embedding_indices to have the same length."
+            )
+    policy = _KeepRowIndicesPolicy(
+        embedding_indices=tuple(int(index) for index in resolved_embedding_indices.tolist()),
+        annotation_indices=tuple(int(index) for index in resolved_annotation_indices.tolist()),
+    )
+    return StructuredUnitAligner(
+        name=name,
+        align_fn=policy,
+        recipe_data={
+            "policy": "keep_row_indices",
+            "embedding_indices": resolved_embedding_indices.tolist(),
+            "annotation_indices": resolved_annotation_indices.tolist(),
+        },
+    )
+
+
+def select_frame_rows(
+    *,
+    every_n: Optional[int] = None,
+    indices: Optional[Sequence[int]] = None,
+    indices_metadata_key: Optional[str] = None,
+    start: int = 0,
+    name: str = "select_frame_rows",
+) -> StructuredUnitAligner:
+    """Return an aligner that maps annotations to selected frame rows."""
+
+    modes = [
+        every_n is not None,
+        indices is not None,
+        indices_metadata_key is not None,
+    ]
+    if sum(bool(mode) for mode in modes) != 1:
+        raise ValueError(
+            "select_frame_rows(...) requires exactly one of every_n, indices, "
+            "or indices_metadata_key."
+        )
+    if int(start) < 0:
+        raise ValueError("select_frame_rows(...) requires start >= 0.")
+    resolved_every_n = None
+    resolved_indices = None
+    resolved_indices_metadata_key = None
+    if every_n is not None:
+        resolved_every_n = int(every_n)
+        if resolved_every_n <= 0:
+            raise ValueError("select_frame_rows(...) requires every_n > 0.")
+    if indices is not None:
+        resolved_indices = _coerce_index_array(
+            indices,
+            arg_name="indices",
+            helper_name="select_frame_rows",
+        )
+    if indices_metadata_key is not None:
+        resolved_indices_metadata_key = str(indices_metadata_key).strip()
+        if not resolved_indices_metadata_key:
+            raise ValueError(
+                "select_frame_rows(...) requires a non-empty indices_metadata_key."
+            )
+    policy = _SelectFrameRowsPolicy(
+        every_n=resolved_every_n,
+        indices=(
+            tuple(int(index) for index in resolved_indices.tolist())
+            if resolved_indices is not None
+            else None
+        ),
+        indices_metadata_key=resolved_indices_metadata_key,
+        start=int(start),
+    )
+    recipe_data: Dict[str, Any] = {
+        "policy": "select_frame_rows",
+        "start": int(start),
+    }
+    if resolved_every_n is not None:
+        recipe_data["every_n"] = resolved_every_n
+    if resolved_indices is not None:
+        recipe_data["indices"] = resolved_indices.tolist()
+    if resolved_indices_metadata_key is not None:
+        recipe_data["indices_metadata_key"] = resolved_indices_metadata_key
+    return StructuredUnitAligner(
+        name=name,
+        align_fn=policy,
+        recipe_data=recipe_data,
+    )
+
+
 def materialize_structured_outputs(
     dataset: BenchmarkDataset,
     extractor: Any,
@@ -372,3 +505,144 @@ def _validated_alignment_indices(
 
 def _callable_name(fn: Callable[..., Any]) -> str:
     return f"{getattr(fn, '__module__', '<unknown>')}.{getattr(fn, '__qualname__', repr(fn))}"
+
+
+@dataclass(frozen=True)
+class _DropSpecialRowsPolicy:
+    leading: int = 0
+    trailing: int = 0
+
+    def __call__(
+        self,
+        embeddings: np.ndarray,
+        annotation: Dict[str, Any],
+    ) -> StructuredAlignment:
+        n_annotations = _annotation_length(annotation)
+        n_embeddings = int(np.asarray(embeddings).shape[0])
+        stop = n_embeddings - self.trailing if self.trailing else n_embeddings
+        embedding_indices = np.arange(self.leading, stop, dtype=int)
+        if len(embedding_indices) != n_annotations:
+            raise ValueError(
+                "drop_special_rows(...) retained "
+                f"{len(embedding_indices)} embedding rows, but the parent annotation has "
+                f"{n_annotations} labeled units."
+            )
+        return StructuredAlignment(
+            annotation_indices=np.arange(n_annotations, dtype=int).tolist(),
+            embedding_indices=embedding_indices.tolist(),
+            metadata={
+                "policy": "drop_special_rows",
+                "leading": self.leading,
+                "trailing": self.trailing,
+                "selected_embedding_indices": embedding_indices.tolist(),
+            },
+        )
+
+
+@dataclass(frozen=True)
+class _KeepRowIndicesPolicy:
+    embedding_indices: tuple[int, ...]
+    annotation_indices: tuple[int, ...]
+
+    def __call__(
+        self,
+        embeddings: np.ndarray,
+        annotation: Dict[str, Any],
+    ) -> StructuredAlignment:
+        _ = embeddings
+        _ = annotation
+        return StructuredAlignment(
+            annotation_indices=list(self.annotation_indices),
+            embedding_indices=list(self.embedding_indices),
+            metadata={
+                "policy": "keep_row_indices",
+                "selected_embedding_indices": list(self.embedding_indices),
+                "selected_annotation_indices": list(self.annotation_indices),
+            },
+        )
+
+
+@dataclass(frozen=True)
+class _SelectFrameRowsPolicy:
+    every_n: Optional[int] = None
+    indices: Optional[tuple[int, ...]] = None
+    indices_metadata_key: Optional[str] = None
+    start: int = 0
+
+    def __call__(
+        self,
+        embeddings: np.ndarray,
+        annotation: Dict[str, Any],
+    ) -> StructuredAlignment:
+        n_annotations = _annotation_length(annotation)
+        embedding_indices = self._resolve_embedding_indices(embeddings, annotation)
+        if len(embedding_indices) != n_annotations:
+            raise ValueError(
+                "select_frame_rows(...) retained "
+                f"{len(embedding_indices)} embedding rows, but the parent annotation has "
+                f"{n_annotations} labeled units."
+            )
+        metadata: Dict[str, Any] = {
+            "policy": "select_frame_rows",
+            "selected_embedding_indices": embedding_indices.tolist(),
+            "start": self.start,
+        }
+        if self.every_n is not None:
+            metadata["every_n"] = self.every_n
+        if self.indices is not None:
+            metadata["indices"] = list(self.indices)
+        if self.indices_metadata_key is not None:
+            metadata["indices_metadata_key"] = self.indices_metadata_key
+        return StructuredAlignment(
+            annotation_indices=np.arange(n_annotations, dtype=int).tolist(),
+            embedding_indices=embedding_indices.tolist(),
+            metadata=metadata,
+        )
+
+    def _resolve_embedding_indices(
+        self,
+        embeddings: np.ndarray,
+        annotation: Dict[str, Any],
+    ) -> np.ndarray:
+        n_embeddings = int(np.asarray(embeddings).shape[0])
+        if self.every_n is not None:
+            return np.arange(self.start, n_embeddings, self.every_n, dtype=int)
+        if self.indices is not None:
+            return np.asarray(self.indices, dtype=int)
+        metadata = annotation.get("metadata", {})
+        if self.indices_metadata_key not in metadata:
+            raise ValueError(
+                "select_frame_rows(...) could not find sampled frame indices under "
+                f"annotation metadata key {self.indices_metadata_key!r}."
+            )
+        assert self.indices_metadata_key is not None
+        return _coerce_index_array(
+            metadata[self.indices_metadata_key],
+            arg_name=self.indices_metadata_key,
+            helper_name="select_frame_rows",
+        )
+
+
+def _annotation_length(annotation: Dict[str, Any]) -> int:
+    return len(
+        labels_from_jsonable(
+            annotation["labels"],
+            label_names=annotation.get("label_names"),
+            target_type=annotation.get("target_type", "auto"),
+            target_names=annotation.get("target_names"),
+        )
+    )
+
+
+def _coerce_index_array(
+    values: Sequence[int],
+    *,
+    arg_name: str,
+    helper_name: str,
+) -> np.ndarray:
+    array = np.asarray(values, dtype=int)
+    if array.ndim != 1:
+        raise ValueError(f"{helper_name}(...) requires {arg_name} to be one-dimensional.")
+    if len(array) and np.any(array < 0):
+        raise ValueError(f"{helper_name}(...) requires {arg_name} to be non-negative.")
+    return array

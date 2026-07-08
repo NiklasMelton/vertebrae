@@ -105,7 +105,10 @@ from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.structured import (
     StructuredAlignment,
     StructuredUnitAligner,
+    drop_special_rows,
+    keep_row_indices,
     materialize_structured_outputs,
+    select_frame_rows,
 )
 
 __all__ = [
@@ -129,6 +132,7 @@ __all__ = [
     "DepthAnnotation",
     "DetectionLayoutAdapter",
     "diagnose_embedding_artifact",
+    "drop_special_rows",
     "EmbeddingCompressionConfig",
     "EmbeddingConfig",
     "EmbeddingJob",
@@ -148,6 +152,7 @@ __all__ = [
     "HFMultimodalExtractor",
     "KeypointAdapter",
     "KeypointAnnotation",
+    "keep_row_indices",
     "LabelViewConfig",
     "labels_artifact_key",
     "LatentSlotAdapter",
@@ -179,6 +184,7 @@ __all__ = [
     "score_embedding_artifacts",
     "ScoringJob",
     "scoring_artifact_key",
+    "select_frame_rows",
     "SegmentationAnnotation",
     "SegmentationConfig",
     "SegmentationDataset",

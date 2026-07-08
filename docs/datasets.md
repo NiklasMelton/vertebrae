@@ -359,16 +359,14 @@ Some models emit raw structured outputs with extra rows or a different unit
 order, such as a leading special token, unmatched latent slots, or filtered
 frame outputs. In those cases, pass an explicit `StructuredUnitAligner` to
 `materialize_structured_outputs(...)`, `materialize_structured_artifacts(...)`,
-or `Benchmark(..., structured_aligners=...)`.
+or `Benchmark(..., structured_aligners=...)`. Most deterministic selection
+patterns can now use the built-in helper factories directly.
 
 ```python
-from vertebrae import StructuredUnitAligner
+from vertebrae import drop_special_rows, select_frame_rows
 
-aligner = StructuredUnitAligner(
-    "drop_special",
-    align_fn=lambda embeddings, annotation: [(0, 1), (1, 2)],
-    recipe_data={"policy": "drop_leading_special"},
-)
+token_aligner = drop_special_rows(leading=1, trailing=1)
+frame_aligner = select_frame_rows(indices_metadata_key="sampled_frames")
 ```
 
 Aligners must return explicit one-to-one annotation and embedding row matches.

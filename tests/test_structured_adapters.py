@@ -1,3 +1,5 @@
+import pickle
+
 import numpy as np
 
 from vertebrae import (
@@ -16,6 +18,9 @@ from vertebrae import (
     SequenceLabelingAdapter,
     StructuredOutputSpec,
     StructuredUnitAligner,
+    drop_special_rows,
+    keep_row_indices,
+    select_frame_rows,
 )
 from vertebrae.cache import LocalArtifactStore
 from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
@@ -268,3 +273,199 @@ def test_structured_aligner_materializes_explicit_subset_and_records_recipe(
         result.extractor_results[0].embedding_metadata["structured"]["alignment_mode"]
         == "explicit"
     )
+
+
+def test_drop_special_rows_helper_materializes_and_is_pickle_safe():
+    dataset = SequenceLabelingAdapter().attach(
+        BenchmarkDataset.from_arrays(
+            np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
+            ["speech", "speech", "music", "music"],
+            modality="audio",
+        ),
+        [
+            SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
+            SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
+            SequenceAnnotation(labels=["c", "d"], tokens=["alpha", "beta"]),
+            SequenceAnnotation(labels=["c", "d"], tokens=["alpha", "beta"]),
+        ],
+    )
+    extractor = CallableStructuredExtractor(
+        "frames",
+        transform_fn=lambda batch: [
+            np.array([[100.0, 0.0], [1.0, 0.0], [0.0, 1.0], [200.0, 0.0]])
+            for _ in range(len(batch))
+        ],
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+    )
+    aligner = drop_special_rows(leading=1, trailing=1)
+    restored = pickle.loads(pickle.dumps(aligner))
+
+    materialized = materialize_structured_outputs(
+        dataset,
+        extractor,
+        aligners={"tokens": restored},
+    )[0]
+
+    assert materialized.dataset.X.shape == (8, 2)
+    assert materialized.metadata["alignment_recipe"]["name"] == "drop_special_rows"
+    assert materialized.metadata["alignment_recipe"]["recipe_data"] == {
+        "policy": "drop_special_rows",
+        "leading": 1,
+        "trailing": 1,
+    }
+    assert materialized.provenance[0]["embedding_index"] == 1
+    assert materialized.provenance[0]["alignment_metadata"]["selected_embedding_indices"] == [
+        1,
+        2,
+    ]
+
+
+def test_keep_row_indices_helper_supports_reordered_annotation_mapping():
+    dataset = SequenceLabelingAdapter().attach(
+        BenchmarkDataset.from_arrays(
+            np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
+            ["speech", "speech", "music", "music"],
+            modality="audio",
+        ),
+        [
+            SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
+            SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
+            SequenceAnnotation(labels=["c", "d"], tokens=["alpha", "beta"]),
+            SequenceAnnotation(labels=["c", "d"], tokens=["alpha", "beta"]),
+        ],
+    )
+    extractor = CallableStructuredExtractor(
+        "frames",
+        transform_fn=lambda batch: [
+            np.array([[10.0, 0.0], [20.0, 0.0], [30.0, 0.0]])
+            for _ in range(len(batch))
+        ],
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+    )
+
+    materialized = materialize_structured_outputs(
+        dataset,
+        extractor,
+        aligners={
+            "tokens": keep_row_indices(
+                embedding_indices=[2, 1],
+                annotation_indices=[0, 1],
+            )
+        },
+    )[0]
+
+    assert materialized.dataset.X[0].tolist() == [30.0, 0.0]
+    assert materialized.dataset.y.tolist()[:2] == ["a", "b"]
+    assert materialized.provenance[0]["embedding_index"] == 2
+    assert materialized.provenance[1]["embedding_index"] == 1
+
+
+def test_select_frame_rows_helper_supports_stride_and_metadata_modes():
+    dataset = SequenceLabelingAdapter().attach(
+        BenchmarkDataset.from_arrays(
+            np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
+            ["speech", "speech", "music", "music"],
+            modality="audio",
+        ),
+        [
+            SequenceAnnotation(
+                labels=["a", "b"],
+                tokens=["hello", "world"],
+                metadata={"sampled_frames": [1, 3]},
+            ),
+            SequenceAnnotation(
+                labels=["a", "b"],
+                tokens=["hello", "world"],
+                metadata={"sampled_frames": [1, 3]},
+            ),
+            SequenceAnnotation(
+                labels=["c", "d"],
+                tokens=["alpha", "beta"],
+                metadata={"sampled_frames": [0, 2]},
+            ),
+            SequenceAnnotation(
+                labels=["c", "d"],
+                tokens=["alpha", "beta"],
+                metadata={"sampled_frames": [0, 2]},
+            ),
+        ],
+    )
+    extractor = CallableStructuredExtractor(
+        "frames",
+        transform_fn=lambda batch: [
+            np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]])
+            for _ in range(len(batch))
+        ],
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+    )
+
+    stride_materialized = materialize_structured_outputs(
+        dataset,
+        extractor,
+        aligners={"tokens": select_frame_rows(every_n=2, start=0)},
+    )[0]
+    metadata_materialized = materialize_structured_outputs(
+        dataset,
+        extractor,
+        aligners={"tokens": select_frame_rows(indices_metadata_key="sampled_frames")},
+    )[0]
+
+    assert stride_materialized.provenance[0]["alignment_metadata"][
+        "selected_embedding_indices"
+    ] == [0, 2]
+    assert stride_materialized.dataset.X[1].tolist() == [2.0, 0.0]
+    assert metadata_materialized.provenance[0]["alignment_metadata"][
+        "selected_embedding_indices"
+    ] == [1, 3]
+    assert metadata_materialized.provenance[4]["alignment_metadata"][
+        "selected_embedding_indices"
+    ] == [0, 2]
+    assert metadata_materialized.dataset.X[0].tolist() == [1.0, 0.0]
+
+
+def test_standard_aligner_helpers_validate_invalid_inputs():
+    with np.testing.assert_raises_regex(ValueError, "leading >= 0"):
+        drop_special_rows(leading=-1)
+    with np.testing.assert_raises_regex(ValueError, "same length"):
+        keep_row_indices(embedding_indices=[0, 1], annotation_indices=[0])
+    with np.testing.assert_raises_regex(ValueError, "exactly one"):
+        select_frame_rows(every_n=2, indices=[0, 2])
+    with np.testing.assert_raises_regex(ValueError, "every_n > 0"):
+        select_frame_rows(every_n=0)
+
+
+def test_standard_aligner_helpers_raise_contextual_alignment_errors():
+    dataset = SequenceLabelingAdapter().attach(
+        BenchmarkDataset.from_arrays(
+            np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
+            ["speech", "speech", "music", "music"],
+            modality="audio",
+        ),
+        [
+            SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
+            SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
+            SequenceAnnotation(labels=["c", "d"], tokens=["alpha", "beta"]),
+            SequenceAnnotation(labels=["c", "d"], tokens=["alpha", "beta"]),
+        ],
+    )
+    extractor = CallableStructuredExtractor(
+        "frames",
+        transform_fn=lambda batch: [
+            np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]])
+            for _ in range(len(batch))
+        ],
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+    )
+
+    with np.testing.assert_raises_regex(ValueError, "retained 3 embedding rows"):
+        materialize_structured_outputs(
+            dataset,
+            extractor,
+            aligners={"tokens": drop_special_rows(leading=1)},
+        )
+    with np.testing.assert_raises_regex(ValueError, "could not find sampled frame indices"):
+        materialize_structured_outputs(
+            dataset,
+            extractor,
+            aligners={"tokens": select_frame_rows(indices_metadata_key="sampled_frames")},
+        )

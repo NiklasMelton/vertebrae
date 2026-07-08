@@ -17,6 +17,8 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_wine_pipel
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/multi_extractor_comparison.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/cache_reuse.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_outputs.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_depth.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_slots.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
@@ -48,6 +50,12 @@ Each script writes reports to `examples/output/`.
 - `structured_outputs.py`: materialize OCR/layout regions, ASR tokens, and pose
   keypoints directly from native structured extractors, then score them as
   representation-efficacy workflows rather than IoU, WER/CER, or OKS metrics.
+- `structured_depth.py`: materialize sampled depth cells and score them through
+  continuous overlap as a structured regression workflow rather than a depth
+  error benchmark.
+- `structured_latent_slots.py`: materialize labeled latent slots from raw
+  per-parent matrices, using a standard aligner helper to drop unmatched rows
+  before scoring.
 - `torch_local_model.py`: demonstrate `TorchExtractor` with a locally loaded
   PyTorch checkpoint and user-supplied `collate_fn` / `output_fn`.
 - `keras_local_model.py`: demonstrate `KerasExtractor` with a locally saved

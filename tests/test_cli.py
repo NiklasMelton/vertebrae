@@ -43,6 +43,13 @@ _STRUCTURED_SINGLE_VALUES = {
     "d": np.asarray([[0.1, 0.9], [0.0, 1.0]]),
 }
 
+_STRUCTURED_SPECIAL_VALUES = {
+    "a": np.asarray([[100.0, 0.0], [1.0, 0.0], [0.9, 0.1], [200.0, 0.0]]),
+    "b": np.asarray([[100.0, 0.0], [1.0, 0.0], [0.9, 0.1], [200.0, 0.0]]),
+    "c": np.asarray([[100.0, 0.0], [0.1, 0.9], [0.0, 1.0], [200.0, 0.0]]),
+    "d": np.asarray([[100.0, 0.0], [0.1, 0.9], [0.0, 1.0], [200.0, 0.0]]),
+}
+
 _STRUCTURED_MULTI_VALUES = {
     "tokens": {
         "a": np.asarray([[1.0, 0.0], [0.9, 0.1]]),
@@ -62,6 +69,11 @@ _STRUCTURED_MULTI_VALUES = {
 def _structured_single_transform(batch):
     items = np.asarray(batch, dtype=object).tolist()
     return [_STRUCTURED_SINGLE_VALUES[str(item)] for item in items]
+
+
+def _structured_special_transform(batch):
+    items = np.asarray(batch, dtype=object).tolist()
+    return [_STRUCTURED_SPECIAL_VALUES[str(item)] for item in items]
 
 
 def _structured_multi_transform(batch):
@@ -561,6 +573,78 @@ def test_cli_materialize_structured_bundle_supports_complexity_diagnostics(
     assert diagnostic["labels_key"] == output["labels_key"]
     assert diagnostic["groups_key"] == output["groups_key"]
     assert diagnostic["artifact_type"] == "separatix_diagnostic"
+
+
+def test_cli_materialize_structured_accepts_standard_aligner_recipe(tmp_path):
+    dataset_path, _ = _write_pickled_structured_inputs(tmp_path, multi_output=False)
+    cache_dir = tmp_path / "cache"
+    extractor = CallableStructuredExtractor(
+        name="structured_special",
+        transform_fn=_structured_special_transform,
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+        modality="text",
+    )
+    extractor_path = tmp_path / "structured_special_extractor.pkl"
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+
+    bundle_path = tmp_path / "structured_bundle.json"
+    assert (
+        main(
+            [
+                "materialize-structured",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--aligner",
+                'tokens=drop_special_rows:{"leading":1,"trailing":1}',
+                "--output-json",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    output = bundle["outputs"][0]
+    store = LocalArtifactStore(str(cache_dir))
+    manifest = store.get_json(output["output_key"])
+    provenance = store.get_json(output["provenance_key"])["rows"]
+
+    assert store.get_array(output["output_key"]).shape == (8, 2)
+    assert store.get_array(output["output_key"])[0].tolist() == [1.0, 0.0]
+    assert manifest["structured"]["alignment_mode"] == "explicit"
+    assert manifest["structured"]["alignment_recipe"]["name"] == "drop_special_rows"
+    assert manifest["structured"]["alignment_recipe"]["recipe_data"] == {
+        "policy": "drop_special_rows",
+        "leading": 1,
+        "trailing": 1,
+    }
+    assert provenance[0]["embedding_index"] == 1
+    assert provenance[0]["alignment_metadata"]["selected_embedding_indices"] == [1, 2]
+
+
+def test_cli_materialize_structured_rejects_invalid_aligner_specs(tmp_path):
+    dataset_path, extractor_path = _write_pickled_structured_inputs(tmp_path, multi_output=False)
+    cache_dir = tmp_path / "cache"
+
+    with pytest.raises(ValueError, match="Unknown structured aligner helper"):
+        main(
+            [
+                "materialize-structured",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--aligner",
+                "tokens=unknown_helper:{}",
+            ]
+        )
 
 
 def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
@@ -1138,6 +1222,24 @@ def test_structured_example_runs_without_network_access(
     assert (output_dir / "structured_ocr_layout.json").exists()
     assert (output_dir / "structured_asr_tokens.json").exists()
     assert (output_dir / "structured_pose_keypoints.json").exists()
+
+
+def test_depth_and_latent_slot_examples_run_without_network_access(
+    tmp_path,
+    monkeypatch,
+    fake_overlapindex,
+):
+    examples_dir = Path(__file__).resolve().parents[1] / "examples"
+    output_dir = tmp_path / "example_output"
+    monkeypatch.setenv("VERTABRAE_EXAMPLE_OUTPUT_DIR", str(output_dir))
+    monkeypatch.syspath_prepend(str(examples_dir))
+    monkeypatch.chdir(examples_dir)
+
+    runpy.run_path(str(examples_dir / "structured_depth.py"), run_name="__main__")
+    runpy.run_path(str(examples_dir / "structured_latent_slots.py"), run_name="__main__")
+
+    assert (output_dir / "structured_depth.json").exists()
+    assert (output_dir / "structured_latent_slots.json").exists()
 
 
 def _write_pickled_inputs(tmp_path):

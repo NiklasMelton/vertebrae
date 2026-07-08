@@ -76,6 +76,13 @@ def render_markdown_report(result: Any) -> str:
     units = dataset.get("units")
     if units:
         lines.append(f"- Unit type: {units.get('unit_type', 'unit')}")
+    structured_units = dataset.get("structured_units")
+    if structured_units:
+        lines.append(f"- Structured unit type: {structured_units.get('unit_type', 'unit')}")
+        if structured_units.get("task_family"):
+            lines.append(f"- Structured task family: {structured_units.get('task_family')}")
+        lines.append(f"- Structured parents: {structured_units.get('n_parents', '')}")
+        lines.append(f"- Structured units: {structured_units.get('n_units', '')}")
     if dataset_metadata.get("entity_type"):
         lines.append(f"- Entity type: {dataset_metadata['entity_type']}")
     if dataset_metadata.get("composition"):
@@ -101,6 +108,20 @@ def render_markdown_report(result: Any) -> str:
             f"{top_ranked.separatix.recommendation or ''} "
             f"({top_ranked.separatix.confidence or ''} confidence).".strip()
         )
+    structured_outputs = dataset.get("structured_outputs", [])
+    if structured_outputs:
+        lines.extend(["", "## Structured outputs", ""])
+        lines.append(
+            "| extractor | output | unit_type | task_family | alignment_mode | alignment_recipe |"
+        )
+        lines.append("| --- | --- | --- | --- | --- | --- |")
+        for output in structured_outputs:
+            lines.append(
+                f"| {output.get('extractor', '')} | {output.get('output', '')} | "
+                f"{output.get('unit_type', '')} | {output.get('task_family', '')} | "
+                f"{output.get('alignment_mode', '')} | "
+                f"{_alignment_recipe_label(output.get('alignment_recipe'))} |"
+            )
     lines.extend(["", "## Ranking", ""])
     lines.append(
         "| rank | extractor | extractor_type | target_view | label_view | "
@@ -179,6 +200,19 @@ def render_markdown_report(result: Any) -> str:
                     f"- Background tokens: {segmentation.get('background_tokens', '')}",
                     f"- Ignored tokens: {segmentation.get('ignored_tokens', {})}",
                     f"- Spatial layout: {segmentation.get('layout', {})}",
+                ]
+            )
+        structured = item.embedding_metadata.get("structured")
+        if structured:
+            lines.extend(
+                [
+                    f"- Structured unit type: {structured.get('unit_type', '')}",
+                    f"- Structured task family: {structured.get('task_family', '')}",
+                    f"- Alignment mode: {structured.get('alignment_mode', '')}",
+                    "- Alignment recipe: "
+                    f"{_alignment_recipe_label(structured.get('alignment_recipe'))}",
+                    f"- Structured parents: {structured.get('n_parents', '')}",
+                    f"- Structured units: {structured.get('n_units', '')}",
                 ]
             )
         recipe = item.embedding_metadata.get("recipe") or item.embedding_metadata.get(
@@ -322,6 +356,18 @@ def _separatix_probe_accuracy(separatix: Any) -> str:
     if accuracy is None:
         return ""
     return _format_float(accuracy)
+
+
+def _alignment_recipe_label(recipe: Any) -> str:
+    if not recipe:
+        return ""
+    if isinstance(recipe, dict):
+        name = recipe.get("name") or ""
+        recipe_data = recipe.get("recipe_data") or {}
+        if isinstance(recipe_data, dict) and recipe_data.get("policy"):
+            return f"{name} ({recipe_data.get('policy')})".strip()
+        return str(name)
+    return str(recipe)
 
 
 def _format_float(value: Any) -> str:

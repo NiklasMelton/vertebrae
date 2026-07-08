@@ -5,7 +5,7 @@ import json
 import pickle
 import sys
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 from vertebrae.cache import create_artifact_store
 from vertebrae.config import EmbeddingCompressionConfig
@@ -40,6 +40,11 @@ from vertebrae.execution import (
     separatix_artifact_key,
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
+from vertebrae.structured import (
+    drop_special_rows,
+    keep_row_indices,
+    select_frame_rows,
+)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -130,6 +135,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_object_args(structured)
     _add_cache_arg(structured)
     structured.add_argument("--batch-size", type=int, default=16)
+    structured.add_argument(
+        "--aligner",
+        action="append",
+        default=[],
+        metavar="OUTPUT=HELPER[:JSON]",
+        help=(
+            "Attach a standard structured aligner recipe to one output, for example "
+            "tokens=drop_special_rows:{\"leading\":1,\"trailing\":1} or "
+            "frames=select_frame_rows:{\"indices_metadata_key\":\"sampled_frames\"}."
+        ),
+    )
     structured.add_argument("--output-json")
     structured.set_defaults(func=_cmd_materialize_structured)
 
@@ -407,6 +423,7 @@ def _cmd_materialize_structured(args: argparse.Namespace) -> dict[str, Any]:
         extractor,
         _store_from_args(args),
         batch_size=args.batch_size,
+        aligners=_structured_aligners_from_specs(args.aligner),
     )
 
 
@@ -852,6 +869,77 @@ def _repeat_seeds(repeats: Any, random_state: int) -> list[int]:
 
     rng = np.random.default_rng(random_state)
     return [int(seed) for seed in rng.integers(0, np.iinfo(np.int32).max, size=int(repeats))]
+
+
+def _structured_aligners_from_specs(specs: Sequence[str]) -> Optional[dict[str, Any]]:
+    if not specs:
+        return None
+    aligners: dict[str, Any] = {}
+    for spec in specs:
+        output_name, aligner = _structured_aligner_from_spec(spec)
+        if output_name in aligners:
+            raise ValueError(
+                f"Duplicate structured aligner spec for output {output_name!r}."
+            )
+        aligners[output_name] = aligner
+    return aligners
+
+
+def _structured_aligner_from_spec(spec: str) -> tuple[str, Any]:
+    output_name, separator, helper_spec = str(spec).partition("=")
+    output_name = output_name.strip()
+    if separator != "=" or not output_name or not helper_spec.strip():
+        raise ValueError(
+            "Structured aligner specs must look like "
+            "'output_name=helper_name:{...json params...}'."
+        )
+    helper_name, has_params, raw_params = helper_spec.partition(":")
+    helper_name = helper_name.strip()
+    if not helper_name:
+        raise ValueError(
+            "Structured aligner specs must include a helper name after '='."
+        )
+    params: dict[str, Any] = {}
+    if has_params:
+        raw_params = raw_params.strip()
+        if not raw_params:
+            raise ValueError(
+                f"Structured aligner spec for output {output_name!r} included ':' but no JSON "
+                "parameters."
+            )
+        try:
+            loaded = json.loads(raw_params)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Structured aligner spec for output {output_name!r} has invalid JSON "
+                f"parameters: {exc.msg}."
+            ) from exc
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"Structured aligner spec for output {output_name!r} must decode to a JSON "
+                "object of helper parameters."
+            )
+        params = loaded
+    return output_name, _build_structured_aligner(helper_name, params)
+
+
+def _build_structured_aligner(helper_name: str, params: dict[str, Any]) -> Any:
+    helper_factories: dict[str, Callable[..., Any]] = {
+        "drop_special_rows": drop_special_rows,
+        "keep_row_indices": keep_row_indices,
+        "select_frame_rows": select_frame_rows,
+    }
+    if helper_name not in helper_factories:
+        supported = ", ".join(sorted(helper_factories))
+        raise ValueError(
+            f"Unknown structured aligner helper {helper_name!r}. Supported helpers: {supported}."
+        )
+    try:
+        return helper_factories[helper_name](**params)
+    except TypeError as exc:
+        raise ValueError(
+            f"Invalid parameters for structured aligner helper {helper_name!r}: {exc}."
+        ) from exc
 
 
 def _write_json_file(payload: dict[str, Any], path: str) -> None:

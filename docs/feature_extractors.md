@@ -46,6 +46,23 @@ Structured outputs are intended for raw token, frame, region, keypoint, or
 other per-parent unit matrices that should be materialized and scored as unit
 embeddings without first precomputing a flat embedding dataset by hand.
 
+Today the extractor families with native structured-output coverage are:
+
+- Explicit structured adapters: `CallableStructuredExtractor`,
+  `PrecomputedStructuredExtractor`
+- Local model wrappers: `TorchExtractor`, `KerasExtractor`, `ONNXExtractor`
+- Hugging Face families: `HFTextExtractor`, `HFAudioExtractor`,
+  `HFVisionExtractor`, `HFVideoExtractor`, `HFTimeSeriesExtractor`,
+  `HFMultimodalExtractor`
+- Vision backbone adapters: `TimmVisionExtractor`, `TorchvisionVisionExtractor`
+- Other adapter-first wrappers: `TFHubExtractor`, `JAXFlaxExtractor`
+
+Those structured outputs can now support token, frame, region, keypoint, depth,
+and latent-slot materialization workflows as long as the model path can expose
+one explicit 2D unit matrix per parent sample. `vertebrae` still treats them as
+embedding-efficacy diagnostics, not task-native detection, OCR, ASR, pose,
+depth, or generative evaluation engines.
+
 Every extractor implements:
 
 ```python
