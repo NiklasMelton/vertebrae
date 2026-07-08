@@ -203,8 +203,7 @@ def test_depth_and_latent_slot_adapters_build_structured_unit_datasets():
 
     assert adapted_latents.summary()["structured_units"]["task_family"] == "latent_slot"
     assert (
-        adapted_latents.unit_annotations()[0]["provenance"][0]["source_component_id"]
-        == "decoder"
+        adapted_latents.unit_annotations()[0]["provenance"][0]["source_component_id"] == "decoder"
     )
 
 
@@ -228,8 +227,7 @@ def test_structured_aligner_materializes_explicit_subset_and_records_recipe(
     extractor = CallableStructuredExtractor(
         "frames",
         transform_fn=lambda batch: [
-            np.array([[100.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
-            for _ in range(len(batch))
+            np.array([[100.0, 0.0], [1.0, 0.0], [0.0, 1.0]]) for _ in range(len(batch))
         ],
         output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
     )
@@ -247,8 +245,7 @@ def test_structured_aligner_materializes_explicit_subset_and_records_recipe(
     assert materialized.dataset.X.shape == (8, 2)
     assert materialized.metadata["alignment_mode"] == "explicit"
     assert (
-        materialized.metadata["alignment_recipe"]["recipe_data"]["policy"]
-        == "drop_leading_special"
+        materialized.metadata["alignment_recipe"]["recipe_data"]["policy"] == "drop_leading_special"
     )
     assert materialized.provenance[0]["annotation_index"] == 0
     assert materialized.provenance[0]["embedding_index"] == 1
@@ -270,8 +267,7 @@ def test_structured_aligner_materializes_explicit_subset_and_records_recipe(
         structured_aligners={"tokens": aligner},
     ).run()
     assert (
-        result.extractor_results[0].embedding_metadata["structured"]["alignment_mode"]
-        == "explicit"
+        result.extractor_results[0].embedding_metadata["structured"]["alignment_mode"] == "explicit"
     )
 
 
@@ -337,8 +333,7 @@ def test_keep_row_indices_helper_supports_reordered_annotation_mapping():
     extractor = CallableStructuredExtractor(
         "frames",
         transform_fn=lambda batch: [
-            np.array([[10.0, 0.0], [20.0, 0.0], [30.0, 0.0]])
-            for _ in range(len(batch))
+            np.array([[10.0, 0.0], [20.0, 0.0], [30.0, 0.0]]) for _ in range(len(batch))
         ],
         output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
     )
@@ -393,8 +388,7 @@ def test_select_frame_rows_helper_supports_stride_and_metadata_modes():
     extractor = CallableStructuredExtractor(
         "frames",
         transform_fn=lambda batch: [
-            np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]])
-            for _ in range(len(batch))
+            np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]) for _ in range(len(batch))
         ],
         output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
     )
@@ -451,8 +445,7 @@ def test_standard_aligner_helpers_raise_contextual_alignment_errors():
     extractor = CallableStructuredExtractor(
         "frames",
         transform_fn=lambda batch: [
-            np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]])
-            for _ in range(len(batch))
+            np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]) for _ in range(len(batch))
         ],
         output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
     )

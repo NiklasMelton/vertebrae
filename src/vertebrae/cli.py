@@ -142,8 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="OUTPUT=HELPER[:JSON]",
         help=(
             "Attach a standard structured aligner recipe to one output, for example "
-            "tokens=drop_special_rows:{\"leading\":1,\"trailing\":1} or "
-            "frames=select_frame_rows:{\"indices_metadata_key\":\"sampled_frames\"}."
+            'tokens=drop_special_rows:{"leading":1,"trailing":1} or '
+            'frames=select_frame_rows:{"indices_metadata_key":"sampled_frames"}.'
         ),
     )
     structured.add_argument("--output-json")
@@ -878,9 +878,7 @@ def _structured_aligners_from_specs(specs: Sequence[str]) -> Optional[dict[str, 
     for spec in specs:
         output_name, aligner = _structured_aligner_from_spec(spec)
         if output_name in aligners:
-            raise ValueError(
-                f"Duplicate structured aligner spec for output {output_name!r}."
-            )
+            raise ValueError(f"Duplicate structured aligner spec for output {output_name!r}.")
         aligners[output_name] = aligner
     return aligners
 
@@ -896,9 +894,7 @@ def _structured_aligner_from_spec(spec: str) -> tuple[str, Any]:
     helper_name, has_params, raw_params = helper_spec.partition(":")
     helper_name = helper_name.strip()
     if not helper_name:
-        raise ValueError(
-            "Structured aligner specs must include a helper name after '='."
-        )
+        raise ValueError("Structured aligner specs must include a helper name after '='.")
     params: dict[str, Any] = {}
     if has_params:
         raw_params = raw_params.strip()

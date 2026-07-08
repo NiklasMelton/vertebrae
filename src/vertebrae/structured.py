@@ -156,9 +156,7 @@ def select_frame_rows(
     if indices_metadata_key is not None:
         resolved_indices_metadata_key = str(indices_metadata_key).strip()
         if not resolved_indices_metadata_key:
-            raise ValueError(
-                "select_frame_rows(...) requires a non-empty indices_metadata_key."
-            )
+            raise ValueError("select_frame_rows(...) requires a non-empty indices_metadata_key.")
     policy = _SelectFrameRowsPolicy(
         every_n=resolved_every_n,
         indices=(
@@ -445,8 +443,7 @@ def _normalize_alignment(raw: Any) -> StructuredAlignment:
     for pair in list(raw):
         if not isinstance(pair, Sequence) or len(pair) != 2:
             raise ValueError(
-                "Structured aligners must return "
-                "(annotation_index, embedding_index) pairs."
+                "Structured aligners must return " "(annotation_index, embedding_index) pairs."
             )
         annotation_indices.append(int(pair[0]))
         embedding_indices.append(int(pair[1]))

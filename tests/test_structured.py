@@ -113,10 +113,7 @@ def test_structured_benchmark_reuses_standard_scoring_pipeline(tmp_path, fake_ov
     assert result.dataset_summary["structured_outputs"][0]["unit_type"] == "token"
     assert result.dataset_summary["structured_outputs"][0]["task_family"] == "sequence"
     assert result.dataset_summary["structured_outputs"][0]["alignment_mode"] == "explicit"
-    assert (
-        item.embedding_metadata["structured"]["alignment_recipe"]["name"]
-        == "drop_special_rows"
-    )
+    assert item.embedding_metadata["structured"]["alignment_recipe"]["name"] == "drop_special_rows"
     frame = result.to_dataframe()
     assert frame.loc[0, "task_family"] == "sequence"
     assert frame.loc[0, "alignment_mode"] == "explicit"
