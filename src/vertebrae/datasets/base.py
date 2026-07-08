@@ -494,6 +494,35 @@ class BenchmarkDataset:
         return dataset
 
     @classmethod
+    def from_graphs(
+        cls,
+        graphs: Any,
+        labels: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
+        target_type: str = "auto",
+        target_names: Optional[Iterable[str]] = None,
+    ) -> "BenchmarkDataset":
+        """Create a graph dataset from aligned graph objects."""
+
+        merged_metadata = {"source": "graphs"}
+        merged_metadata.update(metadata or {})
+        merged_metadata = _metadata_with_target_metadata(
+            merged_metadata,
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+        )
+        dataset = cls(
+            X=np.asarray(graphs, dtype=object),
+            y=coerce_label_input(labels),
+            modality="graph",
+            metadata=merged_metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    @classmethod
     def from_embeddings(
         cls,
         embeddings: Any,

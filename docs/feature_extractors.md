@@ -6,6 +6,8 @@
 - `SklearnExtractor`: fits or applies scikit-learn transformers and pipelines.
 - `CallableExtractor`: wraps custom Python feature functions.
 - `TorchExtractor`: wraps a locally loaded `torch.nn.Module` with user-supplied batch and output adapters.
+- `TimmVisionExtractor`: lazy-loads timm vision backbones with explicit preprocessing and output selection.
+- `TorchvisionVisionExtractor`: lazy-loads torchvision vision backbones with explicit weights/preprocessing handling.
 - `ONNXExtractor`: wraps a local ONNX Runtime session with user-supplied input and output adapters.
 - `SentenceTransformerExtractor`: lazy-loads sentence-transformers models.
 - `HFTextExtractor`: lazy-loads Hugging Face text backbones with explicit pooling.
@@ -16,6 +18,13 @@
 - `HFVideoExtractor`: lazy-loads Hugging Face video backbones with explicit pooling.
 - `HFVisionExtractor`: lazy-loads Hugging Face vision backbones when optional
   dependencies are installed.
+- `OpenCLIPExtractor`: lazy-loads OpenCLIP-style image/text backbones with explicit branch outputs.
+- `SigLIPExtractor`: provides an ergonomic SigLIP-style image/text wrapper on top of the Hugging Face multi-modal path.
+- `TFHubExtractor`: wraps a TensorFlow Hub module with explicit input and output adapters.
+- `JAXFlaxExtractor`: wraps a JAX/Flax apply function or model object with explicit adapter hooks.
+- `TreeLeafEmbeddingExtractor`: turns fitted XGBoost, LightGBM, or CatBoost ensembles into dense or sparse leaf embeddings.
+- `GraphModelExtractor`: wraps graph-level PyG or DGL models with explicit batching and output adapters.
+- `HostedEmbeddingExtractor`: wraps hosted embedding APIs behind explicit batch, retry, and cache-policy settings.
 
 Dense segmentation workflows use `SpatialOutputSpec`, `SpatialLayout`, and
 `SpatialEmbeddingOutput`. `CallableSpatialExtractor` and
@@ -45,6 +54,11 @@ Native multi-output support is available for:
 - `HFVideoExtractor`
 - `HFVisionExtractor`
 - `MultiOutputExtractor`
+- `TimmVisionExtractor`
+- `TorchvisionVisionExtractor`
+- `OpenCLIPExtractor`
+- `TFHubExtractor`
+- `JAXFlaxExtractor`
 
 For Hugging Face backbones, pass explicit output specs:
 
@@ -95,10 +109,17 @@ Optional model extractors require:
 ```bash
 poetry install -E torch
 poetry install -E hf
+poetry install -E timm
+poetry install -E torchvision
+poetry install -E openclip
 poetry install -E audio
 poetry install -E timeseries
 poetry install -E video
 poetry install -E onnx
+poetry install -E tensorflow-hub
+poetry install -E jax
+poetry install -E trees
+poetry install -E graph
 ```
 
 `TorchExtractor` is intended for users who already have a trained local PyTorch model
@@ -118,6 +139,12 @@ shape `(time, height, width, channels)`, or structured dictionaries containing
 `frames` / `path`. Time-series extractors accept dense arrays with shape `(n, time)`
 or `(n, time, channels)`, plus optional structured fields such as
 `observed_mask` and `time_features`.
+
+Graph extractors operate at graph level in this release: each sample corresponds
+to one graph object and each output row corresponds to one graph embedding.
+Use `BenchmarkDataset.from_graphs(...)` for graph-level workflows. Hosted API
+extractors are streaming-safe, but benchmark artifact reuse is only enabled when
+the extractor sets `cache_embeddings=True`.
 
 `HFMultimodalExtractor` accepts dict inputs keyed by declared field names. For
 common image-text models it maps image fields to processor `images` and text

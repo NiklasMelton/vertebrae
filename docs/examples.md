@@ -24,6 +24,12 @@ Runnable examples live in `examples/`:
   when available, otherwise it downloads the dataset archive.
 - `sentence_transformer_extractor.py`: demonstrate the sentence-transformers API.
 
+Additional first-class extractor families now supported by the library include
+timm, torchvision, OpenCLIP/SigLIP-style image-text models, TensorFlow Hub,
+JAX/Flax adapters, tree leaf embeddings, graph models, and hosted embedding
+APIs. The test suite covers these with fake modules and synthetic inputs; the
+repository does not yet ship dedicated runnable example scripts for each one.
+
 Run local examples from the repository root:
 
 ```bash

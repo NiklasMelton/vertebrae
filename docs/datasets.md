@@ -29,6 +29,8 @@ Use the constructor that matches the form of your source data:
   optional masks and time features.
 - `BenchmarkDataset.from_multimodal(...)` for aligned multi-modal sample fields
   such as image-text or audio-text classification datasets.
+- `BenchmarkDataset.from_graphs(...)` for aligned graph objects used by
+  graph-level PyG or DGL extractors.
 
 Regression datasets are opt-in. Pass `target_type="regression"` so numeric class
 identifiers are not reinterpreted as continuous targets by accident:
@@ -145,6 +147,7 @@ Common values are:
 - `"time_series"`
 - `"embeddings"`
 - `"multimodal"`
+- `"graph"`
 
 `metadata` is preserved through benchmarking so reports can retain source context
 such as dataset name, split, backbone provenance, or collection notes.

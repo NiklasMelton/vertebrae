@@ -192,7 +192,7 @@ class GCSArtifactStore:
                 "GCS artifact storage requires the optional 'gcs' extra. Install with "
                 "`poetry install --extras gcs`."
             ) from exc
-        client_kwargs = {"project": self.project}
+        client_kwargs: dict[str, Any] = {"project": self.project}
         emulator_host = self.emulator_host or os.environ.get("STORAGE_EMULATOR_HOST")
         if emulator_host:
             from google.auth.credentials import AnonymousCredentials

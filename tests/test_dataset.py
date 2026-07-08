@@ -28,6 +28,21 @@ def test_from_arrays_rejects_missing_labels():
         )
 
 
+def test_from_graphs_preserves_modality_and_metadata():
+    graphs = [{"nodes": 3}, {"nodes": 4}, {"nodes": 5}, {"nodes": 6}]
+
+    dataset = BenchmarkDataset.from_graphs(
+        graphs,
+        ["a", "a", "b", "b"],
+        metadata={"split": "train"},
+    )
+
+    assert dataset.modality == "graph"
+    assert dataset.metadata["source"] == "graphs"
+    assert dataset.metadata["split"] == "train"
+    assert dataset.X.dtype == object
+
+
 def test_from_dataframe_preserves_columns_and_counts():
     df = pd.DataFrame({"text": ["one", "two", "three", "four"], "label": ["a", "a", "b", "b"]})
 

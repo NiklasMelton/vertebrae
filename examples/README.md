@@ -68,6 +68,12 @@ Each script writes reports to `examples/output/`.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
 
+The library also now exposes first-class adapters for timm, torchvision,
+OpenCLIP/SigLIP-style image-text models, TensorFlow Hub, JAX/Flax, tree leaf
+embeddings, graph models, and hosted embedding APIs. Those integrations are
+covered in unit tests with fake modules today; dedicated runnable example
+scripts can be added as the public ergonomics settle.
+
 The examples configure small `k` values and a few stability repeats so they finish
 quickly while still exercising the real MiniBatchKMeans-backed OverlapIndex path.
 
