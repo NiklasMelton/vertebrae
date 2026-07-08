@@ -10,6 +10,7 @@ Run them from the project root:
 ```bash
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/precomputed_embeddings.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/multilabel_precomputed_embeddings.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/relational_embeddings.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_text_pipeline.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_tabular_pipeline.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_wine_pipeline.py
@@ -30,6 +31,9 @@ Each script writes reports to `examples/output/`.
   elsewhere.
 - `multilabel_precomputed_embeddings.py`: evaluate precomputed embeddings against
   a small multi-label classification target.
+- `relational_embeddings.py`: evaluate graph node and edge embeddings through the
+  same overlap-based transfer-learning diagnostics as other precomputed
+  embeddings. This is not a graph-link, retrieval, or ranking benchmark.
 - `sklearn_text_pipeline.py`: build embeddings from a pandas text dataframe with a
   scikit-learn pipeline.
 - `sklearn_tabular_pipeline.py`: build embeddings from mixed numeric/categorical
