@@ -739,12 +739,8 @@ class Benchmark:
                 "LabelViewConfig requires dataset label hierarchy metadata. "
                 "Use BenchmarkDataset.with_label_hierarchy(...)."
             )
-        if (
-            self._requires_label_hierarchy()
-            and any(
-                dataset.metadata.get("target_type") == REGRESSION_TARGET
-                for dataset in datasets
-            )
+        if self._requires_label_hierarchy() and any(
+            dataset.metadata.get("target_type") == REGRESSION_TARGET for dataset in datasets
         ):
             raise ValueError("LabelViewConfig is not supported for regression targets.")
         if not self.label_view_config.enabled:
@@ -811,9 +807,11 @@ class Benchmark:
                 "Configured output view mappings contain unknown output names: " f"{unknown}."
             )
         if self.target_view_config.output_views:
-            available = set(self.dataset.target_view_names()) if callable(
-                getattr(self.dataset, "target_view_names", None)
-            ) else set()
+            available = (
+                set(self.dataset.target_view_names())
+                if callable(getattr(self.dataset, "target_view_names", None))
+                else set()
+            )
             if not available:
                 raise ValueError(
                     "TargetViewConfig.output_views requires dataset target view metadata. "
@@ -822,8 +820,7 @@ class Benchmark:
             missing = sorted(set(self.target_view_config.output_views.values()) - available)
             if missing:
                 raise ValueError(
-                    "TargetViewConfig.output_views contains unknown target views: "
-                    f"{missing}."
+                    "TargetViewConfig.output_views contains unknown target views: " f"{missing}."
                 )
 
     def _mapped_output_dataset(
@@ -1470,9 +1467,7 @@ class Benchmark:
             return _default_scoring_config_for_dataset(dataset)
         if target_type == REGRESSION_TARGET:
             if not isinstance(self._explicit_scoring_config, ContinuousOverlapScoringConfig):
-                raise ValueError(
-                    "Regression target views require ContinuousOverlapScoringConfig."
-                )
+                raise ValueError("Regression target views require ContinuousOverlapScoringConfig.")
             return self._explicit_scoring_config
         if isinstance(self._explicit_scoring_config, ContinuousOverlapScoringConfig):
             raise ValueError(

@@ -48,12 +48,8 @@ def render_markdown_report(result: Any) -> str:
     if dataset.get("target_view"):
         lines.append(f"- Target view: {dataset.get('target_view', {}).get('name', 'primary')}")
     if dataset.get("available_target_views"):
-        target_view_names = [
-            item.get("name") for item in dataset.get("available_target_views", [])
-        ]
-        lines.append(
-            f"- Available target views: {target_view_names}"
-        )
+        target_view_names = [item.get("name") for item in dataset.get("available_target_views", [])]
+        lines.append(f"- Available target views: {target_view_names}")
     if dataset.get("modality") == "segmentation":
         lines.append(f"- Source images: {dataset.get('n_images', '')}")
         lines.append(

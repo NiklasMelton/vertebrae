@@ -135,8 +135,7 @@ def _per_parent_structured_values(value: Any, unit_type: str) -> List[Any]:
         )
     values = list(value)
     return [
-        ensure_numeric_matrix(item, f"{unit_type} embeddings", allow_sparse=True)
-        for item in values
+        ensure_numeric_matrix(item, f"{unit_type} embeddings", allow_sparse=True) for item in values
     ]
 
 

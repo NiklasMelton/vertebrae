@@ -123,9 +123,7 @@ def _materialize_parent_rows(
 ) -> List[Dict[str, Any]]:
     matrix = np.asarray(embeddings)
     if matrix.ndim != 2:
-        raise ValueError(
-            f"Structured output {output_name!r} for parent {parent_index} must be 2D."
-        )
+        raise ValueError(f"Structured output {output_name!r} for parent {parent_index} must be 2D.")
     labels = labels_from_jsonable(
         annotation["labels"],
         label_names=annotation.get("label_names"),

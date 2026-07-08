@@ -503,17 +503,21 @@ def test_label_artifact_preserves_active_label_view_metadata(tmp_path):
 
 
 def test_label_artifact_preserves_active_target_view_metadata(tmp_path):
-    dataset = BenchmarkDataset.from_embeddings(
-        np.arange(24).reshape(8, 3),
-        ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
-    ).with_target_views(
-        [
-            TargetView(
-                name="coarse",
-                targets=COARSE_TARGETS,
-            )
-        ]
-    ).target_view("coarse")
+    dataset = (
+        BenchmarkDataset.from_embeddings(
+            np.arange(24).reshape(8, 3),
+            ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+        )
+        .with_target_views(
+            [
+                TargetView(
+                    name="coarse",
+                    targets=COARSE_TARGETS,
+                )
+            ]
+        )
+        .target_view("coarse")
+    )
     store = LocalArtifactStore(str(tmp_path))
 
     manifest = materialize_label_artifact(dataset, store)
@@ -618,17 +622,21 @@ def test_benchmark_from_artifacts_carries_label_view_metadata(tmp_path, fake_ove
 
 
 def test_benchmark_from_artifacts_carries_target_view_metadata(tmp_path, fake_overlapindex):
-    dataset = BenchmarkDataset.from_embeddings(
-        np.arange(24).reshape(8, 3),
-        ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
-    ).with_target_views(
-        [
-            TargetView(
-                name="coarse",
-                targets=COARSE_TARGETS,
-            )
-        ]
-    ).target_view("coarse")
+    dataset = (
+        BenchmarkDataset.from_embeddings(
+            np.arange(24).reshape(8, 3),
+            ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+        )
+        .with_target_views(
+            [
+                TargetView(
+                    name="coarse",
+                    targets=COARSE_TARGETS,
+                )
+            ]
+        )
+        .target_view("coarse")
+    )
     extractor = CallableExtractor(
         "artifact_coarse",
         lambda batch: np.asarray(batch),

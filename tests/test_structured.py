@@ -44,9 +44,7 @@ def _dataset():
         np.array(["a", "b", "c", "d"], dtype=object),
         ["doc_a", "doc_a", "doc_b", "doc_b"],
         modality="text",
-    ).with_target_views(
-        [TargetView(name="coarse", targets=["left", "left", "right", "right"])]
-    )
+    ).with_target_views([TargetView(name="coarse", targets=["left", "left", "right", "right"])])
     return dataset.with_unit_annotations(_annotations(), unit_type="token")
 
 

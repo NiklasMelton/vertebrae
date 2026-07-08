@@ -1669,15 +1669,18 @@ def _normalize_target_views(
             base_metadata=base_metadata,
             dataset_type=dataset_type,
         )
-        if len(labels_from_jsonable(
-            resolved[view.name]["targets"],
-            label_names=resolved[view.name].get("label_names"),
-            target_type=resolved[view.name].get("target_type", "auto"),
-            target_names=resolved[view.name].get("target_names"),
-        )) != n_samples:
-            raise ValueError(
-                f"Target view {view.name!r} must have length {n_samples}."
+        if (
+            len(
+                labels_from_jsonable(
+                    resolved[view.name]["targets"],
+                    label_names=resolved[view.name].get("label_names"),
+                    target_type=resolved[view.name].get("target_type", "auto"),
+                    target_names=resolved[view.name].get("target_names"),
+                )
             )
+            != n_samples
+        ):
+            raise ValueError(f"Target view {view.name!r} must have length {n_samples}.")
     if not resolved:
         raise ValueError("target_views must not be empty.")
     return resolved

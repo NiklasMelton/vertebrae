@@ -939,9 +939,7 @@ def _resolve_plan_output(
         if output.get("output_key") == embedding_key:
             return output
     if require_match:
-        raise ValueError(
-            "The requested --embedding-key was not found in the plan JSON outputs."
-        )
+        raise ValueError("The requested --embedding-key was not found in the plan JSON outputs.")
     return None
 
 
