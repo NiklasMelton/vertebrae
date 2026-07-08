@@ -12,8 +12,11 @@ from vertebrae.utils.labels import (
     class_counts,
     coerce_label_input,
     default_label_view_metadata,
+    default_target_view_metadata,
     hierarchy_depth,
     label_view_from_paths,
+    labels_from_jsonable,
+    labels_to_jsonable,
     normalize_label_paths,
     normalize_level_names,
     normalize_targets,
@@ -21,6 +24,18 @@ from vertebrae.utils.labels import (
     target_summary,
 )
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
+
+
+@dataclass
+class TargetView:
+    """Declarative target view aligned to an existing dataset sample axis."""
+
+    name: str
+    targets: Any
+    target_type: str = "auto"
+    label_names: Optional[Iterable[Any]] = None
+    target_names: Optional[Iterable[str]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -582,6 +597,43 @@ class BenchmarkDataset:
         ).with_groups(image_ids, name="image_id")
 
     @classmethod
+    def from_embedding_units(
+        cls,
+        embeddings: Any,
+        labels: Any,
+        unit_ids: Any,
+        parent_ids: Any = None,
+        unit_type: str = "unit",
+        positions: Any = None,
+        spans: Any = None,
+        coordinates: Any = None,
+        provenance: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
+        target_type: str = "auto",
+        target_names: Optional[Iterable[str]] = None,
+        target_views: Optional[Iterable[TargetView]] = None,
+    ) -> "EmbeddingUnitDataset":
+        """Create a generic grouped unit dataset from precomputed embeddings."""
+
+        return EmbeddingUnitDataset.from_units(
+            embeddings=embeddings,
+            labels=labels,
+            unit_ids=unit_ids,
+            parent_ids=parent_ids,
+            unit_type=unit_type,
+            positions=positions,
+            spans=spans,
+            coordinates=coordinates,
+            provenance=provenance,
+            metadata=metadata,
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+            target_views=target_views,
+        )
+
+    @classmethod
     def from_node_embeddings(
         cls,
         embeddings: Any,
@@ -956,7 +1008,7 @@ class BenchmarkDataset:
         }
         metadata = dict(self.metadata)
         metadata["label_hierarchy"] = hierarchy_metadata
-        dataset = BenchmarkDataset(
+        dataset = type(self)(
             X=self.X,
             y=coerce_label_input(self.y),
             modality=self.modality,
@@ -983,7 +1035,7 @@ class BenchmarkDataset:
             view_metadata["key"] = f"hierarchy:{view_metadata['level']}:{view_metadata['name']}"
         metadata = dict(self.metadata)
         metadata["label_view"] = view_metadata
-        dataset = BenchmarkDataset(
+        dataset = type(self)(
             X=self.X,
             y=labels,
             modality=self.modality,
@@ -1000,6 +1052,96 @@ class BenchmarkDataset:
         view = self.metadata.get("label_view")
         if view is None:
             return default_label_view_metadata()
+        return dict(view)
+
+    def with_target_views(
+        self,
+        target_views: Iterable[TargetView],
+    ) -> "BenchmarkDataset":
+        """Return a dataset annotated with aligned named target views."""
+
+        resolved = _normalize_target_views(
+            target_views=target_views,
+            n_samples=len(self.y),
+            X=self.X,
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            base_metadata=self.metadata,
+            dataset_type=type(self),
+        )
+        metadata = dict(self.metadata)
+        metadata["target_views"] = resolved
+        dataset = type(self)(
+            X=self.X,
+            y=coerce_label_input(self.y),
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            metadata=metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    def target_view(self, name: str) -> "BenchmarkDataset":
+        """Materialize one named target view as an ordinary benchmark dataset."""
+
+        views = self.metadata.get("target_views")
+        if views is None:
+            raise ValueError("target_view(...) requires target view metadata on the dataset.")
+        try:
+            view = views[str(name)]
+        except KeyError as exc:
+            available = sorted(views)
+            raise ValueError(
+                f"Unknown target view {name!r}. Available target views: {available}."
+            ) from exc
+        labels = labels_from_jsonable(
+            view["targets"],
+            label_names=view.get("label_names"),
+            target_type=view.get("target_type", "auto"),
+            target_names=view.get("target_names"),
+        )
+        metadata = dict(self.metadata)
+        metadata.pop("label_names", None)
+        metadata.pop("target_names", None)
+        metadata["target_type"] = view.get("target_type", "auto")
+        metadata["target_view"] = {
+            "kind": "named_target",
+            "name": str(name),
+            "key": f"target:{name}",
+            "target_type": view.get("target_type", "auto"),
+            "metadata": dict(view.get("metadata", {})),
+        }
+        metadata = _metadata_with_target_metadata(
+            metadata,
+            label_names=view.get("label_names"),
+            target_type=view.get("target_type", "auto"),
+            target_names=view.get("target_names"),
+        )
+        dataset = type(self)(
+            X=self.X,
+            y=labels,
+            modality=self.modality,
+            input_col=self.input_col,
+            label_col=self.label_col,
+            metadata=metadata,
+        )
+        dataset.validate()
+        return dataset
+
+    def target_view_names(self) -> list[str]:
+        """Return the registered target view names in insertion order."""
+
+        views = self.metadata.get("target_views", {})
+        return [str(name) for name in views]
+
+    def active_target_view(self) -> Dict[str, Any]:
+        """Return metadata describing the active dataset target view."""
+
+        view = self.metadata.get("target_view")
+        if view is None:
+            return default_target_view_metadata()
         return dict(view)
 
     def with_groups(self, groups: Any, name: str = "group") -> "BenchmarkDataset":
@@ -1021,7 +1163,7 @@ class BenchmarkDataset:
         metadata = dict(self.metadata)
         metadata["groups"] = group_array.tolist()
         metadata["group_name"] = str(name)
-        dataset = BenchmarkDataset(
+        dataset = type(self)(
             X=self.X,
             y=coerce_label_input(self.y),
             modality=self.modality,
@@ -1152,8 +1294,34 @@ class BenchmarkDataset:
             values = merged_metadata.get(key)
             if values is not None:
                 merged_metadata[key] = np.asarray(values, dtype=object)[index_array].tolist()
+        target_views = merged_metadata.get("target_views")
+        if target_views is not None:
+            subset_views = {}
+            for name, view in target_views.items():
+                labels = labels_from_jsonable(
+                    view["targets"],
+                    label_names=view.get("label_names"),
+                    target_type=view.get("target_type", "auto"),
+                    target_names=view.get("target_names"),
+                )
+                subset_labels = labels[index_array]
+                subset_views[name] = _target_view_entry(
+                    name=str(name),
+                    targets=subset_labels,
+                    target_type=view.get("target_type", "auto"),
+                    label_names=view.get("label_names"),
+                    target_names=view.get("target_names"),
+                    metadata=view.get("metadata"),
+                    X=_take_samples(self.X, index_array),
+                    modality=self.modality,
+                    input_col=self.input_col,
+                    label_col=self.label_col,
+                    base_metadata=merged_metadata,
+                    dataset_type=type(self),
+                )
+            merged_metadata["target_views"] = subset_views
         merged_metadata.update(metadata or {})
-        dataset = BenchmarkDataset(
+        dataset = type(self)(
             X=_take_samples(self.X, index_array),
             y=self.y[index_array],
             modality=self.modality,
@@ -1179,6 +1347,13 @@ class BenchmarkDataset:
         )
         report_metadata = dict(self.metadata)
         groups = report_metadata.pop("groups", None)
+        target_views = report_metadata.pop("target_views", None)
+        unit_ids = report_metadata.pop("unit_ids", None)
+        parent_ids = report_metadata.pop("parent_ids", None)
+        unit_positions = report_metadata.pop("unit_positions", None)
+        unit_spans = report_metadata.pop("unit_spans", None)
+        unit_coordinates = report_metadata.pop("unit_coordinates", None)
+        unit_provenance = report_metadata.pop("unit_provenance", None)
         summary = {
             "n_samples": int(len(self.y)),
             "n_classes": labels["n_classes"],
@@ -1188,8 +1363,34 @@ class BenchmarkDataset:
             "input_col": self.input_col,
             "label_col": self.label_col,
             "label_view": self.active_label_view(),
+            "target_view": self.active_target_view(),
             "metadata": report_metadata,
         }
+        if target_views is not None:
+            summary["available_target_views"] = [
+                {
+                    "name": str(name),
+                    "target_type": view.get("target_type", "auto"),
+                    "metadata": dict(view.get("metadata", {})),
+                }
+                for name, view in target_views.items()
+            ]
+        if self.metadata.get("unit_embeddings"):
+            summary["units"] = {
+                "provided": True,
+                "unit_type": self.metadata.get("unit_type", "unit"),
+                "n_units": int(len(self.y)),
+                "has_parent_ids": parent_ids is not None,
+                "has_positions": unit_positions is not None,
+                "has_spans": unit_spans is not None,
+                "has_coordinates": unit_coordinates is not None,
+                "has_provenance": unit_provenance is not None,
+                "n_distinct_units": (
+                    int(len(set(unit_ids))) if unit_ids is not None else int(len(self.y))
+                ),
+            }
+            if parent_ids is not None:
+                summary["units"]["n_parents"] = int(len(set(parent_ids)))
         if groups is not None:
             summary["grouping"] = {
                 "provided": True,
@@ -1231,6 +1432,76 @@ class BenchmarkDataset:
         )
 
 
+class EmbeddingUnitDataset(BenchmarkDataset):
+    """Generic embedding dataset for structured units such as boxes or tokens."""
+
+    @classmethod
+    def from_units(
+        cls,
+        embeddings: Any,
+        labels: Any,
+        unit_ids: Any,
+        parent_ids: Any = None,
+        unit_type: str = "unit",
+        positions: Any = None,
+        spans: Any = None,
+        coordinates: Any = None,
+        provenance: Any = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        label_names: Optional[Iterable[Any]] = None,
+        target_type: str = "auto",
+        target_names: Optional[Iterable[str]] = None,
+        target_views: Optional[Iterable[TargetView]] = None,
+    ) -> "EmbeddingUnitDataset":
+        """Create a structured unit dataset from aligned embedding rows."""
+
+        matrix = ensure_numeric_matrix(embeddings, "unit embeddings", allow_sparse=True)
+        n_units = int(matrix.shape[0])
+        resolved_unit_ids = _validated_unit_ids(unit_ids, n_units=n_units)
+        resolved_parent_ids = _optional_aligned_values(
+            parent_ids,
+            n_units=n_units,
+            name="parent_ids",
+        )
+        merged_metadata = {
+            "precomputed_embeddings": True,
+            "unit_embeddings": True,
+            "unit_type": str(unit_type),
+            "unit_ids": resolved_unit_ids,
+        }
+        if resolved_parent_ids is not None:
+            merged_metadata["parent_ids"] = resolved_parent_ids
+        for key, values in (
+            ("unit_positions", positions),
+            ("unit_spans", spans),
+            ("unit_coordinates", coordinates),
+            ("unit_provenance", provenance),
+        ):
+            resolved = _optional_aligned_values(values, n_units=n_units, name=key)
+            if resolved is not None:
+                merged_metadata[key] = resolved
+        merged_metadata.update(metadata or {})
+        dataset = cast(
+            EmbeddingUnitDataset,
+            cls.from_embeddings(
+                matrix,
+                labels,
+                metadata=merged_metadata,
+                label_names=label_names,
+                target_type=target_type,
+                target_names=target_names,
+            ),
+        )
+        if resolved_parent_ids is not None:
+            dataset = cast(
+                EmbeddingUnitDataset,
+                dataset.with_groups(resolved_parent_ids, name="parent_id"),
+            )
+        if target_views is not None:
+            dataset = cast(EmbeddingUnitDataset, dataset.with_target_views(target_views))
+        return dataset
+
+
 def _metadata_with_target_metadata(
     metadata: Optional[Dict[str, Any]],
     label_names: Optional[Iterable[Any]],
@@ -1244,6 +1515,132 @@ def _metadata_with_target_metadata(
         merged["target_names"] = list(target_names)
     merged["target_type"] = target_type
     return merged
+
+
+def _normalize_target_views(
+    target_views: Iterable[TargetView],
+    n_samples: int,
+    X: Any,
+    modality: str,
+    input_col: Optional[Union[str, list[str]]],
+    label_col: Optional[Union[str, list[str]]],
+    base_metadata: Dict[str, Any],
+    dataset_type: type[BenchmarkDataset],
+) -> Dict[str, Dict[str, Any]]:
+    resolved: Dict[str, Dict[str, Any]] = {}
+    for view in target_views:
+        if not isinstance(view, TargetView):
+            raise ValueError("target_views must contain TargetView entries.")
+        if not view.name:
+            raise ValueError("TargetView.name must be a non-empty string.")
+        if view.name in resolved:
+            raise ValueError(f"Duplicate target view name {view.name!r}.")
+        resolved[view.name] = _target_view_entry(
+            name=view.name,
+            targets=view.targets,
+            target_type=view.target_type,
+            label_names=view.label_names,
+            target_names=view.target_names,
+            metadata=view.metadata,
+            X=X,
+            modality=modality,
+            input_col=input_col,
+            label_col=label_col,
+            base_metadata=base_metadata,
+            dataset_type=dataset_type,
+        )
+        if len(labels_from_jsonable(
+            resolved[view.name]["targets"],
+            label_names=resolved[view.name].get("label_names"),
+            target_type=resolved[view.name].get("target_type", "auto"),
+            target_names=resolved[view.name].get("target_names"),
+        )) != n_samples:
+            raise ValueError(
+                f"Target view {view.name!r} must have length {n_samples}."
+            )
+    if not resolved:
+        raise ValueError("target_views must not be empty.")
+    return resolved
+
+
+def _target_view_entry(
+    name: str,
+    targets: Any,
+    target_type: str,
+    label_names: Optional[Iterable[Any]],
+    target_names: Optional[Iterable[str]],
+    metadata: Optional[Dict[str, Any]],
+    X: Any,
+    modality: str,
+    input_col: Optional[Union[str, list[str]]],
+    label_col: Optional[Union[str, list[str]]],
+    base_metadata: Dict[str, Any],
+    dataset_type: type[BenchmarkDataset],
+) -> Dict[str, Any]:
+    view_metadata = _metadata_with_target_metadata(
+        {
+            key: value
+            for key, value in base_metadata.items()
+            if key
+            not in {
+                "label_names",
+                "target_names",
+                "target_type",
+                "target_views",
+                "target_view",
+            }
+        },
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
+    candidate = dataset_type(
+        X=X,
+        y=coerce_label_input(targets),
+        modality=modality,
+        input_col=input_col,
+        label_col=label_col,
+        metadata=view_metadata,
+    )
+    candidate.validate()
+    summary = target_summary(
+        candidate.y,
+        label_names=candidate.metadata.get("label_names"),
+        target_type=candidate.metadata.get("target_type", "auto"),
+        target_names=candidate.metadata.get("target_names"),
+    )
+    return {
+        "name": str(name),
+        "targets": labels_to_jsonable(
+            candidate.y,
+            label_names=candidate.metadata.get("label_names"),
+            target_type=candidate.metadata.get("target_type", "auto"),
+            target_names=candidate.metadata.get("target_names"),
+        ),
+        "target_type": candidate.metadata.get("target_type", "auto"),
+        "label_names": candidate.metadata.get("label_names"),
+        "target_names": candidate.metadata.get("target_names"),
+        "metadata": dict(metadata or {}),
+        "summary": summary,
+    }
+
+
+def _validated_unit_ids(values: Any, n_units: int) -> list[Any]:
+    unit_ids = _aligned_ids(values, n_units, name="unit_ids")
+    if len(set(unit_ids)) != len(unit_ids):
+        raise ValueError("unit_ids must be unique.")
+    return unit_ids
+
+
+def _optional_aligned_values(values: Any, n_units: int, name: str) -> Optional[list[Any]]:
+    if values is None:
+        return None
+    arr = np.asarray(values, dtype=object)
+    if arr.ndim == 0:
+        raise ValueError(f"{name} must align to the unit rows.")
+    if len(arr) != n_units:
+        raise ValueError(f"{name} must have length {n_units}; got {len(arr)}.")
+    return arr.tolist()
 
 
 def _aligned_ids(values: Any, expected: int, name: str) -> list[Any]:

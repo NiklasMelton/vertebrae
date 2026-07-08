@@ -4,6 +4,7 @@ from scipy import sparse
 
 from vertebrae import BenchmarkDataset
 from vertebrae.cache.local_store import LocalArtifactStore
+from vertebrae.datasets import TargetView
 from vertebrae.execution import (
     EmbeddingMergeJob,
     LocalBackend,
@@ -30,6 +31,17 @@ from vertebrae.execution import (
 )
 from vertebrae.extractors import CallableExtractor, MultiOutputExtractor
 from vertebrae.extractors.base import EmbeddingOutputSpec
+
+COARSE_TARGETS = [
+    "mammal",
+    "mammal",
+    "mammal",
+    "mammal",
+    "avian",
+    "avian",
+    "mammal",
+    "mammal",
+]
 
 
 def test_resource_spec_validates_bounds():
@@ -490,6 +502,26 @@ def test_label_artifact_preserves_active_label_view_metadata(tmp_path):
     assert store.get_json(manifest["output_key"])["label_view"]["level"] == 1
 
 
+def test_label_artifact_preserves_active_target_view_metadata(tmp_path):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+    ).with_target_views(
+        [
+            TargetView(
+                name="coarse",
+                targets=COARSE_TARGETS,
+            )
+        ]
+    ).target_view("coarse")
+    store = LocalArtifactStore(str(tmp_path))
+
+    manifest = materialize_label_artifact(dataset, store)
+
+    assert manifest["target_view"]["name"] == "coarse"
+    assert store.get_json(manifest["output_key"])["target_view"]["kind"] == "named_target"
+
+
 def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overlapindex):
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
@@ -583,6 +615,48 @@ def test_benchmark_from_artifacts_carries_label_view_metadata(tmp_path, fake_ove
 
     assert result["dataset_summary"]["label_view"]["name"] == "family"
     assert result["extractor_results"][0]["label_view"]["name"] == "family"
+
+
+def test_benchmark_from_artifacts_carries_target_view_metadata(tmp_path, fake_overlapindex):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+    ).with_target_views(
+        [
+            TargetView(
+                name="coarse",
+                targets=COARSE_TARGETS,
+            )
+        ]
+    ).target_view("coarse")
+    extractor = CallableExtractor(
+        "artifact_coarse",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            output_key=scoring_artifact_key(embedding_manifest["output_key"]),
+        ),
+        store,
+    )
+
+    result = benchmark_result_from_artifacts(score_key=score["output_key"], store=store)
+
+    assert result["dataset_summary"]["target_view"]["name"] == "coarse"
+    assert result["extractor_results"][0]["target_view"]["name"] == "coarse"
 
 
 def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(

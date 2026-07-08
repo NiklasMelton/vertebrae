@@ -24,7 +24,12 @@ from vertebrae.execution.jobs import (
 )
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
-from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix, target_summary
+from vertebrae.utils.labels import (
+    REGRESSION_TARGET,
+    label_view_suffix,
+    target_summary,
+    target_view_suffix,
+)
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -185,6 +190,7 @@ def materialize_segmentation_artifacts(
                 "target_type": label_summary["target_type"],
                 "class_counts": make_json_safe(label_summary["class_counts"]),
                 "n_classes": label_summary["n_classes"],
+                "target_view": materialization.dataset.active_target_view(),
                 "label_view": materialization.dataset.active_label_view(),
             },
         )
@@ -345,6 +351,7 @@ def materialize_label_artifact(
         "target_type": labels["target_type"],
         "class_counts": make_json_safe(labels["class_counts"]),
         "n_classes": labels["n_classes"],
+        "target_view": make_json_safe(dataset.active_target_view()),
         "label_view": make_json_safe(dataset.active_label_view()),
     }
     for label_key in (
@@ -803,10 +810,11 @@ def benchmark_result_from_artifacts(
         "name",
         embedding_metadata.get("extractor_name", "artifact"),
     )
+    target_view = label_metadata.get("target_view", embedding_metadata.get("target_view"))
     label_view = label_metadata.get("label_view", embedding_metadata.get("label_view"))
     extractor_result = ExtractorResult(
         name=_variant_extractor_name(
-            f"{base_name}{label_view_suffix(label_view)}",
+            f"{base_name}{target_view_suffix(target_view)}{label_view_suffix(label_view)}",
             compression_metadata,
         ),
         extractor_type=embedding_metadata.get("extractor_recipe", {}).get(
@@ -821,6 +829,7 @@ def benchmark_result_from_artifacts(
         runtime={},
         warnings=sorted(set(score_data.get("warnings", []))),
         label_view=label_view,
+        target_view=target_view,
         weakest_class=weakest_class,
         weakest_class_score=weakest_score,
         recommendation=recommendation,
@@ -845,6 +854,7 @@ def benchmark_result_from_artifacts(
             "constant_targets": label_metadata.get("constant_targets"),
             "nonconstant_targets": label_metadata.get("nonconstant_targets"),
             "modality": embedding_metadata.get("modality", "artifact"),
+            "target_view": label_metadata.get("target_view"),
             "label_view": label_metadata.get("label_view"),
         },
         extractor_results=[extractor_result],

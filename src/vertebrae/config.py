@@ -242,6 +242,33 @@ class LabelViewConfig:
 
 
 @dataclass
+class TargetViewConfig:
+    """Configuration for optional named target-view benchmarking.
+
+    Attributes:
+        enabled: Whether named target views should be evaluated.
+        views: Explicit target-view names to evaluate. When empty and enabled,
+            all registered target views are evaluated.
+        output_views: Mapping from extractor output names to target-view names.
+        skip_invalid_views: Whether unavailable views should be skipped with a
+            warning instead of raising.
+    """
+
+    enabled: bool = False
+    views: Tuple[str, ...] = ()
+    output_views: Dict[str, str] = field(default_factory=dict)
+    skip_invalid_views: bool = True
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(name, str) or not name for name in self.views):
+            raise ValueError("TargetViewConfig.views entries must be non-empty strings.")
+        if any(not isinstance(name, str) or not name for name in self.output_views):
+            raise ValueError("TargetViewConfig.output_views keys must be output-name strings.")
+        if any(not isinstance(name, str) or not name for name in self.output_views.values()):
+            raise ValueError("TargetViewConfig.output_views values must be target-view strings.")
+
+
+@dataclass
 class CacheConfig:
     """Artifact cache settings.
 

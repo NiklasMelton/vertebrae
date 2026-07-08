@@ -22,8 +22,15 @@ from vertebrae.config import (
     SegmentationConfig,
     SeparatixConfig,
     StabilityConfig,
+    TargetViewConfig,
 )
-from vertebrae.datasets import BenchmarkDataset, SegmentationAnnotation, SegmentationDataset
+from vertebrae.datasets import (
+    BenchmarkDataset,
+    EmbeddingUnitDataset,
+    SegmentationAnnotation,
+    SegmentationDataset,
+    TargetView,
+)
 from vertebrae.evaluator import Evaluator
 from vertebrae.execution import (
     CompressionJob,
@@ -85,6 +92,7 @@ __all__ = [
     "ContinuousOverlapScoringConfig",
     "DaskBackend",
     "diagnose_embedding_artifact",
+    "EmbeddingUnitDataset",
     "EmbeddingOutput",
     "EmbeddingOutputSpec",
     "CallableSpatialExtractor",
@@ -122,6 +130,8 @@ __all__ = [
     "collect_score_artifacts",
     "compress_embedding_artifact",
     "StabilityConfig",
+    "TargetView",
+    "TargetViewConfig",
     "create_artifact_store",
     "compress_embedding_artifact_key",
     "compress_embeddings",

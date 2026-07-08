@@ -510,12 +510,26 @@ def default_label_view_metadata() -> Dict[str, Any]:
     return {"kind": "primary", "name": "primary", "key": "primary"}
 
 
+def default_target_view_metadata() -> Dict[str, Any]:
+    """Return metadata for the default dataset target view."""
+
+    return {"kind": "primary", "name": "primary", "key": "primary"}
+
+
 def label_view_suffix(label_view: Optional[Dict[str, Any]]) -> str:
     """Format a label-view suffix for result names."""
 
     if not label_view or label_view.get("kind") == "primary":
         return ""
     return f"[level={label_view.get('name', 'view')}]"
+
+
+def target_view_suffix(target_view: Optional[Dict[str, Any]]) -> str:
+    """Format a target-view suffix for result names."""
+
+    if not target_view or target_view.get("kind") == "primary":
+        return ""
+    return f"[target={target_view.get('name', 'view')}]"
 
 
 def _target_metadata(

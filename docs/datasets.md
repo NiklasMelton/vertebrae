@@ -40,6 +40,9 @@ Use the constructor that matches the form of your source data:
   rows composed from entity embeddings.
 - `BenchmarkDataset.from_triplet_embeddings(...)` for supervised triplet-derived
   embedding rows.
+- `BenchmarkDataset.from_embedding_units(...)` for generic labeled unit embeddings
+  such as detection boxes, document regions, tokens, keypoints, depth cells, or
+  latent slots.
 
 Regression datasets are opt-in. Pass `target_type="regression"` so numeric class
 identifiers are not reinterpreted as continuous targets by accident:
@@ -93,6 +96,33 @@ datasets. They are intended for transfer-learning diagnostics where each node,
 edge, entity, pair, or triplet-derived row has an aligned label or regression
 target. They do not run retrieval, recommender, ranking, mAP, NDCG, MRR, or
 candidate-set evaluation.
+
+Generic unit embeddings follow the same philosophy: each row is a labeled unit
+embedding, not a task-specific metric evaluation. This supports structured
+representation diagnostics for boxes, OCR/document layout regions, ASR or NLP
+tokens, pose/keypoints, dense depth cells, and generative latents as long as the
+workflow can materialize one embedding row per supervised unit.
+
+```python
+from vertebrae import BenchmarkDataset, TargetView
+
+dataset = BenchmarkDataset.from_embedding_units(
+    embeddings=unit_embeddings,
+    labels=primary_labels,
+    unit_ids=unit_ids,
+    parent_ids=page_ids,
+    unit_type="document_region",
+    target_views=[
+        TargetView(name="role", targets=region_roles),
+        TargetView(
+            name="quality",
+            targets=region_scores,
+            target_type="regression",
+            target_names=["quality"],
+        ),
+    ],
+)
+```
 
 ```python
 from vertebrae import BenchmarkDataset
@@ -153,6 +183,35 @@ dataset = BenchmarkDataset.from_arrays(
 
 For DataFrames, pass multiple label columns to `label_col`; those columns are
 treated as 0/1 indicator columns and their names become `label_names`.
+
+## Named target views
+
+Datasets can also carry multiple aligned target projections through
+`with_target_views(...)`. Each `TargetView` is validated like a normal dataset
+target and can be single-label, multi-label, or explicit regression.
+
+```python
+from vertebrae import BenchmarkDataset, TargetView
+
+dataset = BenchmarkDataset.from_embeddings(embeddings, labels).with_target_views(
+    [
+        TargetView(name="coarse", targets=coarse_labels),
+        TargetView(
+            name="score",
+            targets=scores,
+            target_type="regression",
+            target_names=["score"],
+        ),
+    ]
+)
+
+score_dataset = dataset.target_view("score")
+```
+
+This keeps one shared embedding sample axis while exposing multiple transfer
+targets for the same representation. Named target views still describe embedding
+efficacy only; they do not add mAP, IoU, WER, CER, OKS, depth-error, or other
+task-native metrics.
 
 ## Validation rules
 

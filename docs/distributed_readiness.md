@@ -32,7 +32,10 @@ Multi-label artifacts store one JSON list of labels per sample and preserve
 `target_type`, `label_names`, per-label `class_counts`, labelset counts, mean label
 cardinality, and label density in the manifest. Regression artifacts preserve
 `target_type`, `target_names`, target statistics, and constant-target diagnostics.
-CLI commands still use the same `--labels-key` arguments for every target type.
+When a dataset materializes an active named target view, label manifests also
+preserve `target_view` metadata so downstream scoring and benchmark reconstruction
+can distinguish views without changing the embedding artifact. CLI commands still
+use the same `--labels-key` arguments for every target type.
 
 The concrete local distributed flow is:
 
