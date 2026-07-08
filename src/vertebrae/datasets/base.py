@@ -1164,6 +1164,7 @@ class BenchmarkDataset:
         self,
         annotations: Iterable[UnitAnnotation],
         unit_type: str = "unit",
+        task_family: Optional[str] = None,
     ) -> "BenchmarkDataset":
         """Return a dataset with aligned per-parent structured unit annotations."""
 
@@ -1175,6 +1176,8 @@ class BenchmarkDataset:
         metadata = dict(self.metadata)
         metadata["unit_annotations"] = resolved
         metadata["unit_annotation_unit_type"] = str(unit_type)
+        if task_family is not None:
+            metadata["unit_annotation_task_family"] = str(task_family)
         dataset = type(self)(
             X=self.X,
             y=coerce_label_input(self.y),
@@ -1451,6 +1454,7 @@ class BenchmarkDataset:
             summary["structured_units"] = {
                 "provided": True,
                 "unit_type": self.metadata.get("unit_annotation_unit_type", "unit"),
+                "task_family": self.metadata.get("unit_annotation_task_family"),
                 "n_parents": int(len(unit_annotations)),
                 "n_units": int(
                     sum(len(annotation.get("labels", [])) for annotation in unit_annotations)

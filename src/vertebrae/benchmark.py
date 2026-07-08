@@ -79,6 +79,7 @@ class Benchmark:
         memory_config: Optional[MemoryConfig] = None,
         execution: Optional[Any] = None,
         segmentation_config: Optional[SegmentationConfig] = None,
+        structured_aligners: Optional[dict[str, Any]] = None,
     ) -> None:
         self.dataset = dataset
         self.extractors = list(extractors or [])
@@ -101,6 +102,7 @@ class Benchmark:
         self.memory_config = memory_config or MemoryConfig()
         self.execution = execution or LocalBackend()
         self.segmentation_config = segmentation_config or SegmentationConfig()
+        self.structured_aligners = dict(structured_aligners or {})
 
     def add_extractor(self, extractor: Any) -> "Benchmark":
         """Add an extractor to this benchmark.
@@ -285,6 +287,7 @@ class Benchmark:
                 dataset=self.dataset,
                 extractor=extractor,
                 batch_size=self.embedding_config.batch_size,
+                aligners=self.structured_aligners,
             )
             for materialization in materializations:
                 output_dataset: Any = materialization.dataset

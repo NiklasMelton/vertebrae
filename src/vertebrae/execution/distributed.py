@@ -227,6 +227,7 @@ def materialize_structured_artifacts(
     extractor: Any,
     store: ArtifactStore,
     batch_size: int = 16,
+    aligners: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Materialize structured unit outputs into standard artifact boundaries."""
 
@@ -239,6 +240,7 @@ def materialize_structured_artifacts(
         dataset,
         extractor,
         batch_size=batch_size,
+        aligners=aligners,
     ):
         safe_name = materialization.name.replace("/", "_")
         output_key = f"{base_key}/outputs/{safe_name}"

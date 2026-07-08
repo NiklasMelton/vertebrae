@@ -3,7 +3,16 @@
 import numpy as np
 from _common import ensure_cache_dir, ensure_output_dir
 
-from vertebrae import Benchmark, BenchmarkDataset, UnitAnnotation
+from vertebrae import (
+    Benchmark,
+    BenchmarkDataset,
+    DetectionLayoutAdapter,
+    KeypointAdapter,
+    KeypointAnnotation,
+    RegionAnnotation,
+    SequenceAnnotation,
+    SequenceLabelingAdapter,
+)
 from vertebrae.config import CacheConfig, OverlapScoringConfig, SeparatixConfig, StabilityConfig
 from vertebrae.execution import materialize_structured_artifacts
 from vertebrae.extractors import CallableStructuredExtractor, StructuredOutputSpec
@@ -60,50 +69,55 @@ def _ocr_layout_workflow():
         y=["invoice", "invoice", "report", "report"],
         modality="image",
         metadata={"example": "structured_ocr_layout"},
-    ).with_unit_annotations(
+    )
+    dataset = DetectionLayoutAdapter(unit_type="document_region").attach(
+        dataset,
         [
-            UnitAnnotation(
+            RegionAnnotation(
                 labels=["header", "table", "table"],
                 unit_ids=["page_a:h", "page_a:t0", "page_a:t1"],
-                coordinates=[
+                boxes=[
                     [0.05, 0.05, 0.95, 0.18],
                     [0.08, 0.22, 0.92, 0.48],
                     [0.08, 0.52, 0.92, 0.78],
                 ],
-                provenance=[{"page": 0}, {"page": 0}, {"page": 0}],
+                page_id=0,
+                document_id="page_a",
             ),
-            UnitAnnotation(
+            RegionAnnotation(
                 labels=["header", "table", "table"],
                 unit_ids=["page_b:h", "page_b:t0", "page_b:t1"],
-                coordinates=[
+                boxes=[
                     [0.05, 0.05, 0.95, 0.18],
                     [0.08, 0.22, 0.92, 0.48],
                     [0.08, 0.52, 0.92, 0.78],
                 ],
-                provenance=[{"page": 1}, {"page": 1}, {"page": 1}],
+                page_id=1,
+                document_id="page_b",
             ),
-            UnitAnnotation(
+            RegionAnnotation(
                 labels=["title", "body", "footer"],
                 unit_ids=["page_c:t", "page_c:b", "page_c:f"],
-                coordinates=[
+                boxes=[
                     [0.08, 0.06, 0.88, 0.16],
                     [0.08, 0.20, 0.90, 0.74],
                     [0.10, 0.82, 0.84, 0.92],
                 ],
-                provenance=[{"page": 0}, {"page": 0}, {"page": 0}],
+                page_id=0,
+                document_id="page_c",
             ),
-            UnitAnnotation(
+            RegionAnnotation(
                 labels=["title", "body", "footer"],
                 unit_ids=["page_d:t", "page_d:b", "page_d:f"],
-                coordinates=[
+                boxes=[
                     [0.08, 0.06, 0.88, 0.16],
                     [0.08, 0.20, 0.90, 0.74],
                     [0.10, 0.82, 0.84, 0.92],
                 ],
-                provenance=[{"page": 1}, {"page": 1}, {"page": 1}],
+                page_id=1,
+                document_id="page_d",
             ),
         ],
-        unit_type="document_region",
     )
     embeddings = {
         "page_a": np.asarray([[1.0, 0.0], [0.9, 0.1], [0.85, 0.15]]),
@@ -132,38 +146,39 @@ def _asr_token_workflow():
         y=["support", "support", "weather", "weather"],
         modality="audio",
         metadata={"example": "structured_asr_tokens"},
-    ).with_unit_annotations(
+    )
+    dataset = SequenceLabelingAdapter().attach(
+        dataset,
         [
-            UnitAnnotation(
+            SequenceAnnotation(
                 labels=["greeting", "intent", "entity"],
                 unit_ids=["utt_a:0", "utt_a:1", "utt_a:2"],
-                positions=[0, 1, 2],
                 spans=[[0.0, 0.2], [0.2, 0.5], [0.5, 0.9]],
-                provenance=[{"utterance": "a"}] * 3,
+                tokens=["hello", "need", "billing"],
+                utterance_id="a",
             ),
-            UnitAnnotation(
+            SequenceAnnotation(
                 labels=["greeting", "intent", "entity"],
                 unit_ids=["utt_b:0", "utt_b:1", "utt_b:2"],
-                positions=[0, 1, 2],
                 spans=[[0.0, 0.2], [0.2, 0.5], [0.5, 0.9]],
-                provenance=[{"utterance": "b"}] * 3,
+                tokens=["hi", "need", "billing"],
+                utterance_id="b",
             ),
-            UnitAnnotation(
+            SequenceAnnotation(
                 labels=["query", "slot", "slot"],
                 unit_ids=["utt_c:0", "utt_c:1", "utt_c:2"],
-                positions=[0, 1, 2],
                 spans=[[0.0, 0.2], [0.2, 0.5], [0.5, 0.9]],
-                provenance=[{"utterance": "c"}] * 3,
+                tokens=["what", "is", "forecast"],
+                utterance_id="c",
             ),
-            UnitAnnotation(
+            SequenceAnnotation(
                 labels=["query", "slot", "slot"],
                 unit_ids=["utt_d:0", "utt_d:1", "utt_d:2"],
-                positions=[0, 1, 2],
                 spans=[[0.0, 0.2], [0.2, 0.5], [0.5, 0.9]],
-                provenance=[{"utterance": "d"}] * 3,
+                tokens=["show", "me", "forecast"],
+                utterance_id="d",
             ),
         ],
-        unit_type="token",
     )
     embeddings = {
         "utt_a": np.asarray([[1.0, 0.1], [0.8, 0.2], [0.7, 0.3]]),
@@ -192,34 +207,39 @@ def _pose_keypoint_workflow():
         y=["walk", "walk", "stretch", "stretch"],
         modality="image",
         metadata={"example": "structured_pose_keypoints"},
-    ).with_unit_annotations(
+    )
+    dataset = KeypointAdapter().attach(
+        dataset,
         [
-            UnitAnnotation(
+            KeypointAnnotation(
                 labels=["shoulder", "elbow", "wrist"],
                 unit_ids=["fa:s", "fa:e", "fa:w"],
                 coordinates=[[0.30, 0.20], [0.42, 0.34], [0.55, 0.48]],
-                provenance=[{"frame": 0, "person": "p0"}] * 3,
+                frame_id=0,
+                person_id="p0",
             ),
-            UnitAnnotation(
+            KeypointAnnotation(
                 labels=["shoulder", "elbow", "wrist"],
                 unit_ids=["fb:s", "fb:e", "fb:w"],
                 coordinates=[[0.31, 0.20], [0.43, 0.34], [0.56, 0.48]],
-                provenance=[{"frame": 1, "person": "p0"}] * 3,
+                frame_id=1,
+                person_id="p0",
             ),
-            UnitAnnotation(
+            KeypointAnnotation(
                 labels=["hip", "knee", "ankle"],
                 unit_ids=["fc:h", "fc:k", "fc:a"],
                 coordinates=[[0.34, 0.58], [0.42, 0.75], [0.50, 0.92]],
-                provenance=[{"frame": 0, "person": "p1"}] * 3,
+                frame_id=0,
+                person_id="p1",
             ),
-            UnitAnnotation(
+            KeypointAnnotation(
                 labels=["hip", "knee", "ankle"],
                 unit_ids=["fd:h", "fd:k", "fd:a"],
                 coordinates=[[0.35, 0.58], [0.43, 0.75], [0.51, 0.92]],
-                provenance=[{"frame": 1, "person": "p1"}] * 3,
+                frame_id=1,
+                person_id="p1",
             ),
         ],
-        unit_type="keypoint",
     )
     embeddings = {
         "frame_a": np.asarray([[0.95, 0.05], [0.85, 0.15], [0.75, 0.25]]),
