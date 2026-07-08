@@ -151,3 +151,22 @@ def test_onnx_extractor_works_in_streaming_evaluator(fake_onnxruntime, fake_over
     assert metadata["streamed"] is True
     assert metadata["stream_batch_size"] == 2
     assert len(fake_onnxruntime.instances[0].run_calls) == 3
+
+
+def test_onnx_extractor_supports_structured_outputs(fake_onnxruntime):
+    extractor = ONNXExtractor(
+        "onnx_structured",
+        model_path="/tmp/model.onnx",
+        input_fn=lambda batch: batch,
+        output_fn=lambda raw_outputs: {
+            "tokens": np.arange(len(raw_outputs[0]) * 2 * 3, dtype=float).reshape(
+                len(raw_outputs[0]), 2, 3
+            )
+        },
+        structured_outputs=[{"name": "tokens", "unit_type": "token"}],
+    )
+
+    output = extractor.transform_structured(np.arange(8, dtype=float).reshape(2, 4))[0]
+
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (2, 3)

@@ -9,12 +9,16 @@ from vertebrae.extractors._utils import (
     coerce_image,
     iter_chunks,
     materialize_named_outputs,
+    materialize_named_structured_outputs,
     maybe_move_to_device,
     resolve_output_specs,
+    resolve_structured_output_specs,
     spec_to_recipe,
     stack_batch,
+    structured_spec_to_recipe,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 
 class TorchvisionVisionExtractor:
@@ -29,6 +33,7 @@ class TorchvisionVisionExtractor:
         preprocess_fn: Optional[Callable[[Any], Any]] = None,
         output_fn: Optional[Callable[[Any], Any]] = None,
         outputs: Optional[Sequence[Dict[str, Any]]] = None,
+        structured_outputs: Optional[Sequence[Dict[str, Any]]] = None,
         image_mode: str = "auto",
         alpha_mode: str = "drop",
         device: Optional[str] = None,
@@ -41,6 +46,7 @@ class TorchvisionVisionExtractor:
         self.preprocess_fn = preprocess_fn
         self.output_fn = output_fn
         self._output_specs = resolve_output_specs(outputs)
+        self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
         self.image_mode = image_mode
         self.alpha_mode = alpha_mode
         self.device = device
@@ -102,6 +108,7 @@ class TorchvisionVisionExtractor:
                     self._output_specs,
                     owner=f"TorchvisionVisionExtractor '{self.name}'",
                     allow_sparse=False,
+                    fallback_output=raw_output,
                 )
                 for output in outputs:
                     collected[output.name].append(output.embeddings.astype(np.float32, copy=False))
@@ -115,8 +122,65 @@ class TorchvisionVisionExtractor:
             for spec in self._output_specs
         ]
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError(
+                "TorchvisionVisionExtractor was not configured with structured_outputs."
+            )
+        torch_module, image_module, model, preprocess_fn = self._load_model()
+        images = list(X)
+        model.eval()
+        collected: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._structured_output_specs
+        }
+        with torch_module.no_grad():
+            for chunk in iter_chunks(images, self.batch_size):
+                batch = [
+                    preprocess_fn(
+                        coerce_image(
+                            item,
+                            image_module=image_module,
+                            image_mode=self.image_mode,
+                            alpha_mode=self.alpha_mode,
+                        )
+                    )
+                    for item in chunk
+                ]
+                stacked = stack_batch(batch, torch_module=torch_module)
+                stacked = maybe_move_to_device(
+                    stacked,
+                    device=self._device(torch_module),
+                    torch_module=torch_module,
+                )
+                raw_output = model(stacked)
+                projected = self.output_fn(raw_output) if self.output_fn is not None else raw_output
+                outputs = materialize_named_structured_outputs(
+                    projected,
+                    self._structured_output_specs,
+                    owner=f"TorchvisionVisionExtractor '{self.name}'",
+                    raw_output=raw_output,
+                    expected_parents=len(chunk),
+                )
+                for output in outputs:
+                    collected[output.name].extend(
+                        np.asarray(item, dtype=np.float32) for item in output.embeddings
+                    )
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=collected[spec.name],
+                unit_type=spec.unit_type,
+                recipe=structured_spec_to_recipe(spec),
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -136,6 +200,11 @@ class TorchvisionVisionExtractor:
             "model_kwargs": self.model_kwargs,
             "streaming_safe": self.streaming_safe,
         }
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                structured_spec_to_recipe(spec) for spec in self._structured_output_specs
+            ]
+        return recipe
 
     def _device(self, torch_module: Any) -> str:
         if self.device is not None:

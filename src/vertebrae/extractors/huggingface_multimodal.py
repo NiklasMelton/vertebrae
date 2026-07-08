@@ -5,7 +5,13 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, cast
 
 import numpy as np
 
+from vertebrae.extractors._utils import (
+    materialize_structured_parent_matrices,
+    resolve_output_value,
+    structured_spec_to_recipe,
+)
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 _TEXT_MODALITIES = {"text"}
 _IMAGE_MODALITIES = {"image"}
@@ -34,6 +40,7 @@ class HFMultimodalExtractor:
         input_map: Optional[Dict[str, str]] = None,
         input_fn: Optional[Callable[[Any], Dict[str, Any]]] = None,
         output_fn: Optional[Callable[[Any], Any]] = None,
+        structured_outputs: Optional[List[Dict[str, Any]]] = None,
         batch_size: int = 16,
         image_mode: str = "auto",
         alpha_mode: str = "drop",
@@ -66,6 +73,9 @@ class HFMultimodalExtractor:
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
         self._output_specs = _resolve_multimodal_output_specs(outputs)
+        self._structured_output_specs = _resolve_multimodal_structured_output_specs(
+            structured_outputs
+        )
         self._processor: Any = None
         self._model: Any = None
         self._torch: Any = None
@@ -138,8 +148,50 @@ class HFMultimodalExtractor:
             )
         return materialized
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError("HFMultimodalExtractor was not configured with structured_outputs.")
+        processor, model, torch, image_module = self._load_model()
+        batches = _normalize_multimodal_samples(X, self.input_modalities)
+        model.eval()
+        outputs_by_name: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._structured_output_specs
+        }
+
+        with torch.no_grad():
+            for batch in _iter_chunks(batches, self.batch_size):
+                encoded = self._prepare_batch(batch, processor, torch, image_module)
+                model_output = model(**encoded)
+                projected = (
+                    self.output_fn(model_output) if self.output_fn is not None else model_output
+                )
+                for spec in self._structured_output_specs:
+                    value = _resolve_structured_output(projected, spec, model_output=model_output)
+                    parents = materialize_structured_parent_matrices(
+                        value,
+                        f"HFMultimodalExtractor structured output '{spec.name}'",
+                        expected_parents=len(batch),
+                    )
+                    outputs_by_name[spec.name].extend(
+                        np.asarray(parent, dtype=np.float32) for parent in parents
+                    )
+
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=outputs_by_name[spec.name],
+                unit_type=spec.unit_type,
+                recipe=structured_spec_to_recipe(spec),
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -160,6 +212,11 @@ class HFMultimodalExtractor:
             "streaming_safe": self.streaming_safe,
             "outputs": [_spec_to_recipe(spec) for spec in self._output_specs],
         }
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                _structured_spec_to_recipe(spec) for spec in self._structured_output_specs
+            ]
+        return recipe
 
     def _load_model(self) -> Any:
         if self._model is None:
@@ -264,6 +321,62 @@ def _resolve_multimodal_output_specs(outputs: List[Dict[str, Any]]) -> List[Embe
     return specs
 
 
+def _resolve_multimodal_structured_output_specs(
+    outputs: Optional[List[Dict[str, Any]]],
+) -> List[StructuredOutputSpec]:
+    if outputs is None:
+        return []
+    if not outputs:
+        raise ValueError("HFMultimodalExtractor structured_outputs must not be empty.")
+    specs: List[StructuredOutputSpec] = []
+    seen = set()
+    for output in outputs:
+        name = str(output.get("name", "")).strip()
+        if not name:
+            raise ValueError("HFMultimodalExtractor structured output specs must include a name.")
+        if name in seen:
+            raise ValueError("HFMultimodalExtractor structured output names must be unique.")
+        unit_type = str(output.get("unit_type", "")).strip()
+        if not unit_type:
+            raise ValueError(
+                f"HFMultimodalExtractor structured output '{name}' must include a unit_type."
+            )
+        source = str(output.get("source", "")).strip()
+        if not source:
+            raise ValueError(
+                f"HFMultimodalExtractor structured output '{name}' must include a source."
+            )
+        if source not in _KNOWN_MODALITIES:
+            raise ValueError(
+                f"HFMultimodalExtractor structured output '{name}' has unsupported source "
+                f"'{source}'."
+            )
+        model_output = str(output.get("model_output", "")).strip()
+        if not model_output:
+            raise ValueError(
+                f"HFMultimodalExtractor structured output '{name}' must include a "
+                "model_output selector."
+            )
+        metadata = {
+            "source": source,
+            "model_output": model_output,
+        }
+        if output.get("selector") is not None:
+            metadata["selector"] = str(output["selector"])
+        specs.append(
+            StructuredOutputSpec(
+                name=name,
+                unit_type=unit_type,
+                hidden_layer=(
+                    int(output["hidden_layer"]) if output.get("hidden_layer") is not None else None
+                ),
+                metadata=metadata,
+            )
+        )
+        seen.add(name)
+    return specs
+
+
 def _spec_to_recipe(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
     return {
         "name": spec.name,
@@ -281,6 +394,17 @@ def _spec_to_metadata(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
         "model_output": spec.metadata.get("model_output"),
         "pooling": spec.pooling,
         "hidden_layer": spec.hidden_layer,
+    }
+
+
+def _structured_spec_to_recipe(spec: StructuredOutputSpec) -> Dict[str, Any]:
+    return {
+        "name": spec.name,
+        "unit_type": spec.unit_type,
+        "source": spec.metadata.get("source"),
+        "model_output": spec.metadata.get("model_output"),
+        "hidden_layer": spec.hidden_layer,
+        "selector": spec.metadata.get("selector"),
     }
 
 
@@ -359,7 +483,7 @@ def _default_processor_inputs(
     return collected
 
 
-def _resolve_named_output(projected: Any, spec: EmbeddingOutputSpec, model_output: Any) -> Any:
+def _resolve_named_output(projected: Any, spec: Any, model_output: Any) -> Any:
     if isinstance(projected, dict) and spec.name in projected:
         return projected[spec.name]
     value = _resolve_path(projected, cast(str, spec.metadata["model_output"]))
@@ -370,6 +494,37 @@ def _resolve_named_output(projected: Any, spec: EmbeddingOutputSpec, model_outpu
             f"HFMultimodalExtractor output '{spec.name}' could not resolve "
             f"model_output='{spec.metadata['model_output']}'."
         )
+    return value
+
+
+def _resolve_structured_output(
+    projected: Any,
+    spec: StructuredOutputSpec,
+    model_output: Any,
+) -> Any:
+    value = _resolve_named_output(projected, spec, model_output=model_output)
+    selector = spec.metadata.get("selector")
+    if selector is not None:
+        resolved = resolve_output_value(value, str(selector))
+        if resolved is None:
+            raise ValueError(
+                f"HFMultimodalExtractor structured output '{spec.name}' could not resolve "
+                f"selector='{selector}'."
+            )
+        value = resolved
+    if spec.hidden_layer is not None:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(
+                f"HFMultimodalExtractor structured output '{spec.name}' requested hidden_layer "
+                "but model_output does not resolve to hidden states."
+            )
+        try:
+            value = value[spec.hidden_layer]
+        except IndexError as exc:
+            raise ValueError(
+                f"HFMultimodalExtractor structured output '{spec.name}' hidden_layer "
+                f"{spec.hidden_layer} is out of range."
+            ) from exc
     return value
 
 

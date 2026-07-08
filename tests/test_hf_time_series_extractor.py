@@ -155,6 +155,23 @@ def test_hf_time_series_selects_hidden_layer(fake_time_series_modules):
     ]
 
 
+def test_hf_time_series_supports_structured_outputs(fake_time_series_modules):
+    extractor = HFTimeSeriesExtractor(
+        name="ts",
+        model_id="fake-timeseries",
+        structured_outputs=[{"name": "steps", "unit_type": "time_step", "hidden_layer": 2}],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured(np.arange(12, dtype=float).reshape(2, 6))[0]
+
+    assert output.name == "steps"
+    assert output.unit_type == "time_step"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (6, 3)
+    assert extractor.recipe()["structured_outputs"][0]["unit_type"] == "time_step"
+
+
 def test_hf_time_series_rejects_invalid_shape(fake_time_series_modules):
     extractor = HFTimeSeriesExtractor(name="ts", model_id="fake-timeseries")
 

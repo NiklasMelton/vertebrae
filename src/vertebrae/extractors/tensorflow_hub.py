@@ -6,11 +6,16 @@ import numpy as np
 
 from vertebrae.extractors._utils import (
     callable_name,
+    infer_batch_size,
     materialize_named_outputs,
+    materialize_named_structured_outputs,
     resolve_output_specs,
+    resolve_structured_output_specs,
     spec_to_recipe,
+    structured_spec_to_recipe,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 
 class TFHubExtractor:
@@ -23,6 +28,7 @@ class TFHubExtractor:
         input_fn: Optional[Callable[[Any], Any]] = None,
         output_fn: Optional[Callable[[Any], Any]] = None,
         outputs: Optional[Sequence[Dict[str, Any]]] = None,
+        structured_outputs: Optional[Sequence[Dict[str, Any]]] = None,
         batch_size: int = 32,
         modality: str = "unknown",
         model_kwargs: Optional[Dict[str, Any]] = None,
@@ -33,6 +39,7 @@ class TFHubExtractor:
         self.input_fn = input_fn or np.asarray
         self.output_fn = output_fn
         self._output_specs = resolve_output_specs(outputs)
+        self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
         self.batch_size = batch_size
         self.modality = modality
         self.model_kwargs = model_kwargs or {}
@@ -73,6 +80,7 @@ class TFHubExtractor:
             self._output_specs,
             owner=f"TFHubExtractor '{self.name}'",
             allow_sparse=False,
+            fallback_output=raw_output,
         )
         return [
             EmbeddingOutput(
@@ -84,8 +92,40 @@ class TFHubExtractor:
             for output, spec in zip(outputs, self._output_specs)
         ]
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError("TFHubExtractor was not configured with structured_outputs.")
+        model = self._load_model()
+        raw_inputs = self.input_fn(X)
+        if callable(model):
+            raw_output = model(raw_inputs, **self.call_kwargs)
+        else:
+            raw_output = model.signatures["default"](raw_inputs)
+        projected = self.output_fn(raw_output) if self.output_fn is not None else raw_output
+        expected_parents = infer_batch_size(raw_inputs)
+        outputs = materialize_named_structured_outputs(
+            projected,
+            self._structured_output_specs,
+            owner=f"TFHubExtractor '{self.name}'",
+            raw_output=raw_output,
+            expected_parents=expected_parents,
+        )
+        return [
+            StructuredEmbeddingOutput(
+                name=output.name,
+                embeddings=[np.asarray(item, dtype=np.float32) for item in output.embeddings],
+                unit_type=output.unit_type,
+                recipe=structured_spec_to_recipe(spec),
+                metadata=dict(spec.metadata),
+            )
+            for output, spec in zip(outputs, self._structured_output_specs)
+        ]
+
     def recipe(self) -> Dict[str, Any]:
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -98,6 +138,11 @@ class TFHubExtractor:
             "call_kwargs": self.call_kwargs,
             "streaming_safe": self.streaming_safe,
         }
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                structured_spec_to_recipe(spec) for spec in self._structured_output_specs
+            ]
+        return recipe
 
     def _load_model(self) -> Any:
         if self._model is None:

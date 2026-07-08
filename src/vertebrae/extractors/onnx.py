@@ -5,6 +5,18 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
+from vertebrae.extractors._utils import (
+    callable_name,
+    infer_batch_size,
+    materialize_named_outputs,
+    materialize_structured_parent_matrices,
+    resolve_output_specs,
+    resolve_structured_output_specs,
+    spec_to_recipe,
+    structured_spec_to_recipe,
+)
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -33,6 +45,8 @@ class ONNXExtractor:
         model_path: Union[str, Path],
         input_fn: Optional[Callable[[Any], Any]] = None,
         output_fn: Optional[Callable[[Sequence[Any]], Any]] = None,
+        outputs: Optional[List[Dict[str, Any]]] = None,
+        structured_outputs: Optional[List[Dict[str, Any]]] = None,
         input_names: Optional[List[str]] = None,
         output_names: Optional[List[str]] = None,
         providers: Optional[List[str]] = None,
@@ -47,6 +61,8 @@ class ONNXExtractor:
         self.model_path = Path(model_path)
         self.input_fn = input_fn
         self.output_fn = output_fn
+        self._output_specs = resolve_output_specs(outputs)
+        self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
         self.input_names = input_names
         self.output_names = output_names
         self.providers = providers
@@ -67,13 +83,14 @@ class ONNXExtractor:
     def transform(self, X: Any) -> np.ndarray:
         """Run the ONNX model and validate the resulting embeddings."""
 
-        session = self._load_session()
-        inputs = self._prepare_inputs(session, X)
-        output_names = self._resolve_output_names(session)
-        raw_outputs = session.run(output_names, inputs)
-        embeddings = self._select_output(raw_outputs)
+        outputs = self.transform_many(X)
+        if len(outputs) != 1:
+            raise ValueError(
+                "ONNXExtractor.transform() is only available when exactly one output is "
+                "configured. Use Benchmark/Evaluator or transform_many()."
+            )
         return ensure_numeric_matrix(
-            embeddings,
+            outputs[0].embeddings,
             f"ONNXExtractor '{self.name}' output",
             allow_sparse=self.allow_sparse,
         )
@@ -83,16 +100,85 @@ class ONNXExtractor:
 
         return self.transform(X)
 
+    def output_specs(self) -> List[EmbeddingOutputSpec]:
+        return list(self._output_specs)
+
+    def transform_many(self, X: Any) -> List[EmbeddingOutput]:
+        session = self._load_session()
+        projected, named_outputs = self._run_session(session, X)
+        outputs = materialize_named_outputs(
+            projected,
+            self._output_specs,
+            owner=f"ONNXExtractor '{self.name}'",
+            allow_sparse=self.allow_sparse,
+            fallback_output=named_outputs,
+        )
+        materialized: List[EmbeddingOutput] = []
+        for output, spec in zip(outputs, self._output_specs):
+            materialized.append(
+                EmbeddingOutput(
+                    name=output.name,
+                    embeddings=output.embeddings,
+                    recipe=spec_to_recipe(spec),
+                    metadata=dict(spec.metadata),
+                )
+            )
+        return materialized
+
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError("ONNXExtractor was not configured with structured_outputs.")
+        session = self._load_session()
+        projected, named_outputs = self._run_session(session, X)
+        expected_parents = self._infer_batch_size(X, session)
+        outputs: List[StructuredEmbeddingOutput] = []
+        for spec in self._structured_output_specs:
+            value = None
+            selector = spec.metadata.get("selector")
+            if selector is not None:
+                value = _resolve_selector(projected, str(selector))
+                if value is None and named_outputs is not projected:
+                    value = _resolve_selector(named_outputs, str(selector))
+            elif isinstance(projected, dict) and spec.name in projected:
+                value = projected[spec.name]
+            elif isinstance(named_outputs, dict) and spec.name in named_outputs:
+                value = named_outputs[spec.name]
+            elif len(self._structured_output_specs) == 1:
+                value = projected
+            if value is None:
+                raise ValueError(
+                    f"ONNXExtractor structured output '{spec.name}' could not be resolved."
+                )
+            embeddings = materialize_structured_parent_matrices(
+                value,
+                f"ONNXExtractor structured output '{spec.name}'",
+                expected_parents=expected_parents,
+            )
+            outputs.append(
+                StructuredEmbeddingOutput(
+                    name=spec.name,
+                    embeddings=[np.asarray(item, dtype=np.float32) for item in embeddings],
+                    unit_type=spec.unit_type,
+                    recipe=structured_spec_to_recipe(spec),
+                    metadata=dict(spec.metadata),
+                )
+            )
+        return outputs
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable ONNX extractor recipe."""
 
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
             "model_path": str(self.model_path),
-            "input_fn": _callable_name(self.input_fn) if self.input_fn is not None else None,
-            "output_fn": _callable_name(self.output_fn) if self.output_fn is not None else None,
+            "input_fn": callable_name(self.input_fn) if self.input_fn is not None else None,
+            "output_fn": callable_name(self.output_fn) if self.output_fn is not None else None,
+            "outputs": [spec_to_recipe(spec) for spec in self._output_specs],
             "input_names": self.input_names,
             "output_names": self.output_names,
             "providers": self.providers,
@@ -101,6 +187,11 @@ class ONNXExtractor:
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
         }
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                structured_spec_to_recipe(spec) for spec in self._structured_output_specs
+            ]
+        return recipe
 
     def _load_session(self) -> Any:
         if self._session is None:
@@ -165,7 +256,11 @@ class ONNXExtractor:
         names = [str(item.name) for item in session.get_outputs()]
         if not names:
             raise ValueError("The ONNX model exposes no outputs.")
-        if self.output_fn is not None:
+        if (
+            self.output_fn is not None
+            or len(self._output_specs) > 1
+            or self._structured_output_specs
+        ):
             return names
         if len(names) != 1:
             raise ValueError(
@@ -173,14 +268,26 @@ class ONNXExtractor:
             )
         return names
 
-    def _select_output(self, raw_outputs: Sequence[Any]) -> Any:
+    def _run_session(self, session: Any, X: Any) -> Any:
+        inputs = self._prepare_inputs(session, X)
+        output_names = self._resolve_output_names(session)
+        raw_outputs = session.run(output_names, inputs)
+        named_outputs = dict(zip(output_names or [], raw_outputs))
         if self.output_fn is not None:
-            return self.output_fn(raw_outputs)
-        if len(raw_outputs) != 1:
-            raise ValueError(
-                "ONNXExtractor received multiple outputs but no output_fn was provided."
-            )
-        return raw_outputs[0]
+            projected = self.output_fn(raw_outputs)
+        elif len(self._output_specs) > 1 or self._structured_output_specs:
+            projected = named_outputs
+        else:
+            if len(raw_outputs) != 1:
+                raise ValueError(
+                    "ONNXExtractor received multiple outputs but no output_fn was provided."
+                )
+            projected = raw_outputs[0]
+        return projected, named_outputs
+
+    def _infer_batch_size(self, X: Any, session: Any) -> int:
+        inputs = self._prepare_inputs(session, X)
+        return infer_batch_size(inputs)
 
     def _coerce_input_value(self, value: Any) -> Any:
         if isinstance(value, np.ndarray):
@@ -188,5 +295,19 @@ class ONNXExtractor:
         return np.asarray(value)
 
 
-def _callable_name(fn: Callable[..., Any]) -> str:
-    return f"{getattr(fn, '__module__', '<unknown>')}.{getattr(fn, '__qualname__', repr(fn))}"
+def _resolve_selector(value: Any, selector: str) -> Any:
+    current = value
+    for part in selector.split("."):
+        if current is None:
+            return None
+        if isinstance(current, dict):
+            current = current.get(part)
+            continue
+        if isinstance(current, (list, tuple)) and part.isdigit():
+            index = int(part)
+            current = current[index] if index < len(current) else None
+            continue
+        if not hasattr(current, part):
+            return None
+        current = getattr(current, part)
+    return current

@@ -37,8 +37,11 @@ Structured unit workflows use `StructuredOutputSpec` and
 `StructuredEmbeddingOutput`. `CallableStructuredExtractor` and
 `PrecomputedStructuredExtractor` cover explicit adapters, while
 `TorchExtractor`, `KerasExtractor`, `HFTextExtractor`, `HFAudioExtractor`,
-`HFVisionExtractor`, and `HFVideoExtractor` can expose native
-`transform_structured(...)` outputs alongside ordinary pooled embeddings.
+`HFVisionExtractor`, `HFVideoExtractor`, `HFTimeSeriesExtractor`,
+`HFMultimodalExtractor`, `ONNXExtractor`, `TimmVisionExtractor`,
+`TorchvisionVisionExtractor`, `TFHubExtractor`, and `JAXFlaxExtractor` can
+expose native `transform_structured(...)` outputs alongside ordinary pooled
+embeddings.
 Structured outputs are intended for raw token, frame, region, keypoint, or
 other per-parent unit matrices that should be materialized and scored as unit
 embeddings without first precomputing a flat embedding dataset by hand.
@@ -171,6 +174,21 @@ common image-text models it maps image fields to processor `images` and text
 fields to processor `text` by default. Use `input_map` or `input_fn` for custom
 processor shapes, and `output_fn` when model outputs need explicit projection
 before named output validation.
+
+For structured outputs on adapter-style extractors, reuse the same forward path
+and expose per-parent 2D unit matrices with explicit specs:
+
+```python
+extractor = ONNXExtractor(
+    name="layout_tokens",
+    model_path="layout.onnx",
+    input_fn=prepare_inputs,
+    output_fn=lambda outputs: {"regions": outputs[0]},
+    structured_outputs=[
+        {"name": "regions", "unit_type": "region"},
+    ],
+)
+```
 
 Streaming-safe extractors, including Hugging Face backbones and precomputed embeddings,
 can be embedded batch-by-batch through `EmbeddingConfig(batch_size=...)`. This is
