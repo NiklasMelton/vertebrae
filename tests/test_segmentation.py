@@ -5,7 +5,6 @@ from vertebrae import (
     BenchmarkDataset,
     CacheConfig,
     CallableSpatialExtractor,
-    ProbeConfig,
     SegmentationConfig,
     SegmentationDataset,
     SeparatixConfig,
@@ -105,7 +104,6 @@ def test_segmentation_benchmark_reuses_standard_scoring_pipeline(
         ),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
     ).run()
 

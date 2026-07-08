@@ -815,7 +815,6 @@ def benchmark_result_from_artifacts(
         ),
         overlap=overlap,
         stability=stability,
-        probes=None,
         separatix=separatix,
         embedding_metadata=embedding_metadata,
         compression_metadata=compression_metadata,

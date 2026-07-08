@@ -6,7 +6,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from vertebrae import Benchmark, BenchmarkDataset
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor, PrecomputedExtractor, SklearnExtractor
 
 
@@ -25,7 +25,6 @@ def test_full_benchmark_multiple_extractor_families_generates_reports(
     benchmark = Benchmark(
         dataset,
         stability_config=StabilityConfig(repeats=2),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     )
     benchmark.add_extractor(PrecomputedExtractor("precomputed"))

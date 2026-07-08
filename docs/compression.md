@@ -2,7 +2,7 @@
 
 `vertebrae` can apply an optional embedding-compression step after feature
 extraction and before OverlapIndex scoring, stability analysis, Separatix
-diagnostics, and any opt-in native probes.
+diagnostics.
 This is useful when you want to:
 
 - compare raw embeddings against compressed variants,

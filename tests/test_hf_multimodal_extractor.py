@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, ProbeConfig, SeparatixConfig, StabilityConfig
+from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
 from vertebrae.extractors import HFMultimodalExtractor
 
 
@@ -221,7 +221,6 @@ def test_hf_multimodal_recipe_and_report_metadata(
         dataset=_dataset(),
         extractor=extractor,
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()

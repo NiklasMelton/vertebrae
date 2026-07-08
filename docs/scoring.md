@@ -189,10 +189,9 @@ Separatix follows the same normalization convention as overlap scoring when
 `normalize_embeddings=True`. Sparse inputs remain sparse at the vertebrae boundary,
 and Separatix uses its own densification policy internally.
 
-Native vertebrae probes are still available through `ProbeConfig`, but they are
-now opt-in quick checks rather than part of the default report path. They are
-currently classification-only; when enabled on a multi-label or regression dataset
-they are skipped with a warning while overlap scoring and Separatix continue to run.
+Separatix is the only downstream-complexity and probe-style diagnostic path in
+vertebrae. Ranking remains based on overlap scores; Separatix probe fields are
+reported only when the Separatix diagnostic runs and includes them.
 
 ## Practical guidance
 

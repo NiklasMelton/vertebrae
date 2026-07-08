@@ -5,7 +5,6 @@ from vertebrae import Benchmark, BenchmarkDataset
 from vertebrae.config import (
     CacheConfig,
     LabelViewConfig,
-    ProbeConfig,
     SeparatixConfig,
     StabilityConfig,
 )
@@ -21,7 +20,6 @@ def test_multi_extractor_benchmark(fake_overlapindex):
     benchmark = Benchmark(
         dataset,
         stability_config=StabilityConfig(repeats=2),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     )
     benchmark.add_extractor(CallableExtractor("identity", lambda value: value, modality="tabular"))
@@ -72,7 +70,6 @@ def test_hierarchy_label_views_produce_separate_result_variants(fake_overlapinde
     benchmark = Benchmark(
         dataset,
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
         label_view_config=LabelViewConfig(enabled=True, hierarchy_levels=("domain", "family")),
@@ -119,7 +116,6 @@ def test_output_levels_route_multi_output_embeddings_to_hierarchy_views(
         dataset=dataset,
         extractors=[extractor],
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
         label_view_config=LabelViewConfig(
@@ -161,7 +157,6 @@ def test_output_levels_validate_hierarchy_and_output_names(fake_overlapindex):
             dataset=dataset,
             extractors=[extractor],
             stability_config=StabilityConfig(enabled=False),
-            probe_config=ProbeConfig(enabled=False),
             separatix_config=SeparatixConfig(enabled=False),
             cache_config=CacheConfig(enabled=False),
             label_view_config=LabelViewConfig(output_levels={"missing": "family"}),
@@ -177,7 +172,6 @@ def test_output_levels_validate_hierarchy_and_output_names(fake_overlapindex):
             dataset=plain_dataset,
             extractors=[extractor],
             stability_config=StabilityConfig(enabled=False),
-            probe_config=ProbeConfig(enabled=False),
             separatix_config=SeparatixConfig(enabled=False),
             cache_config=CacheConfig(enabled=False),
             label_view_config=LabelViewConfig(output_levels={"layer_6": "family"}),
@@ -200,7 +194,6 @@ def test_output_levels_skip_invalid_mapped_hierarchy_levels(fake_overlapindex):
         dataset=dataset,
         extractors=[extractor],
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
         label_view_config=LabelViewConfig(
@@ -217,7 +210,6 @@ def test_output_levels_skip_invalid_mapped_hierarchy_levels(fake_overlapindex):
             dataset=dataset,
             extractors=[extractor],
             stability_config=StabilityConfig(enabled=False),
-            probe_config=ProbeConfig(enabled=False),
             separatix_config=SeparatixConfig(enabled=False),
             cache_config=CacheConfig(enabled=False),
             label_view_config=LabelViewConfig(
@@ -250,7 +242,6 @@ def test_output_levels_reuse_base_embedding_cache(tmp_path, fake_overlapindex):
         dataset=dataset,
         extractors=[extractor],
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path)),
         label_view_config=config,
@@ -259,7 +250,6 @@ def test_output_levels_reuse_base_embedding_cache(tmp_path, fake_overlapindex):
         dataset=dataset,
         extractors=[extractor],
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path)),
         label_view_config=config,
@@ -305,7 +295,6 @@ def test_multimodal_dataset_expands_multi_output_results(fake_overlapindex):
         dataset=dataset,
         extractors=[extractor],
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()

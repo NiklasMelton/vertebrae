@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator, MemoryConfig
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor
 from vertebrae.utils.memory import resolve_memory_budget
 
@@ -52,7 +52,6 @@ def test_streaming_embedding_fails_after_probe_when_auto_subsampling_disabled(
             extractor=extractor,
             scoring_config=OverlapScoringConfig(k=1),
             stability_config=StabilityConfig(enabled=False),
-            probe_config=ProbeConfig(enabled=False),
             cache_config=CacheConfig(enabled=False),
             embedding_config=EmbeddingConfig(batch_size=2),
             memory_config=MemoryConfig(
@@ -87,7 +86,6 @@ def test_streaming_embedding_auto_subsamples_when_scoring_would_exceed_memory(
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=1),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         embedding_config=EmbeddingConfig(batch_size=2),
         memory_config=MemoryConfig(max_memory_bytes=4_000),
@@ -125,7 +123,6 @@ def test_user_requested_subsample_rate_limits_benchmark_samples(tmp_path, fake_o
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=1),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         embedding_config=EmbeddingConfig(batch_size=3),
         memory_config=MemoryConfig(max_memory_bytes=10_000_000, subsample_rate=0.5),
@@ -159,7 +156,6 @@ def test_streaming_embedding_records_memory_estimate(tmp_path, fake_overlapindex
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=1),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         embedding_config=EmbeddingConfig(batch_size=3),
         memory_config=MemoryConfig(max_memory_bytes=10_000_000),
@@ -191,7 +187,6 @@ def test_streaming_probe_is_reused_when_no_subsampling_is_needed(tmp_path, fake_
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=1),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         embedding_config=EmbeddingConfig(batch_size=3),
         memory_config=MemoryConfig(max_memory_bytes=10_000_000),

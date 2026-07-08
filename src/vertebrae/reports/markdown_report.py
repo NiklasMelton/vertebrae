@@ -106,7 +106,7 @@ def render_markdown_report(result: Any) -> str:
     for rank, item in enumerate(result.ranked_results(), start=1):
         interval = _format_interval(item.stability)
         weakest = item.weakest_class if item.weakest_class is not None else ""
-        probe_accuracy = _probe_accuracy(item.probes, item.separatix)
+        probe_accuracy = _separatix_probe_accuracy(item.separatix)
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
         label_view = (item.label_view or {}).get("name", "primary")
         compression_method = item.compression_metadata.get("method", "none")
@@ -227,23 +227,6 @@ def render_markdown_report(result: Any) -> str:
             lines.append("Stability analysis was not run.")
         lines.append("")
 
-        lines.extend(["#### Probe results", ""])
-        if item.probes and item.probes.get("enabled"):
-            lines.append("| method | accuracy | macro_f1 | balanced_accuracy |")
-            lines.append("| --- | ---: | ---: | ---: |")
-            for method, scores in item.probes.get("results", {}).items():
-                lines.append(
-                    f"| {method} | {_format_float(scores.get('accuracy'))} | "
-                    f"{_format_float(scores.get('macro_f1'))} | "
-                    f"{_format_float(scores.get('balanced_accuracy'))} |"
-                )
-        else:
-            lines.append("Probe evaluation was not run.")
-            if item.probes and item.probes.get("warnings"):
-                for warning in item.probes.get("warnings", []):
-                    lines.append(f"- warning: {warning}")
-        lines.append("")
-
         lines.extend(["#### Separatix complexity diagnostic", ""])
         if item.separatix is None:
             lines.append("Separatix diagnostics were disabled.")
@@ -308,26 +291,6 @@ def _format_interval(stability: Any) -> str:
         return ""
     summary = stability.get("summary", {})
     return f"{_format_float(summary.get('lower'))}-{_format_float(summary.get('upper'))}"
-
-
-def _probe_accuracy(probes: Any, separatix: Any) -> str:
-    separatix_accuracy = _separatix_probe_accuracy(separatix)
-    if separatix_accuracy:
-        return separatix_accuracy
-    return _native_probe_accuracy(probes)
-
-
-def _native_probe_accuracy(probes: Any) -> str:
-    if not probes or not probes.get("enabled"):
-        return ""
-    accuracies = [
-        scores.get("accuracy")
-        for scores in probes.get("results", {}).values()
-        if scores.get("accuracy") is not None
-    ]
-    if not accuracies:
-        return ""
-    return f"{max(accuracies):.4f}"
 
 
 def _separatix_probe_accuracy(separatix: Any) -> str:

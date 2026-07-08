@@ -19,7 +19,6 @@ from vertebrae.config import (
     LabelViewConfig,
     MemoryConfig,
     OverlapScoringConfig,
-    ProbeConfig,
     SegmentationConfig,
     SeparatixConfig,
     StabilityConfig,
@@ -33,7 +32,6 @@ from vertebrae.reports.recommendations import (
 )
 from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.overlap import OverlapIndexScorer
-from vertebrae.scoring.probes import run_probes
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
 from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix
@@ -57,7 +55,6 @@ class Benchmark:
         extractors: Optional iterable of extractors to evaluate.
         scoring_config: OverlapIndex scoring configuration.
         stability_config: Stability-analysis configuration.
-        probe_config: Optional native probe-classifier configuration.
         cache_config: Embedding cache configuration.
         embedding_config: Embedding batching and streaming configuration.
         execution: Local execution backend.
@@ -71,7 +68,6 @@ class Benchmark:
             Union[OverlapScoringConfig, ContinuousOverlapScoringConfig]
         ] = None,
         stability_config: Optional[StabilityConfig] = None,
-        probe_config: Optional[ProbeConfig] = None,
         label_view_config: Optional[LabelViewConfig] = None,
         separatix_config: Optional[SeparatixConfig] = None,
         cache_config: Optional[CacheConfig] = None,
@@ -86,7 +82,6 @@ class Benchmark:
         self.extractors = list(extractors or [])
         self.scoring_config = scoring_config or _default_scoring_config_for_dataset(dataset)
         self.stability_config = stability_config or StabilityConfig()
-        self.probe_config = probe_config or ProbeConfig()
         self.label_view_config = label_view_config or LabelViewConfig()
         self.separatix_config = separatix_config or SeparatixConfig()
         self.cache_config = cache_config or CacheConfig()
@@ -117,7 +112,7 @@ class Benchmark:
         return self
 
     def run(self) -> BenchmarkResult:
-        """Run feature extraction, scoring, optional probes, and reporting aggregation.
+        """Run feature extraction, scoring, diagnostics, and reporting aggregation.
 
         Returns:
             Aggregated benchmark result.
@@ -158,7 +153,6 @@ class Benchmark:
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "scoring_config": asdict(self.scoring_config),
                 "stability_config": asdict(self.stability_config),
-                "probe_config": asdict(self.probe_config),
                 "label_view_config": asdict(self.label_view_config),
                 "separatix_config": asdict(self.separatix_config),
                 "cache_config": asdict(self.cache_config),
@@ -207,7 +201,6 @@ class Benchmark:
                     ],
                     scoring_config=scoring_config,
                     stability_config=self.stability_config,
-                    probe_config=self.probe_config,
                     separatix_config=self.separatix_config,
                     cache_config=self.cache_config,
                     compression_configs=self.compression_configs,
@@ -452,25 +445,6 @@ class Benchmark:
             if stability:
                 variant_warnings.extend(stability.get("warnings", []))
 
-            probe_start = perf_counter()
-            diagnostic_embeddings, diagnostic_labels, diagnostic_groups = self._diagnostic_inputs(
-                compressed_embeddings,
-                dataset.y,
-                dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
-                target_type=dataset.metadata.get("target_type", "auto"),
-            )
-            probes = run_probes(
-                diagnostic_embeddings,
-                diagnostic_labels,
-                self.probe_config,
-                groups=diagnostic_groups,
-                target_type=dataset.metadata.get("target_type", "auto"),
-                target_names=dataset.metadata.get("target_names"),
-            )
-            variant_runtime["probe_seconds"] = perf_counter() - probe_start
-            if probes:
-                variant_warnings.extend(probes.get("warnings", []))
-
             weakest_class, weakest_score = _weakest_class(
                 overlap.per_class_scores,
                 excluded_classes=overlap.metadata.get("exclude_classes"),
@@ -498,7 +472,6 @@ class Benchmark:
                     ),
                     overlap=overlap,
                     stability=stability,
-                    probes=probes,
                     separatix=separatix,
                     embedding_metadata=embedding_metadata,
                     compression_metadata=compression_metadata,

@@ -10,7 +10,6 @@ from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
     OverlapScoringConfig,
-    ProbeConfig,
     SeparatixConfig,
     StabilityConfig,
 )
@@ -193,7 +192,6 @@ def _run_public_model_benchmark(dataset, extractor, tmp_path):
             kmeans_kwargs={"random_state": 101, "batch_size": 16, "n_init": 2},
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path / "cache")),
         embedding_config=EmbeddingConfig(batch_size=2),

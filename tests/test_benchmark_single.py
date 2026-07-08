@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
 
@@ -21,7 +21,6 @@ def test_precomputed_single_extractor_workflow_writes_reports(tmp_path, fake_ove
         dataset=dataset,
         extractor=PrecomputedExtractor(name="embeddings"),
         stability_config=StabilityConfig(repeats=3),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -36,7 +35,7 @@ def test_precomputed_single_extractor_workflow_writes_reports(tmp_path, fake_ove
     assert len(fake_overlapindex.calls) == 4
 
 
-def test_native_probes_are_disabled_by_default(fake_overlapindex):
+def test_benchmark_metadata_excludes_probe_config(fake_overlapindex):
     embeddings = np.arange(48, dtype=float).reshape(16, 3)
     labels = np.array(["left"] * 8 + ["right"] * 8)
     dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
@@ -49,8 +48,8 @@ def test_native_probes_are_disabled_by_default(fake_overlapindex):
     ).run()
 
     item = result.extractor_results[0]
-    assert item.probes is None
-    assert result.metadata["probe_config"]["enabled"] is False
+    assert item.separatix is not None
+    assert "probe_config" not in result.metadata
 
 
 def test_node_embedding_dataset_runs_through_existing_benchmark(tmp_path, fake_overlapindex):
@@ -71,7 +70,6 @@ def test_node_embedding_dataset_runs_through_existing_benchmark(tmp_path, fake_o
         dataset=dataset,
         extractor=PrecomputedExtractor(name="node-embeddings"),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
     markdown_path = tmp_path / "node_report.md"

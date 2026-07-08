@@ -4,7 +4,7 @@ from scipy import sparse
 
 from vertebrae import BenchmarkDataset, Evaluator
 from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor, SklearnExtractor
 from vertebrae.scoring.overlap import OverlapIndexScorer
 
@@ -62,7 +62,6 @@ def test_benchmark_sparse_precomputed_workflow(tmp_path, fake_overlapindex):
         extractor=PrecomputedExtractor("sparse_embeddings"),
         scoring_config=OverlapScoringConfig(k=1, max_dense_bytes=10_000),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
 
@@ -89,7 +88,6 @@ def test_sklearn_sparse_extractor_can_flow_to_benchmark(tmp_path, fake_overlapin
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=1, max_dense_bytes=10_000),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

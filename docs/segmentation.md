@@ -58,9 +58,9 @@ by `ambiguity_margin`. Sampling is deterministic and can be capped per instance,
 class, and background.
 
 Each retained token carries its source image as an independence group. Separatix
-and enabled native probes therefore use image-disjoint evaluation. If grouped
-Separatix support is insufficient, vertebrae records a structured skipped
-diagnostic and never retries row-wise.
+therefore uses image-disjoint evaluation. If grouped Separatix support is
+insufficient, vertebrae records a structured skipped diagnostic and never retries
+row-wise.
 
 Torch and Keras wrappers accept `spatial_output_fn` plus explicit
 `spatial_output_specs`. `HFVisionExtractor` accepts `spatial_outputs` with
