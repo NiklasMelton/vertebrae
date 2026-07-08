@@ -11,7 +11,7 @@ import numpy as np
 from _common import ensure_output_dir, make_separated_blobs, print_ranking
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import KerasExtractor
 
 
@@ -75,7 +75,6 @@ def main() -> None:
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=3, min_samples_per_cluster=4),
         stability_config=StabilityConfig(repeats=3, random_state=13),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

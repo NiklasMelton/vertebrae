@@ -3,7 +3,7 @@
 from _common import CACHE_DIR, ensure_output_dir, make_separated_blobs
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor
 
 
@@ -26,7 +26,6 @@ def main() -> None:
     kwargs = {
         "scoring_config": OverlapScoringConfig(k=3, min_samples_per_cluster=4),
         "stability_config": StabilityConfig(enabled=False),
-        "probe_config": ProbeConfig(enabled=False),
         "cache_config": cache_config,
     }
 

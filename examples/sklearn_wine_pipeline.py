@@ -14,7 +14,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 
 from vertebrae import Benchmark, BenchmarkDataset
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import SklearnExtractor
 
 
@@ -39,7 +39,6 @@ def main() -> None:
         dataset=dataset,
         scoring_config=OverlapScoringConfig(k=4, min_samples_per_cluster=8),
         stability_config=StabilityConfig(repeats=5, random_state=23),
-        probe_config=ProbeConfig(methods=("nearest_centroid", "logistic_regression")),
         cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
     )
     benchmark.add_extractor(
