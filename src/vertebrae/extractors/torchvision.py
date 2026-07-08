@@ -75,9 +75,7 @@ class TorchvisionVisionExtractor:
         torch_module, image_module, model, preprocess_fn = self._load_model()
         images = list(X)
         model.eval()
-        collected: Dict[str, List[np.ndarray]] = {
-            spec.name: [] for spec in self._output_specs
-        }
+        collected: Dict[str, List[np.ndarray]] = {spec.name: [] for spec in self._output_specs}
         with torch_module.no_grad():
             for chunk in iter_chunks(images, self.batch_size):
                 batch = [

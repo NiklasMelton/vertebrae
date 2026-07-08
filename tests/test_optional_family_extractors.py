@@ -150,9 +150,7 @@ def test_torchvision_vision_extractor_uses_weight_transforms(fake_torch, monkeyp
         sys.modules,
         "torchvision",
         types.SimpleNamespace(
-            models=types.SimpleNamespace(
-                resnet18=lambda weights, **kwargs: FakeVisionModel()
-            )
+            models=types.SimpleNamespace(resnet18=lambda weights, **kwargs: FakeVisionModel())
         ),
     )
     extractor = TorchvisionVisionExtractor("tv", "resnet18", weights=FakeWeights())

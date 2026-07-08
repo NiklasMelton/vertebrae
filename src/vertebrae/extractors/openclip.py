@@ -77,9 +77,7 @@ class OpenCLIPExtractor:
         torch_module, image_module, model, preprocess_fn, tokenizer = self._load_model()
         samples = _normalize_multimodal_samples(X, self.input_modalities)
         model.eval()
-        collected: Dict[str, List[np.ndarray]] = {
-            spec.name: [] for spec in self._output_specs
-        }
+        collected: Dict[str, List[np.ndarray]] = {spec.name: [] for spec in self._output_specs}
         with torch_module.no_grad():
             for batch in iter_chunks(samples, self.batch_size):
                 projected = self._project_batch(
@@ -146,10 +144,7 @@ class OpenCLIPExtractor:
             )
             for sample in batch
         ]
-        texts = [
-            sample[_first_field(self.input_modalities, "text")]
-            for sample in batch
-        ]
+        texts = [sample[_first_field(self.input_modalities, "text")] for sample in batch]
         image_batch = stack_batch(images, torch_module=torch_module)
         image_batch = maybe_move_to_device(
             image_batch,

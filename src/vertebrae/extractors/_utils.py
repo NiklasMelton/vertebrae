@@ -55,13 +55,11 @@ def maybe_move_to_device(value: Any, device: Optional[str], torch_module: Any) -
         }
     if isinstance(value, tuple):
         return tuple(
-            maybe_move_to_device(item, device=device, torch_module=torch_module)
-            for item in value
+            maybe_move_to_device(item, device=device, torch_module=torch_module) for item in value
         )
     if isinstance(value, list):
         return [
-            maybe_move_to_device(item, device=device, torch_module=torch_module)
-            for item in value
+            maybe_move_to_device(item, device=device, torch_module=torch_module) for item in value
         ]
     tensor_type = getattr(torch_module, "Tensor", None)
     if tensor_type is not None and isinstance(value, tensor_type):

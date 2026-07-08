@@ -26,10 +26,13 @@ class SigLIPExtractor:
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
-        resolved_outputs = list(outputs or [
-            {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
-            {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
-        ])
+        resolved_outputs = list(
+            outputs
+            or [
+                {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
+                {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
+            ]
+        )
         self._delegate = HFMultimodalExtractor(
             name=name,
             model_id=model_id,
