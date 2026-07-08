@@ -9,6 +9,11 @@ from vertebrae.extractors.spatial import (
     SpatialOutputSpec,
     _per_image_values,
 )
+from vertebrae.extractors.structured import (
+    StructuredEmbeddingOutput,
+    StructuredOutputSpec,
+    _per_parent_structured_values,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -46,6 +51,8 @@ class KerasExtractor:
         streaming_safe: bool = True,
         spatial_output_fn: Optional[Callable[[Any], Any]] = None,
         spatial_output_specs: Optional[Iterable[SpatialOutputSpec]] = None,
+        structured_output_fn: Optional[Callable[[Any], Any]] = None,
+        structured_output_specs: Optional[Iterable[StructuredOutputSpec]] = None,
     ) -> None:
         if call_method not in {"call", "predict"}:
             raise ValueError("call_method must be either 'call' or 'predict'.")
@@ -67,9 +74,15 @@ class KerasExtractor:
         self.streaming_safe = streaming_safe
         self.spatial_output_fn = spatial_output_fn
         self._spatial_output_specs = list(spatial_output_specs or [])
+        self.structured_output_fn = structured_output_fn
+        self._structured_output_specs = list(structured_output_specs or [])
         if (self.spatial_output_fn is None) != (not self._spatial_output_specs):
             raise ValueError(
                 "spatial_output_fn and spatial_output_specs must be provided together."
+            )
+        if (self.structured_output_fn is None) != (not self._structured_output_specs):
+            raise ValueError(
+                "structured_output_fn and structured_output_specs must be provided together."
             )
         self._keras: Any = None
 
@@ -121,6 +134,29 @@ class KerasExtractor:
             for spec in self._spatial_output_specs
         ]
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if self.structured_output_fn is None:
+            raise ValueError("KerasExtractor was not configured with structured outputs.")
+        self._load_keras()
+        values = self._to_numpy(self.structured_output_fn(self._call_model(self.collate_fn(X))))
+        if not isinstance(values, dict) and len(self._structured_output_specs) == 1:
+            values = {self._structured_output_specs[0].name: values}
+        if not isinstance(values, dict):
+            raise ValueError("Multi-output Keras structured adapters must return a mapping.")
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=_per_parent_structured_values(values[spec.name], spec.unit_type),
+                unit_type=spec.unit_type,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable recipe for this extractor."""
 
@@ -150,6 +186,20 @@ class KerasExtractor:
                     "metadata": spec.metadata,
                 }
                 for spec in self._spatial_output_specs
+            ],
+            "structured_output_fn": (
+                _callable_name(self.structured_output_fn)
+                if self.structured_output_fn is not None
+                else None
+            ),
+            "structured_outputs": [
+                {
+                    "name": spec.name,
+                    "unit_type": spec.unit_type,
+                    "hidden_layer": spec.hidden_layer,
+                    "metadata": spec.metadata,
+                }
+                for spec in self._structured_output_specs
             ],
         }
 

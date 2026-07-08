@@ -24,7 +24,12 @@ from vertebrae.execution.jobs import (
 )
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
-from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix, target_summary
+from vertebrae.utils.labels import (
+    REGRESSION_TARGET,
+    label_view_suffix,
+    target_summary,
+    target_view_suffix,
+)
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -185,6 +190,7 @@ def materialize_segmentation_artifacts(
                 "target_type": label_summary["target_type"],
                 "class_counts": make_json_safe(label_summary["class_counts"]),
                 "n_classes": label_summary["n_classes"],
+                "target_view": materialization.dataset.active_target_view(),
                 "label_view": materialization.dataset.active_label_view(),
             },
         )
@@ -206,6 +212,108 @@ def materialize_segmentation_artifacts(
         outputs.append(embedding_manifest)
     bundle = {
         "artifact_type": "segmentation_embedding_bundle",
+        "vertebrae_version": __version__,
+        "output_key": base_key,
+        "dataset_fingerprint": dataset.fingerprint(),
+        "extractor_recipe": recipe,
+        "outputs": outputs,
+    }
+    store.put_json(base_key, bundle)
+    return bundle
+
+
+def materialize_structured_artifacts(
+    dataset: Any,
+    extractor: Any,
+    store: ArtifactStore,
+    batch_size: int = 16,
+) -> dict[str, Any]:
+    """Materialize structured unit outputs into standard artifact boundaries."""
+
+    from vertebrae.structured import materialize_structured_outputs
+
+    recipe = extractor.recipe()
+    base_key = f"structured/{dataset.fingerprint()}/{fingerprint_extractor_recipe(recipe)}"
+    outputs = []
+    for materialization in materialize_structured_outputs(
+        dataset,
+        extractor,
+        batch_size=batch_size,
+    ):
+        safe_name = materialization.name.replace("/", "_")
+        output_key = f"{base_key}/outputs/{safe_name}"
+        labels_key = f"{output_key}/labels"
+        groups_key = f"{output_key}/groups"
+        provenance_key = f"{output_key}/provenance"
+        embeddings = materialization.dataset.X
+        labels = materialization.dataset.y
+        groups = materialization.dataset.groups()
+        if groups is None:
+            raise ValueError("Structured materialization must define parent groups.")
+        artifact_path = store.put_array(output_key, embeddings)
+        embedding_manifest = {
+            "artifact_type": "structured_embedding",
+            "vertebrae_version": __version__,
+            "output_key": output_key,
+            "artifact_path": artifact_path,
+            "dataset_fingerprint": materialization.dataset.fingerprint(),
+            "source_dataset_fingerprint": dataset.fingerprint(),
+            "extractor_recipe": recipe,
+            "recipe_hash": fingerprint_extractor_recipe(recipe),
+            "output_name": materialization.name,
+            "n_samples": int(embeddings.shape[0]),
+            "embedding_dim": int(embeddings.shape[1]),
+            "shape": list(embeddings.shape),
+            "dtype": str(embeddings.dtype),
+            "sparse": False,
+            "storage_format": "dense",
+            "modality": materialization.dataset.modality,
+            "structured": materialization.metadata,
+            "labels_key": labels_key,
+            "groups_key": groups_key,
+            "provenance_key": provenance_key,
+        }
+        store.put_json(output_key, embedding_manifest)
+        label_path = store.put_labels(labels_key, labels)
+        label_summary = target_summary(
+            labels,
+            target_type=materialization.dataset.metadata.get("target_type", "auto"),
+            target_names=materialization.dataset.metadata.get("target_names"),
+        )
+        store.put_json(
+            labels_key,
+            {
+                "artifact_type": "labels",
+                "vertebrae_version": __version__,
+                "output_key": labels_key,
+                "artifact_path": label_path,
+                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "n_samples": int(len(labels)),
+                "target_type": label_summary["target_type"],
+                "class_counts": make_json_safe(label_summary["class_counts"]),
+                "n_classes": label_summary["n_classes"],
+                "target_view": materialization.dataset.active_target_view(),
+                "label_view": materialization.dataset.active_label_view(),
+            },
+        )
+        group_path = store.put_labels(groups_key, groups)
+        store.put_json(
+            groups_key,
+            {
+                "artifact_type": "groups",
+                "vertebrae_version": __version__,
+                "output_key": groups_key,
+                "artifact_path": group_path,
+                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "n_samples": int(len(groups)),
+                "n_groups": int(len(np.unique(groups))),
+                "group_name": "parent_id",
+            },
+        )
+        store.put_json(provenance_key, {"rows": materialization.provenance})
+        outputs.append(embedding_manifest)
+    bundle = {
+        "artifact_type": "structured_embedding_bundle",
         "vertebrae_version": __version__,
         "output_key": base_key,
         "dataset_fingerprint": dataset.fingerprint(),
@@ -345,6 +453,7 @@ def materialize_label_artifact(
         "target_type": labels["target_type"],
         "class_counts": make_json_safe(labels["class_counts"]),
         "n_classes": labels["n_classes"],
+        "target_view": make_json_safe(dataset.active_target_view()),
         "label_view": make_json_safe(dataset.active_label_view()),
     }
     for label_key in (
@@ -803,10 +912,11 @@ def benchmark_result_from_artifacts(
         "name",
         embedding_metadata.get("extractor_name", "artifact"),
     )
+    target_view = label_metadata.get("target_view", embedding_metadata.get("target_view"))
     label_view = label_metadata.get("label_view", embedding_metadata.get("label_view"))
     extractor_result = ExtractorResult(
         name=_variant_extractor_name(
-            f"{base_name}{label_view_suffix(label_view)}",
+            f"{base_name}{target_view_suffix(target_view)}{label_view_suffix(label_view)}",
             compression_metadata,
         ),
         extractor_type=embedding_metadata.get("extractor_recipe", {}).get(
@@ -821,6 +931,7 @@ def benchmark_result_from_artifacts(
         runtime={},
         warnings=sorted(set(score_data.get("warnings", []))),
         label_view=label_view,
+        target_view=target_view,
         weakest_class=weakest_class,
         weakest_class_score=weakest_score,
         recommendation=recommendation,
@@ -845,6 +956,7 @@ def benchmark_result_from_artifacts(
             "constant_targets": label_metadata.get("constant_targets"),
             "nonconstant_targets": label_metadata.get("nonconstant_targets"),
             "modality": embedding_metadata.get("modality", "artifact"),
+            "target_view": label_metadata.get("target_view"),
             "label_view": label_metadata.get("label_view"),
         },
         extractor_results=[extractor_result],

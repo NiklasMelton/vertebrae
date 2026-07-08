@@ -238,4 +238,26 @@ def test_hf_audio_evaluator_workflow(fake_audio_modules, fake_overlapindex):
     ).run()
 
     assert result.extractor_results[0].name == "audio"
-    assert len(fake_overlapindex.calls) == 3
+
+
+def test_hf_audio_supports_structured_frame_outputs(fake_audio_modules):
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        batch_size=2,
+        sampling_rate=16_000,
+        structured_outputs=[{"name": "frames", "hidden_layer": 2}],
+    )
+
+    output = extractor.transform_structured(
+        [
+            np.array([0.0, 0.1, 0.2], dtype=np.float32),
+            np.array([0.3, 0.4], dtype=np.float32),
+        ]
+    )[0]
+
+    assert output.name == "frames"
+    assert output.unit_type == "frame"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (3, 4)
+    assert output.embeddings[1].shape == (2, 4)

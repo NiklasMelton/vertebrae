@@ -45,6 +45,11 @@ def render_markdown_report(result: Any) -> str:
             f"- Modality: {dataset['modality']}",
         ]
     )
+    if dataset.get("target_view"):
+        lines.append(f"- Target view: {dataset.get('target_view', {}).get('name', 'primary')}")
+    if dataset.get("available_target_views"):
+        target_view_names = [item.get("name") for item in dataset.get("available_target_views", [])]
+        lines.append(f"- Available target views: {target_view_names}")
     if dataset.get("modality") == "segmentation":
         lines.append(f"- Source images: {dataset.get('n_images', '')}")
         lines.append(
@@ -68,6 +73,9 @@ def render_markdown_report(result: Any) -> str:
         lines.append(f"- Input fields: {dataset_metadata['input_fields']}")
     if dataset_metadata.get("relational_unit"):
         lines.append(f"- Relational unit: {dataset_metadata['relational_unit']}")
+    units = dataset.get("units")
+    if units:
+        lines.append(f"- Unit type: {units.get('unit_type', 'unit')}")
     if dataset_metadata.get("entity_type"):
         lines.append(f"- Entity type: {dataset_metadata['entity_type']}")
     if dataset_metadata.get("composition"):
@@ -83,6 +91,8 @@ def render_markdown_report(result: Any) -> str:
         lines.append(f"- {item}")
     for warning in data.get("metadata", {}).get("label_view_warnings", []):
         lines.append(f"- {warning}")
+    for warning in data.get("metadata", {}).get("target_view_warnings", []):
+        lines.append(f"- {warning}")
     top_ranked = result.ranked_results()[0] if result.extractor_results else None
     if top_ranked and top_ranked.separatix and top_ranked.separatix.ran:
         lines.append(
@@ -93,14 +103,15 @@ def render_markdown_report(result: Any) -> str:
         )
     lines.extend(["", "## Ranking", ""])
     lines.append(
-        "| rank | extractor | extractor_type | label_view | overlap_score | overlap_macro | "
+        "| rank | extractor | extractor_type | target_view | label_view | "
+        "overlap_score | overlap_macro | "
         "overlap_weighted | stability_interval | "
         "weakest_class | probe_accuracy | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | "
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | "
         "--- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(result.ranked_results(), start=1):
@@ -108,6 +119,7 @@ def render_markdown_report(result: Any) -> str:
         weakest = item.weakest_class if item.weakest_class is not None else ""
         probe_accuracy = _separatix_probe_accuracy(item.separatix)
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
+        target_view = (item.target_view or {}).get("name", "primary")
         label_view = (item.label_view or {}).get("name", "primary")
         compression_method = item.compression_metadata.get("method", "none")
         compressed_dim = item.compression_metadata.get("compressed_dim", embedding_dim)
@@ -118,7 +130,8 @@ def render_markdown_report(result: Any) -> str:
             separatix_confidence = item.separatix.confidence or ""
         lines.append(
             f"| {rank} | {item.name} | {item.extractor_type} | "
-            f"{label_view} | {item.overlap.score:.4f} | {item.overlap.macro_score:.4f} | "
+            f"{target_view} | {label_view} | {item.overlap.score:.4f} | "
+            f"{item.overlap.macro_score:.4f} | "
             f"{_format_float(item.overlap.weighted_score)} | {interval} | {weakest} | "
             f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
             f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
@@ -134,6 +147,7 @@ def render_markdown_report(result: Any) -> str:
                 f"- Extractor type: {item.extractor_type}",
                 f"- Extractor family: {_extractor_family(item.extractor_type)}",
                 f"- Target type: {item.overlap.metadata.get('target_type', 'single_label')}",
+                f"- Target view: {(item.target_view or {}).get('name', 'primary')}",
                 f"- Label view: {(item.label_view or {}).get('name', 'primary')}",
                 f"- Modality: {item.embedding_metadata.get('modality', '')}",
                 (

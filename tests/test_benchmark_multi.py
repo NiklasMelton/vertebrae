@@ -7,9 +7,22 @@ from vertebrae.config import (
     LabelViewConfig,
     SeparatixConfig,
     StabilityConfig,
+    TargetViewConfig,
 )
+from vertebrae.datasets import TargetView
 from vertebrae.extractors import CallableExtractor, MultiOutputExtractor
 from vertebrae.extractors.base import EmbeddingOutputSpec
+
+COARSE_TARGETS = [
+    "mammal",
+    "mammal",
+    "mammal",
+    "mammal",
+    "avian",
+    "avian",
+    "mammal",
+    "mammal",
+]
 
 
 def test_multi_extractor_benchmark(fake_overlapindex):
@@ -307,6 +320,100 @@ def test_multimodal_dataset_expands_multi_output_results(fake_overlapindex):
     assert all(
         item.embedding_metadata["modality"] == "multimodal" for item in result.extractor_results
     )
+    assert len(fake_overlapindex.calls) == 2
+
+
+def test_target_views_produce_separate_result_variants(fake_overlapindex):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24, dtype=float).reshape(8, 3),
+        ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+    ).with_target_views(
+        [
+            TargetView(
+                name="coarse",
+                targets=COARSE_TARGETS,
+            ),
+            TargetView(
+                name="score",
+                targets=np.linspace(0.0, 1.0, 8),
+                target_type="regression",
+                target_names=["quality"],
+            ),
+        ]
+    )
+
+    result = Benchmark(
+        dataset=dataset,
+        extractors=[CallableExtractor("identity", lambda value: value, modality="embeddings")],
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+        target_view_config=TargetViewConfig(enabled=True),
+    ).run()
+
+    assert {item.name for item in result.extractor_results} == {
+        "identity[target=coarse]",
+        "identity[target=score]",
+    }
+    assert set(result.to_dataframe()["target_view"]) == {"coarse", "score"}
+    assert len(fake_overlapindex.calls) == 1
+    assert len(fake_overlapindex.continuous_calls) == 1
+
+
+def test_output_views_route_multi_output_embeddings_to_target_views(fake_overlapindex):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24, dtype=float).reshape(8, 3),
+        ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+    ).with_target_views(
+        [
+            TargetView(
+                name="coarse",
+                targets=COARSE_TARGETS,
+            ),
+            TargetView(
+                name="role",
+                targets=[
+                    "title",
+                    "title",
+                    "body",
+                    "body",
+                    "caption",
+                    "caption",
+                    "footer",
+                    "footer",
+                ],
+            ),
+        ]
+    )
+    extractor = MultiOutputExtractor(
+        name="hf",
+        output_specs=[EmbeddingOutputSpec("layer_6"), EmbeddingOutputSpec("final")],
+        transform_many_fn=lambda value: {
+            "layer_6": np.asarray(value)[:, :2],
+            "final": np.asarray(value)[:, 1:3],
+        },
+        modality="embeddings",
+    )
+
+    result = Benchmark(
+        dataset=dataset,
+        extractors=[extractor],
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+        target_view_config=TargetViewConfig(
+            output_views={"layer_6": "coarse", "final": "role"},
+        ),
+    ).run()
+
+    assert [item.name for item in result.extractor_results] == [
+        "hf:layer_6[target=coarse]",
+        "hf:final[target=role]",
+    ]
+    assert [item.target_view["name"] for item in result.extractor_results] == [
+        "coarse",
+        "role",
+    ]
     assert len(fake_overlapindex.calls) == 2
 
 

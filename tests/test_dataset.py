@@ -2,7 +2,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, EmbeddingUnitDataset, TargetView
+
+COARSE_TARGETS = [
+    "mammal",
+    "mammal",
+    "mammal",
+    "mammal",
+    "avian",
+    "avian",
+    "mammal",
+    "mammal",
+]
 
 
 def test_from_arrays_validates_lengths():
@@ -736,6 +747,80 @@ def test_label_view_subset_preserves_hierarchy_alignment():
         ["vehicle", "car", "sedan"],
         ["vehicle", "car", "sedan"],
     ]
+
+
+def test_target_views_materialize_and_subset_preserve_alignment():
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24, dtype=float).reshape(8, 3),
+        ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+    ).with_target_views(
+        [
+            TargetView(
+                name="coarse",
+                targets=COARSE_TARGETS,
+            ),
+            TargetView(
+                name="score",
+                targets=np.linspace(0.0, 1.0, 8),
+                target_type="regression",
+                target_names=["quality"],
+            ),
+        ]
+    )
+
+    coarse = dataset.target_view("coarse")
+    subset = dataset.subset([0, 1, 4, 5])
+    subset_score = subset.target_view("score")
+
+    assert dataset.target_view_names() == ["coarse", "score"]
+    assert coarse.active_target_view()["name"] == "coarse"
+    assert coarse.class_counts() == {"avian": 2, "mammal": 6}
+    assert coarse.summary()["target_view"]["name"] == "coarse"
+    assert subset.target_view_names() == ["coarse", "score"]
+    assert subset_score.metadata["target_type"] == "regression"
+    assert subset_score.metadata["target_names"] == ["quality"]
+    assert subset_score.y.tolist() == [
+        0.0,
+        0.14285714285714285,
+        0.5714285714285714,
+        0.7142857142857142,
+    ]
+
+
+def test_from_embedding_units_preserves_unit_metadata_groups_and_target_views():
+    dataset = BenchmarkDataset.from_embedding_units(
+        embeddings=np.arange(24, dtype=float).reshape(8, 3),
+        labels=["header", "header", "body", "body", "footer", "footer", "caption", "caption"],
+        unit_ids=[f"u{i}" for i in range(8)],
+        parent_ids=["page0", "page0", "page1", "page1", "page2", "page2", "page3", "page3"],
+        unit_type="document_region",
+        positions=[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (3, 0), (3, 1)],
+        target_views=[
+            TargetView(
+                name="score",
+                targets=np.linspace(0.0, 1.0, 8),
+                target_type="regression",
+                target_names=["quality"],
+            )
+        ],
+    )
+
+    assert isinstance(dataset, EmbeddingUnitDataset)
+    assert dataset.metadata["unit_embeddings"] is True
+    assert dataset.metadata["unit_type"] == "document_region"
+    assert dataset.groups().tolist() == [
+        "page0",
+        "page0",
+        "page1",
+        "page1",
+        "page2",
+        "page2",
+        "page3",
+        "page3",
+    ]
+    assert dataset.summary()["units"]["unit_type"] == "document_region"
+    assert dataset.summary()["grouping"]["name"] == "parent_id"
+    assert dataset.target_view("score").metadata["target_type"] == "regression"
 
 
 def test_with_label_hierarchy_validates_alignment():

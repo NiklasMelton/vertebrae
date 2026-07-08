@@ -22,8 +22,16 @@ from vertebrae.config import (
     SegmentationConfig,
     SeparatixConfig,
     StabilityConfig,
+    TargetViewConfig,
 )
-from vertebrae.datasets import BenchmarkDataset, SegmentationAnnotation, SegmentationDataset
+from vertebrae.datasets import (
+    BenchmarkDataset,
+    EmbeddingUnitDataset,
+    SegmentationAnnotation,
+    SegmentationDataset,
+    TargetView,
+    UnitAnnotation,
+)
 from vertebrae.evaluator import Evaluator
 from vertebrae.execution import (
     CompressionJob,
@@ -55,6 +63,7 @@ from vertebrae.execution import (
     materialize_group_artifact,
     materialize_label_artifact,
     materialize_segmentation_artifacts,
+    materialize_structured_artifacts,
     merge_embedding_shards,
     plan_compression_job,
     plan_embedding_shard_jobs,
@@ -74,7 +83,14 @@ from vertebrae.extractors.spatial import (
     SpatialLayout,
     SpatialOutputSpec,
 )
+from vertebrae.extractors.structured import (
+    CallableStructuredExtractor,
+    PrecomputedStructuredExtractor,
+    StructuredEmbeddingOutput,
+    StructuredOutputSpec,
+)
 from vertebrae.results import BenchmarkResult, ExtractorResult
+from vertebrae.structured import materialize_structured_outputs
 
 __all__ = [
     "Benchmark",
@@ -85,13 +101,18 @@ __all__ = [
     "ContinuousOverlapScoringConfig",
     "DaskBackend",
     "diagnose_embedding_artifact",
+    "EmbeddingUnitDataset",
     "EmbeddingOutput",
     "EmbeddingOutputSpec",
     "CallableSpatialExtractor",
+    "CallableStructuredExtractor",
     "PrecomputedSpatialExtractor",
+    "PrecomputedStructuredExtractor",
     "SpatialEmbeddingOutput",
     "SpatialLayout",
     "SpatialOutputSpec",
+    "StructuredEmbeddingOutput",
+    "StructuredOutputSpec",
     "EmbeddingCompressionConfig",
     "EmbeddingConfig",
     "EmbeddingJob",
@@ -122,6 +143,9 @@ __all__ = [
     "collect_score_artifacts",
     "compress_embedding_artifact",
     "StabilityConfig",
+    "TargetView",
+    "UnitAnnotation",
+    "TargetViewConfig",
     "create_artifact_store",
     "compress_embedding_artifact_key",
     "compress_embeddings",
@@ -137,6 +161,8 @@ __all__ = [
     "materialize_label_artifact",
     "materialize_group_artifact",
     "materialize_segmentation_artifacts",
+    "materialize_structured_artifacts",
+    "materialize_structured_outputs",
     "merge_embedding_shards",
     "plan_compression_job",
     "plan_embedding_shard_jobs",

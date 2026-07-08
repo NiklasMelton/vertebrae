@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, cast
 import numpy as np
 
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 
 class HFTextExtractor:
@@ -32,6 +33,7 @@ class HFTextExtractor:
         pooling: str = "mean",
         hidden_layer: Optional[int] = None,
         outputs: Optional[List[Dict[str, Any]]] = None,
+        structured_outputs: Optional[List[Dict[str, Any]]] = None,
         batch_size: int = 32,
         max_length: int = 512,
         device: Optional[str] = None,
@@ -51,6 +53,7 @@ class HFTextExtractor:
             default_pooling=pooling,
             default_hidden_layer=hidden_layer,
         )
+        self._structured_output_specs = _resolve_structured_output_specs(structured_outputs)
         self.batch_size = batch_size
         self.max_length = max_length
         self.device = device
@@ -171,6 +174,53 @@ class HFTextExtractor:
             )
         return outputs
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError("HFTextExtractor was not configured with structured_outputs.")
+        tokenizer, model, torch = self._load_model()
+        texts = _validate_text_sequence(X, "HFTextExtractor")
+        collected: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._structured_output_specs
+        }
+        model.eval()
+        with torch.no_grad():
+            for start in range(0, len(texts), self.batch_size):
+                batch = texts[start : start + self.batch_size]
+                encoded = tokenizer(
+                    batch,
+                    padding=True,
+                    truncation=True,
+                    max_length=self.max_length,
+                    return_tensors="pt",
+                    **self.tokenizer_kwargs,
+                )
+                encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
+                model_output = model(**encoded, output_hidden_states=True)
+                for spec in self._structured_output_specs:
+                    hidden = self._select_hidden_state(model_output, spec.hidden_layer)
+                    values = hidden.detach().cpu().numpy().astype(np.float32, copy=False)
+                    mask = encoded["attention_mask"].detach().cpu().numpy()
+                    include_special = bool(spec.metadata.get("include_special_tokens", False))
+                    for index in range(values.shape[0]):
+                        length = int(mask[index].sum())
+                        tokens = values[index, :length]
+                        if not include_special and tokens.shape[0] >= 2:
+                            tokens = tokens[1:-1]
+                        collected[spec.name].append(tokens)
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=collected[spec.name],
+                unit_type=spec.unit_type,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable Hugging Face text recipe.
 
@@ -196,6 +246,10 @@ class HFTextExtractor:
         }
         if len(self._output_specs) > 1:
             recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                _structured_spec_to_dict(spec) for spec in self._structured_output_specs
+            ]
         return recipe
 
     def _load_model(self) -> Any:
@@ -311,7 +365,7 @@ def _resolve_output_specs(
     return specs
 
 
-def _ensure_unique_names(specs: List[EmbeddingOutputSpec]) -> None:
+def _ensure_unique_names(specs: List[Any]) -> None:
     names = [spec.name for spec in specs]
     if len(set(names)) != len(names):
         raise ValueError("HFTextExtractor output names must be unique.")
@@ -321,6 +375,36 @@ def _spec_to_dict(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
     return {
         "name": spec.name,
         "pooling": spec.pooling,
+        "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
+    }
+
+
+def _resolve_structured_output_specs(
+    outputs: Optional[List[Dict[str, Any]]],
+) -> List[StructuredOutputSpec]:
+    specs = []
+    for raw in outputs or []:
+        if "name" not in raw:
+            raise ValueError("HFTextExtractor structured outputs must include a name.")
+        specs.append(
+            StructuredOutputSpec(
+                name=str(raw["name"]),
+                unit_type=str(raw.get("unit_type", "token")),
+                hidden_layer=raw.get("hidden_layer"),
+                metadata={
+                    "include_special_tokens": bool(raw.get("include_special_tokens", False)),
+                },
+            )
+        )
+    _ensure_unique_names(specs)
+    return specs
+
+
+def _structured_spec_to_dict(spec: StructuredOutputSpec) -> Dict[str, Any]:
+    return {
+        "name": spec.name,
+        "unit_type": spec.unit_type,
         "hidden_layer": spec.hidden_layer,
         "metadata": dict(spec.metadata),
     }

@@ -225,3 +225,20 @@ def test_hf_text_missing_optional_dependencies(monkeypatch):
 
     with pytest.raises(ImportError, match="optional Hugging Face"):
         extractor.transform(["hello"])
+
+
+def test_hf_text_supports_structured_token_outputs(fake_hf_modules):
+    extractor = HFTextExtractor(
+        "hf",
+        "fake-model",
+        structured_outputs=[{"name": "tokens", "hidden_layer": 2}],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured(["one", "two"])[0]
+
+    assert output.name == "tokens"
+    assert output.unit_type == "token"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (0, 3)
+    assert output.embeddings[1].shape == (1, 3)

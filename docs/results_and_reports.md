@@ -44,9 +44,14 @@ Hierarchy-level benchmarks contribute one `ExtractorResult` per evaluated label
 view. Those results preserve `label_view` metadata and qualify extractor names with
 suffixes such as `extractor[level=family]`.
 
-When named extractor outputs are mapped to hierarchy levels, result names preserve
-both dimensions, such as `extractor:layer_6[level=family]`. Embedding metadata keeps
-the original `output_name`, and result metadata keeps the active `label_view`.
+Named target-view benchmarks contribute one `ExtractorResult` per evaluated target
+view. Those results preserve `target_view` metadata and qualify extractor names
+with suffixes such as `extractor[target=coarse]`.
+
+When named extractor outputs are mapped to hierarchy levels or target views,
+result names preserve those dimensions, such as `extractor:layer_6[level=family]`
+or `extractor:final[target=role]`. Embedding metadata keeps the original
+`output_name`, and result metadata keeps the active `label_view` or `target_view`.
 
 ## Ranking and tabular views
 
@@ -79,6 +84,7 @@ At a high level, reports include:
 - dataset summary,
 - multi-modal dataset field and modality metadata when available,
 - extractor summary,
+- target-view metadata when named target views are benchmarked,
 - label-view metadata when hierarchy-derived views are benchmarked,
 - overlap configuration,
 - global macro and weighted overlap scores plus reporting-only class exclusions,

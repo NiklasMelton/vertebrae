@@ -10,6 +10,7 @@ from vertebrae import (
     Evaluator,
     SpatialLayout,
     SpatialOutputSpec,
+    StructuredOutputSpec,
 )
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import TorchExtractor
@@ -266,3 +267,23 @@ def test_torch_extractor_supports_explicit_spatial_outputs(fake_torch):
     assert output.name == "layer"
     assert len(output.embeddings) == 2
     assert output.embeddings[0].shape == (2, 2, 3)
+
+
+def test_torch_extractor_supports_explicit_structured_outputs(fake_torch):
+    model = TrackingModel(
+        lambda args, kwargs: {"tokens": FakeTensor(np.ones((2, 3, 4), dtype=float))}
+    )
+    extractor = TorchExtractor(
+        "structured",
+        model=model,
+        collate_fn=lambda batch: FakeTensor(batch),
+        structured_output_fn=lambda output: output["tokens"],
+        structured_output_specs=[StructuredOutputSpec("tokens", unit_type="token")],
+    )
+
+    output = extractor.transform_structured(np.ones((2, 4), dtype=float))[0]
+
+    assert output.name == "tokens"
+    assert output.unit_type == "token"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (3, 4)

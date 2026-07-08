@@ -22,6 +22,7 @@ from vertebrae.config import (
     SegmentationConfig,
     SeparatixConfig,
     StabilityConfig,
+    TargetViewConfig,
 )
 from vertebrae.execution.jobs import SampleBatch
 from vertebrae.execution.local import LocalBackend
@@ -34,7 +35,7 @@ from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.overlap import OverlapIndexScorer
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
-from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix
+from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix, target_view_suffix
 from vertebrae.utils.memory import (
     EmbeddingMemoryEstimate,
     assert_within_memory,
@@ -69,6 +70,7 @@ class Benchmark:
         ] = None,
         stability_config: Optional[StabilityConfig] = None,
         label_view_config: Optional[LabelViewConfig] = None,
+        target_view_config: Optional[TargetViewConfig] = None,
         separatix_config: Optional[SeparatixConfig] = None,
         cache_config: Optional[CacheConfig] = None,
         compression_config: Optional[EmbeddingCompressionConfig] = None,
@@ -80,9 +82,11 @@ class Benchmark:
     ) -> None:
         self.dataset = dataset
         self.extractors = list(extractors or [])
+        self._explicit_scoring_config = scoring_config
         self.scoring_config = scoring_config or _default_scoring_config_for_dataset(dataset)
         self.stability_config = stability_config or StabilityConfig()
         self.label_view_config = label_view_config or LabelViewConfig()
+        self.target_view_config = target_view_config or TargetViewConfig()
         self.separatix_config = separatix_config or SeparatixConfig()
         self.cache_config = cache_config or CacheConfig()
         if compression_config is not None and compression_configs is not None:
@@ -133,12 +137,23 @@ class Benchmark:
             raise ValueError("At least one extractor must be provided.")
         if getattr(self.dataset, "modality", None) == "segmentation":
             return self._run_segmentation()
+        if self.dataset.unit_annotations() and any(
+            callable(getattr(extractor, "transform_structured", None))
+            for extractor in self.extractors
+        ):
+            return self._run_structured()
 
-        evaluation_datasets, label_view_warnings = self._evaluation_datasets()
-        self._validate_output_level_mapping()
+        self._validate_view_config_compatibility()
+        evaluation_datasets, label_view_warnings, target_view_warnings = self._evaluation_datasets()
+        self._validate_output_view_mapping()
         extractor_results: List[ExtractorResult] = []
         for extractor in self.extractors:
-            result = self._run_extractor(extractor, evaluation_datasets, label_view_warnings)
+            result = self._run_extractor(
+                extractor,
+                evaluation_datasets,
+                label_view_warnings,
+                target_view_warnings,
+            )
             if isinstance(result, list):
                 extractor_results.extend(result)
             else:
@@ -154,12 +169,14 @@ class Benchmark:
                 "scoring_config": asdict(self.scoring_config),
                 "stability_config": asdict(self.stability_config),
                 "label_view_config": asdict(self.label_view_config),
+                "target_view_config": asdict(self.target_view_config),
                 "separatix_config": asdict(self.separatix_config),
                 "cache_config": asdict(self.cache_config),
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
                 "memory_config": asdict(self.memory_config),
                 "label_view_warnings": label_view_warnings,
+                "target_view_warnings": target_view_warnings,
             },
         )
 
@@ -201,6 +218,7 @@ class Benchmark:
                     ],
                     scoring_config=scoring_config,
                     stability_config=self.stability_config,
+                    target_view_config=self.target_view_config,
                     separatix_config=self.separatix_config,
                     cache_config=self.cache_config,
                     compression_configs=self.compression_configs,
@@ -248,14 +266,107 @@ class Benchmark:
             },
         )
 
+    def _run_structured(self) -> BenchmarkResult:
+        from vertebrae.extractors import PrecomputedExtractor
+        from vertebrae.structured import materialize_structured_outputs
+
+        extractor_results: List[ExtractorResult] = []
+        materialization_summaries = []
+        store = create_artifact_store(
+            self.cache_config.cache_dir,
+            **self.cache_config.storage_options,
+        )
+        for extractor in self.extractors:
+            if not callable(getattr(extractor, "transform_structured", None)):
+                raise ValueError(
+                    f"Extractor '{extractor.name}' does not support structured outputs."
+                )
+            materializations = materialize_structured_outputs(
+                dataset=self.dataset,
+                extractor=extractor,
+                batch_size=self.embedding_config.batch_size,
+            )
+            for materialization in materializations:
+                output_dataset: Any = materialization.dataset
+                if materialization.name in self.target_view_config.output_views:
+                    output_dataset = self._mapped_output_dataset(
+                        dataset=materialization.dataset,
+                        output_name=materialization.name,
+                        label_view_warnings=[],
+                        target_view_warnings=[],
+                    )
+                    if output_dataset is None:
+                        continue
+                result = Benchmark(
+                    dataset=output_dataset,
+                    extractors=[
+                        PrecomputedExtractor(
+                            name=_qualified_output_name(extractor.name, materialization.name)
+                        )
+                    ],
+                    scoring_config=self._resolved_scoring_config(output_dataset),
+                    stability_config=self.stability_config,
+                    target_view_config=(
+                        TargetViewConfig()
+                        if materialization.name in self.target_view_config.output_views
+                        else self.target_view_config
+                    ),
+                    separatix_config=self.separatix_config,
+                    cache_config=self.cache_config,
+                    compression_configs=self.compression_configs,
+                    embedding_config=self.embedding_config,
+                    memory_config=self.memory_config,
+                    execution=self.execution,
+                ).run()
+                for item in result.extractor_results:
+                    item.extractor_type = getattr(extractor, "extractor_type", "structured")
+                    item.embedding_metadata["structured"] = materialization.metadata
+                    item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
+                    provenance_key = f"{item.embedding_metadata['cache_key']}/provenance"
+                    item.embedding_metadata["provenance_key"] = provenance_key
+                    if self.cache_config.enabled:
+                        store.put_json(provenance_key, {"rows": materialization.provenance})
+                    extractor_results.append(item)
+                materialization_summaries.append(
+                    {
+                        "extractor": extractor.name,
+                        "output": materialization.name,
+                        **materialization.metadata,
+                    }
+                )
+
+        recommendations = recommendations_for_benchmark(extractor_results)
+        return BenchmarkResult(
+            dataset_summary={
+                **self.dataset.summary(),
+                "structured_outputs": materialization_summaries,
+            },
+            extractor_results=extractor_results,
+            recommendations=recommendations,
+            metadata={
+                "vertebrae_version": __version__,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "scoring_config": asdict(self.scoring_config),
+                "separatix_config": asdict(self.separatix_config),
+                "compression_configs": [asdict(config) for config in self.compression_configs],
+                "embedding_config": asdict(self.embedding_config),
+                "memory_config": asdict(self.memory_config),
+            },
+        )
+
     def _run_extractor(
         self,
         extractor: Any,
         evaluation_datasets: List[Any],
         label_view_warnings: List[str],
+        target_view_warnings: List[str],
     ) -> Union[ExtractorResult, List[ExtractorResult]]:
-        if self.label_view_config.output_levels and self._supports_transform_many(extractor):
-            return self._run_extractor_with_output_label_views(extractor, label_view_warnings)
+        if self._has_output_view_mappings() and self._supports_named_outputs(extractor):
+            return self._run_extractor_with_output_views(
+                extractor,
+                label_view_warnings,
+                target_view_warnings,
+            )
         results: List[ExtractorResult] = []
         for dataset in evaluation_datasets:
             result = self._run_extractor_on_dataset(extractor, dataset)
@@ -267,10 +378,11 @@ class Benchmark:
             return results[0]
         return results
 
-    def _run_extractor_with_output_label_views(
+    def _run_extractor_with_output_views(
         self,
         extractor: Any,
         label_view_warnings: List[str],
+        target_view_warnings: List[str],
     ) -> Union[ExtractorResult, List[ExtractorResult]]:
         warnings: List[str] = []
         runtime = {}
@@ -295,13 +407,14 @@ class Benchmark:
         mapped_outputs = 0
         for variant in variants:
             output_name = variant["metadata"].get("output_name")
-            if output_name not in self.label_view_config.output_levels:
+            if not self._output_has_view_mapping(output_name):
                 continue
             mapped_outputs += 1
             scoring_dataset = self._mapped_output_dataset(
                 dataset=dataset,
                 output_name=output_name,
                 label_view_warnings=label_view_warnings,
+                target_view_warnings=target_view_warnings,
             )
             if scoring_dataset is None:
                 continue
@@ -373,8 +486,10 @@ class Benchmark:
         runtime: dict,
     ) -> List[ExtractorResult]:
         embeddings = variant["embeddings"]
+        scoring_config = self._resolved_scoring_config(dataset)
         embedding_metadata = dict(variant["metadata"])
         embedding_metadata["label_view"] = dataset.active_label_view()
+        embedding_metadata["target_view"] = dataset.active_target_view()
         results: List[ExtractorResult] = []
         for compression_config in self.compression_configs:
             variant_warnings = list(warnings)
@@ -407,7 +522,7 @@ class Benchmark:
                 embedding_metadata.get("sparse"),
             )
             self._admit_scoring_memory(scoring_metadata)
-            overlap = OverlapIndexScorer(self.scoring_config).score(
+            overlap = OverlapIndexScorer(scoring_config).score(
                 compressed_embeddings,
                 dataset.y,
                 label_names=dataset.metadata.get("label_names"),
@@ -422,6 +537,7 @@ class Benchmark:
                 compressed_embeddings,
                 dataset.y,
                 overlap.score,
+                scoring_config=scoring_config,
                 target_type=dataset.metadata.get("target_type", "auto"),
                 label_names=dataset.metadata.get("label_names"),
                 target_names=dataset.metadata.get("target_names"),
@@ -435,7 +551,7 @@ class Benchmark:
             stability = run_stability_analysis(
                 compressed_embeddings,
                 dataset.y,
-                self.scoring_config,
+                scoring_config,
                 self.stability_config,
                 label_names=dataset.metadata.get("label_names"),
                 target_type=dataset.metadata.get("target_type", "auto"),
@@ -459,8 +575,9 @@ class Benchmark:
                 if overlap.metadata.get("aggregate_valid", True)
                 else "aggregate_unavailable"
             )
-            result_name = _qualified_label_view_name(
+            result_name = _qualified_result_name(
                 embedding_metadata.get("extractor_name", extractor.name),
+                dataset.active_target_view(),
                 dataset.active_label_view(),
             )
             results.append(
@@ -478,6 +595,7 @@ class Benchmark:
                     runtime=variant_runtime,
                     warnings=sorted(set(variant_warnings)),
                     label_view=dataset.active_label_view(),
+                    target_view=dataset.active_target_view(),
                     weakest_class=weakest_class,
                     weakest_class_score=weakest_score,
                     recommendation=recommendation,
@@ -490,6 +608,7 @@ class Benchmark:
         embeddings: Any,
         labels: Any,
         overlap_score: float,
+        scoring_config: Union[OverlapScoringConfig, ContinuousOverlapScoringConfig],
         target_type: str,
         label_names: Optional[Any] = None,
         target_names: Optional[Any] = None,
@@ -499,7 +618,7 @@ class Benchmark:
             return None
         scorer = SeparatixScorer(
             config=self.separatix_config,
-            overlap_config=self.scoring_config,
+            overlap_config=scoring_config,
         )
         threshold = (
             self.separatix_config.regression_overlap_threshold
@@ -521,6 +640,7 @@ class Benchmark:
             labels,
             groups,
             target_type=target_type,
+            scoring_config=scoring_config,
         )
         if len(diagnostic_labels) == 0:
             return scorer.skipped_result(
@@ -552,10 +672,11 @@ class Benchmark:
         labels: Any,
         groups: Optional[Any],
         target_type: str,
+        scoring_config: Union[OverlapScoringConfig, ContinuousOverlapScoringConfig],
     ) -> Tuple[Any, Any, Optional[Any]]:
         if target_type == REGRESSION_TARGET:
             return embeddings, labels, groups
-        excluded = _normalized_excluded_classes(_scoring_excluded_classes(self.scoring_config))
+        excluded = _normalized_excluded_classes(_scoring_excluded_classes(scoring_config))
         if not excluded:
             return embeddings, labels, groups
         label_array = np.asarray(labels)
@@ -607,14 +728,23 @@ class Benchmark:
 
         return dataset, warnings, metadata, probe_plan
 
-    def _evaluation_datasets(self) -> Tuple[List[Any], List[str]]:
+    def _evaluation_datasets(self) -> Tuple[List[Any], List[str], List[str]]:
+        target_view_warnings = self._target_view_warnings()
+        datasets = self._target_view_datasets(target_view_warnings)
         if (
-            self.dataset.metadata.get("target_type") == REGRESSION_TARGET
-            and self._requires_label_hierarchy()
+            self.label_view_config.output_levels
+            and self.dataset.metadata.get("label_hierarchy") is None
+        ):
+            raise ValueError(
+                "LabelViewConfig requires dataset label hierarchy metadata. "
+                "Use BenchmarkDataset.with_label_hierarchy(...)."
+            )
+        if self._requires_label_hierarchy() and any(
+            dataset.metadata.get("target_type") == REGRESSION_TARGET for dataset in datasets
         ):
             raise ValueError("LabelViewConfig is not supported for regression targets.")
-        if not self.label_view_config.enabled and not self.label_view_config.output_levels:
-            return [self.dataset], []
+        if not self.label_view_config.enabled:
+            return datasets, [], target_view_warnings
         if (
             self._requires_label_hierarchy()
             and self.dataset.metadata.get("label_hierarchy") is None
@@ -623,62 +753,107 @@ class Benchmark:
                 "LabelViewConfig requires dataset label hierarchy metadata. "
                 "Use BenchmarkDataset.with_label_hierarchy(...)."
             )
-        if not self.label_view_config.enabled:
-            return [self.dataset], []
-        warnings: List[str] = []
-        datasets = []
+        label_view_warnings: List[str] = []
+        resolved = []
         seen = set()
-        for level in self.label_view_config.hierarchy_levels:
-            try:
-                dataset = self.dataset.label_view(level)
-            except ValueError as exc:
-                if not self.label_view_config.skip_invalid_levels:
-                    raise
-                warnings.append(f"Skipped hierarchy level {level!r}: {exc}")
-                continue
-            view_key = dataset.active_label_view().get("key")
-            if view_key in seen:
-                continue
-            seen.add(view_key)
-            datasets.append(dataset)
-        if not datasets:
+        for base_dataset in datasets:
+            for level in self.label_view_config.hierarchy_levels:
+                try:
+                    dataset = base_dataset.label_view(level)
+                except ValueError as exc:
+                    if not self.label_view_config.skip_invalid_levels:
+                        raise
+                    label_view_warnings.append(f"Skipped hierarchy level {level!r}: {exc}")
+                    continue
+                view_key = (
+                    dataset.active_target_view().get("key"),
+                    dataset.active_label_view().get("key"),
+                )
+                if view_key in seen:
+                    continue
+                seen.add(view_key)
+                resolved.append(dataset)
+        if not resolved:
             raise ValueError("No valid hierarchy label views were available for benchmarking.")
-        return datasets, warnings
+        return resolved, label_view_warnings, target_view_warnings
 
     def _requires_label_hierarchy(self) -> bool:
         return bool(self.label_view_config.enabled or self.label_view_config.output_levels)
 
-    def _validate_output_level_mapping(self) -> None:
-        if not self.label_view_config.output_levels:
+    def _requires_target_views(self) -> bool:
+        return bool(self.target_view_config.enabled or self.target_view_config.output_views)
+
+    def _validate_view_config_compatibility(self) -> None:
+        if self._requires_label_hierarchy() and self._requires_target_views():
+            raise ValueError(
+                "LabelViewConfig and TargetViewConfig cannot be combined in one benchmark yet."
+            )
+
+    def _validate_output_view_mapping(self) -> None:
+        if not self._has_output_view_mappings():
             return
         output_names = {
             spec.name
             for extractor in self.extractors
-            if self._supports_transform_many(extractor)
+            if self._supports_named_outputs(extractor)
             for spec in self._output_specs(extractor)
         }
-        unknown = sorted(set(self.label_view_config.output_levels) - output_names)
+        requested_outputs = set(self.label_view_config.output_levels) | set(
+            self.target_view_config.output_views
+        )
+        unknown = sorted(requested_outputs - output_names)
         if unknown:
             raise ValueError(
-                "LabelViewConfig.output_levels contains unknown output names: " f"{unknown}."
+                "Configured output view mappings contain unknown output names: " f"{unknown}."
             )
+        if self.target_view_config.output_views:
+            available = (
+                set(self.dataset.target_view_names())
+                if callable(getattr(self.dataset, "target_view_names", None))
+                else set()
+            )
+            if not available:
+                raise ValueError(
+                    "TargetViewConfig.output_views requires dataset target view metadata. "
+                    "Use BenchmarkDataset.with_target_views(...)."
+                )
+            missing = sorted(set(self.target_view_config.output_views.values()) - available)
+            if missing:
+                raise ValueError(
+                    "TargetViewConfig.output_views contains unknown target views: " f"{missing}."
+                )
 
     def _mapped_output_dataset(
         self,
         dataset: Any,
         output_name: str,
         label_view_warnings: List[str],
+        target_view_warnings: List[str],
     ) -> Optional[Any]:
-        level = self.label_view_config.output_levels[output_name]
-        try:
-            return dataset.label_view(level)
-        except ValueError as exc:
-            if not self.label_view_config.skip_invalid_levels:
-                raise
-            label_view_warnings.append(
-                f"Skipped output {output_name!r} hierarchy level {level!r}: {exc}"
-            )
-            return None
+        mapped = dataset
+        if output_name in self.target_view_config.output_views:
+            view_name = self.target_view_config.output_views[output_name]
+            try:
+                mapped = mapped.target_view(view_name)
+            except ValueError as exc:
+                if not self.target_view_config.skip_invalid_views:
+                    raise
+                target_view_warnings.append(
+                    f"Skipped output {output_name!r} target view {view_name!r}: {exc}"
+                )
+                return None
+        if output_name in self.label_view_config.output_levels:
+            level = self.label_view_config.output_levels[output_name]
+            try:
+                mapped = mapped.label_view(level)
+            except ValueError as exc:
+                if not self.label_view_config.skip_invalid_levels:
+                    raise
+                label_view_warnings.append(
+                    f"Skipped output {output_name!r} hierarchy level {level!r}: {exc}"
+                )
+                return None
+        return mapped
 
     def _subsample_dataset(self, dataset: Any, rate: float, reason: str) -> Tuple[Any, dict, str]:
         indices = dataset.stratified_subsample_indices(
@@ -1283,12 +1458,82 @@ class Benchmark:
                 purpose="Dense scoring input",
             )
 
+    def _resolved_scoring_config(
+        self,
+        dataset: Any,
+    ) -> Union[OverlapScoringConfig, ContinuousOverlapScoringConfig]:
+        target_type = dataset.metadata.get("target_type", "auto")
+        if self._explicit_scoring_config is None:
+            return _default_scoring_config_for_dataset(dataset)
+        if target_type == REGRESSION_TARGET:
+            if not isinstance(self._explicit_scoring_config, ContinuousOverlapScoringConfig):
+                raise ValueError("Regression target views require ContinuousOverlapScoringConfig.")
+            return self._explicit_scoring_config
+        if isinstance(self._explicit_scoring_config, ContinuousOverlapScoringConfig):
+            raise ValueError(
+                "Classification and multi-label target views require OverlapScoringConfig."
+            )
+        return self._explicit_scoring_config
+
     def _supports_transform_many(self, extractor: Any) -> bool:
         if not callable(getattr(extractor, "transform_many", None)):
             return False
         if not callable(getattr(extractor, "output_specs", None)):
             return False
         return len(list(extractor.output_specs())) > 1
+
+    def _supports_named_outputs(self, extractor: Any) -> bool:
+        if not callable(getattr(extractor, "transform_many", None)):
+            return False
+        if not callable(getattr(extractor, "output_specs", None)):
+            return False
+        return len(list(extractor.output_specs())) >= 1
+
+    def _has_output_view_mappings(self) -> bool:
+        return bool(self.label_view_config.output_levels or self.target_view_config.output_views)
+
+    def _output_has_view_mapping(self, output_name: Any) -> bool:
+        return bool(
+            output_name in self.label_view_config.output_levels
+            or output_name in self.target_view_config.output_views
+        )
+
+    def _target_view_warnings(self) -> List[str]:
+        return []
+
+    def _target_view_datasets(self, warnings: List[str]) -> List[Any]:
+        if not self.target_view_config.enabled:
+            return [self.dataset]
+        if not callable(getattr(self.dataset, "target_view_names", None)):
+            raise ValueError(
+                "TargetViewConfig requires dataset target view metadata. "
+                "Use BenchmarkDataset.with_target_views(...)."
+            )
+        available_names = self.dataset.target_view_names()
+        if not available_names:
+            raise ValueError(
+                "TargetViewConfig requires dataset target view metadata. "
+                "Use BenchmarkDataset.with_target_views(...)."
+            )
+        requested = list(self.target_view_config.views) or available_names
+        datasets = []
+        seen = set()
+        for name in requested:
+            try:
+                dataset = self.dataset.target_view(name)
+            except ValueError as exc:
+                if not self.target_view_config.skip_invalid_views:
+                    raise
+                warnings.append(f"Skipped target view {name!r}: {exc}")
+                continue
+            view_key = dataset.active_target_view().get("key")
+            if view_key in seen:
+                continue
+            seen.add(view_key)
+            datasets.append(dataset)
+        if not datasets:
+            raise ValueError("No valid target views were available for benchmarking.")
+        return datasets
 
     def _single_output_spec(self, extractor: Any) -> Optional[Any]:
         if not callable(getattr(extractor, "output_specs", None)):
@@ -1492,8 +1737,12 @@ def _variant_extractor_name(name: str, compression_metadata: dict) -> str:
     return f"{name}[{method}_{compressed_dim}]"
 
 
-def _qualified_label_view_name(name: str, label_view: Optional[dict]) -> str:
-    return f"{name}{label_view_suffix(label_view)}"
+def _qualified_result_name(
+    name: str,
+    target_view: Optional[dict],
+    label_view: Optional[dict],
+) -> str:
+    return f"{name}{target_view_suffix(target_view)}{label_view_suffix(label_view)}"
 
 
 def _qualified_output_name(parent_name: str, output_name: str) -> str:

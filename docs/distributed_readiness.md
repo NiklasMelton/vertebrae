@@ -32,7 +32,10 @@ Multi-label artifacts store one JSON list of labels per sample and preserve
 `target_type`, `label_names`, per-label `class_counts`, labelset counts, mean label
 cardinality, and label density in the manifest. Regression artifacts preserve
 `target_type`, `target_names`, target statistics, and constant-target diagnostics.
-CLI commands still use the same `--labels-key` arguments for every target type.
+When a dataset materializes an active named target view, label manifests also
+preserve `target_view` metadata so downstream scoring and benchmark reconstruction
+can distinguish views without changing the embedding artifact. CLI commands still
+use the same `--labels-key` arguments for every target type.
 
 The concrete local distributed flow is:
 
@@ -127,6 +130,39 @@ spatial embedding outputs to raster annotations and writes token-level embedding
 label, and group artifacts. Those artifacts then follow the same `score`,
 `diagnose-complexity`, `score-repeats`, and `benchmark-from-artifacts` stages as
 ordinary embedding workflows.
+
+Structured unit materialization follows the same artifact philosophy. Native
+structured extractors can materialize per-output unit embeddings, labels,
+groups, and provenance through `materialize_structured_artifacts(...)`, with one
+artifact boundary per named structured output.
+
+The same path is available from the CLI:
+
+```bash
+vertebrae materialize-structured \
+  --dataset-pickle dataset.pkl \
+  --extractor-pickle extractor.pkl \
+  --cache-dir .vertebrae_cache \
+  --batch-size 16 \
+  --output-json structured_bundle.json
+
+vertebrae score \
+  --cache-dir .vertebrae_cache \
+  --plan-json structured_bundle.json \
+  --embedding-key "$(jq -r '.outputs[0].output_key' structured_bundle.json)"
+
+vertebrae diagnose-complexity \
+  --cache-dir .vertebrae_cache \
+  --plan-json structured_bundle.json \
+  --embedding-key "$(jq -r '.outputs[0].output_key' structured_bundle.json)"
+```
+
+If the structured or segmentation bundle contains exactly one output, `score`,
+`score-repeats`, and `diagnose-complexity` can infer the aligned embedding,
+labels, groups, and default score artifact directly from the bundle JSON. If the
+bundle contains multiple outputs, pass `--embedding-key` for the selected output
+and the CLI will resolve that output's aligned label/group artifacts
+automatically.
 
 To execute shards or score repeats through Ray or Dask instead of the local backend:
 

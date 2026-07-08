@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, cast
 import numpy as np
 
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 
 class HFVideoExtractor:
@@ -19,6 +20,7 @@ class HFVideoExtractor:
         pooling: str = "mean",
         hidden_layer: Optional[int] = None,
         outputs: Optional[List[Dict[str, Any]]] = None,
+        structured_outputs: Optional[List[Dict[str, Any]]] = None,
         batch_size: int = 4,
         num_frames: int = 16,
         clip_duration_sec: Optional[float] = None,
@@ -47,6 +49,7 @@ class HFVideoExtractor:
             default_pooling=pooling,
             default_hidden_layer=hidden_layer,
         )
+        self._structured_output_specs = _resolve_structured_output_specs(structured_outputs)
         self.batch_size = batch_size
         self.num_frames = num_frames
         self.clip_duration_sec = clip_duration_sec
@@ -128,6 +131,41 @@ class HFVideoExtractor:
             )
         return outputs
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError("HFVideoExtractor was not configured with structured_outputs.")
+        processor, model, torch = self._load_model()
+        samples = _normalize_video_inputs(X, owner="HFVideoExtractor")
+        collected: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._structured_output_specs
+        }
+        model.eval()
+        with torch.no_grad():
+            for batch in _iter_chunks(samples, self.batch_size):
+                clips = [self._prepare_clip(sample) for sample in batch]
+                encoded = self._encode_batch(clips, processor, torch)
+                model_output = model(**encoded, output_hidden_states=True)
+                for spec in self._structured_output_specs:
+                    hidden = self._select_hidden_state(model_output, spec.hidden_layer)
+                    hidden = _flatten_sequence_axes(hidden)
+                    values = hidden.detach().cpu().numpy().astype(np.float32, copy=False)
+                    special_tokens = int(spec.metadata.get("special_tokens", 1))
+                    for index in range(values.shape[0]):
+                        collected[spec.name].append(values[index, special_tokens:])
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=collected[spec.name],
+                unit_type=spec.unit_type,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable Hugging Face video recipe."""
 
@@ -152,6 +190,10 @@ class HFVideoExtractor:
         }
         if len(self._output_specs) > 1:
             recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                _structured_spec_to_dict(spec) for spec in self._structured_output_specs
+            ]
         return recipe
 
     def _load_model(self) -> Any:
@@ -432,7 +474,7 @@ def _resolve_output_specs(
     return specs
 
 
-def _ensure_unique_names(specs: List[EmbeddingOutputSpec]) -> None:
+def _ensure_unique_names(specs: List[Any]) -> None:
     names = [spec.name for spec in specs]
     if len(set(names)) != len(names):
         raise ValueError("HFVideoExtractor output names must be unique.")
@@ -442,6 +484,37 @@ def _spec_to_dict(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
     return {
         "name": spec.name,
         "pooling": spec.pooling,
+        "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
+    }
+
+
+def _resolve_structured_output_specs(
+    outputs: Optional[List[Dict[str, Any]]],
+) -> List[StructuredOutputSpec]:
+    specs = []
+    for raw in outputs or []:
+        if "name" not in raw:
+            raise ValueError("HFVideoExtractor structured outputs must include a name.")
+        specs.append(
+            StructuredOutputSpec(
+                name=str(raw["name"]),
+                unit_type=str(raw.get("unit_type", "frame")),
+                hidden_layer=raw.get("hidden_layer"),
+                metadata={
+                    "special_tokens": int(raw.get("special_tokens", 1)),
+                    **dict(raw.get("metadata", {})),
+                },
+            )
+        )
+    _ensure_unique_names(specs)
+    return specs
+
+
+def _structured_spec_to_dict(spec: StructuredOutputSpec) -> Dict[str, Any]:
+    return {
+        "name": spec.name,
+        "unit_type": spec.unit_type,
         "hidden_layer": spec.hidden_layer,
         "metadata": dict(spec.metadata),
     }
