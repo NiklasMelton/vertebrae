@@ -1,6 +1,7 @@
 """GCS-backed artifact store."""
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
@@ -29,10 +30,12 @@ class GCSArtifactStore:
         bucket: str,
         prefix: str = "",
         project: Optional[str] = None,
+        emulator_host: Optional[str] = None,
     ) -> None:
         self.bucket = bucket
         self.prefix = prefix.strip("/")
         self.project = project
+        self.emulator_host = emulator_host
         self._bucket = None
 
     @classmethod
@@ -46,12 +49,20 @@ class GCSArtifactStore:
             bucket=parsed.netloc,
             prefix=parsed.path.lstrip("/"),
             project=options.get("project"),
+            emulator_host=options.get("emulator_host"),
         )
 
     def config(self) -> ArtifactStoreConfig:
         """Return a serializable config for reconstructing this store."""
 
-        options = {"project": self.project} if self.project is not None else {}
+        options = {
+            key: value
+            for key, value in {
+                "project": self.project,
+                "emulator_host": self.emulator_host,
+            }.items()
+            if value is not None
+        }
         return ArtifactStoreConfig(
             uri=f"gs://{self.bucket}/{self.prefix}" if self.prefix else f"gs://{self.bucket}",
             options=options,
@@ -181,7 +192,14 @@ class GCSArtifactStore:
                 "GCS artifact storage requires the optional 'gcs' extra. Install with "
                 "`poetry install --extras gcs`."
             ) from exc
-        client = storage.Client(project=self.project)
+        client_kwargs = {"project": self.project}
+        emulator_host = self.emulator_host or os.environ.get("STORAGE_EMULATOR_HOST")
+        if emulator_host:
+            from google.auth.credentials import AnonymousCredentials
+
+            client_kwargs["credentials"] = AnonymousCredentials()
+            client_kwargs["client_options"] = {"api_endpoint": emulator_host}
+        client = storage.Client(**client_kwargs)
         self._bucket = client.bucket(self.bucket)
         return self._bucket
 
