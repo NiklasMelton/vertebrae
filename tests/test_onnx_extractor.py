@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import ONNXExtractor
 
 
@@ -143,7 +143,6 @@ def test_onnx_extractor_works_in_streaming_evaluator(fake_onnxruntime, fake_over
         dataset=dataset,
         extractor=extractor,
         cache_config=CacheConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         stability_config=StabilityConfig(enabled=False),
         embedding_config=EmbeddingConfig(batch_size=2),
     ).run()

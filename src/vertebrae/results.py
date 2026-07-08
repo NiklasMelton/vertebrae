@@ -18,7 +18,7 @@ class ExtractorResult:
         extractor_type: Extractor family/type metadata.
         overlap: OverlapIndex scoring result.
         stability: Optional stability-analysis summary.
-        probes: Optional probe-classifier summary.
+        separatix: Optional Separatix diagnostic summary.
         embedding_metadata: Metadata for the embedding artifact.
         runtime: Runtime timing metadata by benchmark stage.
         warnings: Warnings produced during evaluation.
@@ -32,7 +32,6 @@ class ExtractorResult:
     extractor_type: str
     overlap: OverlapScoreResult
     stability: Optional[Dict[str, Any]]
-    probes: Optional[Dict[str, Any]]
     separatix: Optional[SeparatixResult]
     embedding_metadata: Dict[str, Any]
     compression_metadata: Dict[str, Any]
@@ -118,9 +117,9 @@ class BenchmarkResult:
                     "label_view": (item.label_view or {}).get("name"),
                     "weakest_class": item.weakest_class,
                     "weakest_class_score": item.weakest_class_score,
-                    "probe_metric": _probe_metric_name(item.probes, item.overlap.metadata),
-                    "probe_score": _best_probe_accuracy(item.probes),
-                    "probe_accuracy": _best_probe_accuracy(item.probes),
+                    "probe_metric": _separatix_probe_metric_name(item.separatix),
+                    "probe_score": _separatix_probe_accuracy(item.separatix),
+                    "probe_accuracy": _separatix_probe_accuracy(item.separatix),
                     "embedding_dim": item.embedding_metadata.get("embedding_dim"),
                     "compression_method": item.compression_metadata.get("method", "none"),
                     "compression_precision": item.compression_metadata.get("precision"),
@@ -161,25 +160,24 @@ class BenchmarkResult:
         save_markdown_report(self, str(Path(path)))
 
 
-def _best_probe_accuracy(probes: Optional[Dict[str, Any]]) -> Optional[float]:
-    if not probes or not probes.get("enabled"):
+def _separatix_probe_accuracy(separatix: Optional[SeparatixResult]) -> Optional[float]:
+    if not separatix or not separatix.ran:
         return None
-    accuracies = [
-        float(scores["accuracy"])
-        for scores in probes.get("results", {}).values()
-        if scores.get("accuracy") is not None
-    ]
-    if not accuracies:
+    report = separatix.report or {}
+    metrics = report.get("metrics", {})
+    baseline = metrics.get("baseline", {})
+    probes = metrics.get("probes", {})
+    best_probe = baseline.get("best_probe")
+    if not best_probe:
         return None
-    return max(accuracies)
+    best_probe_metrics = probes.get(best_probe, {})
+    accuracy = best_probe_metrics.get("accuracy")
+    if accuracy is None:
+        return None
+    return float(accuracy)
 
 
-def _probe_metric_name(
-    probes: Optional[Dict[str, Any]],
-    overlap_metadata: Dict[str, Any],
-) -> Optional[str]:
-    if not probes or not probes.get("enabled"):
+def _separatix_probe_metric_name(separatix: Optional[SeparatixResult]) -> Optional[str]:
+    if _separatix_probe_accuracy(separatix) is None:
         return None
-    if overlap_metadata.get("target_type") == "regression":
-        return "r2"
     return "accuracy"

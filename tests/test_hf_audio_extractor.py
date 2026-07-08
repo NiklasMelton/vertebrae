@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import HFAudioExtractor
 
 
@@ -234,7 +234,6 @@ def test_hf_audio_evaluator_workflow(fake_audio_modules, fake_overlapindex):
         dataset=dataset,
         extractor=extractor,
         stability_config=StabilityConfig(repeats=2),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

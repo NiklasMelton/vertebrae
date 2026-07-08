@@ -846,7 +846,6 @@ def _benchmark_result_from_dict(
                 extractor_type=item["extractor_type"],
                 overlap=overlap,
                 stability=item.get("stability"),
-                probes=item.get("probes"),
                 separatix=separatix,
                 embedding_metadata=item.get("embedding_metadata", {}),
                 compression_metadata=item.get("compression_metadata", {"method": "none"}),

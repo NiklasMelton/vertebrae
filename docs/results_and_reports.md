@@ -19,7 +19,6 @@ Each extractor contributes an `ExtractorResult` with:
 - extractor identity and type,
 - `OverlapScoreResult`,
 - optional stability summary,
-- optional native probe summary,
 - optional Separatix complexity diagnostic,
 - embedding metadata,
 - runtime timing metadata,
@@ -104,12 +103,10 @@ embedding efficacy through overlap or continuous overlap scores; they are not
 retrieval, recommender, or ranking benchmark reports.
 
 Separatix is the default classifier-complexity diagnostic when the overlap gate
-passes, including multi-label datasets. Native vertebrae probes remain available
-as an explicit quick-check option through `ProbeConfig(enabled=True)`; they skip
-multi-label and regression targets with a warning because they are currently
-classification-only. When Separatix MLP probes are enabled, JSON outputs preserve
-the full trigger and comparison payload and Markdown reports summarize the MLP
-status.
+passes, including multi-label datasets. Probe-style report columns are derived
+from Separatix baseline probe metrics when present. When Separatix MLP probes are
+enabled, JSON outputs preserve the full trigger and comparison payload and
+Markdown reports summarize the MLP status.
 
 ## What recommendations mean
 

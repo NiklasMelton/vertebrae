@@ -9,7 +9,6 @@ from vertebrae.config import (
     EmbeddingConfig,
     MemoryConfig,
     OverlapScoringConfig,
-    ProbeConfig,
     SeparatixConfig,
     StabilityConfig,
 )
@@ -45,7 +44,6 @@ def test_large_streaming_embedding_auto_subsamples_under_memory_budget(tmp_path)
             kmeans_kwargs={"random_state": 29, "batch_size": 128, "n_init": 2},
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path / "memory-cache")),
         embedding_config=EmbeddingConfig(batch_size=128),
@@ -89,7 +87,6 @@ def test_user_requested_large_subsample_preserves_class_balance(tmp_path):
             kmeans_kwargs={"random_state": 31, "batch_size": 128, "n_init": 2},
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path / "subsample-cache")),
         embedding_config=EmbeddingConfig(batch_size=128),

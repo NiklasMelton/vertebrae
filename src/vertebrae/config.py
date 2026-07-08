@@ -193,31 +193,6 @@ class StabilityConfig:
             raise ValueError("subsample_fraction must be in (0, 1].")
 
 
-@dataclass
-class ProbeConfig:
-    """Configuration for optional lightweight probe classifiers.
-
-    Attributes:
-        enabled: Whether native probe evaluation should run.
-        test_size: Fraction of samples held out for probe testing.
-        random_state: Seed used for train/test splitting.
-        methods: Probe classifiers to evaluate.
-    """
-
-    enabled: bool = False
-    test_size: float = 0.2
-    random_state: int = 42
-    methods: Tuple[str, ...] = ("knn", "logistic_regression")
-
-    def __post_init__(self) -> None:
-        if not 0.0 < self.test_size < 1.0:
-            raise ValueError("ProbeConfig.test_size must be between 0 and 1.")
-        allowed_methods = {"knn", "logistic_regression", "nearest_centroid"}
-        unknown = set(self.methods) - allowed_methods
-        if unknown:
-            raise ValueError(f"Unknown probe methods: {sorted(unknown)}.")
-
-
 def _validate_excluded_classes(value: Any) -> None:
     if value is None:
         return

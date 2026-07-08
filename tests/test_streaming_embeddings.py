@@ -3,7 +3,7 @@ import pytest
 
 from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator, ShardSpec
 from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor
 
 
@@ -66,7 +66,6 @@ def test_streaming_benchmark_materializes_embeddings_once_per_sample(tmp_path, f
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=1),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         embedding_config=EmbeddingConfig(batch_size=3),
     ).run()
@@ -97,7 +96,6 @@ def test_local_benchmark_rejects_partial_embedding_shards(fake_overlapindex):
             extractor=extractor,
             scoring_config=OverlapScoringConfig(k=1),
             stability_config=StabilityConfig(enabled=False),
-            probe_config=ProbeConfig(enabled=False),
             cache_config=CacheConfig(enabled=False),
             embedding_config=EmbeddingConfig(
                 batch_size=2,

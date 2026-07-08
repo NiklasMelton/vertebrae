@@ -9,7 +9,7 @@ import numpy as np
 from _common import CACHE_DIR, ensure_output_dir, print_ranking
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import HFMultimodalExtractor
 
 
@@ -50,7 +50,6 @@ def main() -> None:
             extractor=extractor,
             scoring_config=OverlapScoringConfig(k=1, min_samples_per_cluster=2),
             stability_config=StabilityConfig(repeats=3),
-            probe_config=ProbeConfig(enabled=False),
             cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
         ).run()
     except ImportError as exc:

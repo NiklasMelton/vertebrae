@@ -4,7 +4,7 @@ import numpy as np
 from _common import ensure_output_dir, print_ranking
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
 
@@ -31,7 +31,6 @@ def main() -> None:
         extractor=PrecomputedExtractor(name="node_embeddings"),
         scoring_config=OverlapScoringConfig(k=3, min_samples_per_cluster=4),
         stability_config=StabilityConfig(repeats=4, random_state=17),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -59,7 +58,6 @@ def main() -> None:
         extractor=PrecomputedExtractor(name="edge_embeddings"),
         scoring_config=OverlapScoringConfig(k=2, min_samples_per_cluster=2),
         stability_config=StabilityConfig(repeats=4, random_state=19),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

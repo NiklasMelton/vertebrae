@@ -9,7 +9,6 @@ from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
     OverlapScoringConfig,
-    ProbeConfig,
     SeparatixConfig,
     StabilityConfig,
 )
@@ -89,7 +88,6 @@ def _assert_torch_device_benchmark(torch, device, tmp_path):
             kmeans_kwargs={"random_state": 11, "batch_size": 8, "n_init": 2},
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path / f"cache-{device}")),
         embedding_config=EmbeddingConfig(batch_size=2),

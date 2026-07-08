@@ -8,7 +8,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import SklearnExtractor
 
 
@@ -43,7 +43,6 @@ def main() -> None:
         extractor=SklearnExtractor(name="mixed_tabular_pca", pipeline=pipeline),
         scoring_config=OverlapScoringConfig(k=3, min_samples_per_cluster=4),
         stability_config=StabilityConfig(repeats=4, random_state=47),
-        probe_config=ProbeConfig(methods=("nearest_centroid", "knn")),
         cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
     ).run()
 

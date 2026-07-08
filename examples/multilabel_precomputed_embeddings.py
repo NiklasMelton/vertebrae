@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from vertebrae import CacheConfig, Evaluator, ProbeConfig, StabilityConfig
+from vertebrae import CacheConfig, Evaluator, StabilityConfig
 from vertebrae.datasets import BenchmarkDataset
 from vertebrae.extractors import PrecomputedExtractor
 
@@ -41,7 +41,6 @@ def main() -> None:
         dataset=dataset,
         extractor=PrecomputedExtractor(name="toy_multilabel_embeddings"),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=True),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

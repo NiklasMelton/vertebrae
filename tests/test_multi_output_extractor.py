@@ -1,7 +1,7 @@
 import numpy as np
 
 from vertebrae import Benchmark, BenchmarkDataset
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import MultiOutputExtractor
 from vertebrae.extractors.base import EmbeddingOutputSpec
 
@@ -28,7 +28,6 @@ def test_multi_output_extractor_expands_to_multiple_results(fake_overlapindex):
         dataset=dataset,
         extractors=[extractor],
         stability_config=StabilityConfig(repeats=2),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

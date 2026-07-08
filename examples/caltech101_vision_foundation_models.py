@@ -49,7 +49,6 @@ from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
     OverlapScoringConfig,
-    ProbeConfig,
     StabilityConfig,
 )
 from vertebrae.extractors import HFVisionExtractor, SklearnExtractor
@@ -143,12 +142,6 @@ def main() -> None:
         dataset=dataset,
         scoring_config=OverlapScoringConfig(k=4, min_samples_per_cluster=4),
         stability_config=StabilityConfig(repeats=3, random_state=random_state),
-        probe_config=ProbeConfig(
-            enabled=True,
-            test_size=0.25,
-            methods=("nearest_centroid", "knn"),
-            random_state=random_state,
-        ),
         cache_config=CacheConfig(cache_dir=str(CACHE_DIR / "caltech101_vision_models")),
         embedding_config=EmbeddingConfig(batch_size=8),
     )

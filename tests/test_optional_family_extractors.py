@@ -6,7 +6,7 @@ import pytest
 from scipy import sparse
 
 from vertebrae import BenchmarkDataset, CacheConfig, Evaluator
-from vertebrae.config import OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import (
     GraphModelExtractor,
     HostedEmbeddingExtractor,
@@ -383,7 +383,6 @@ def test_hosted_embedding_extractor_retries_and_skips_cache(tmp_path, fake_overl
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=1),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path), enabled=True),
     ).run()
 

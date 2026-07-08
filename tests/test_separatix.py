@@ -5,7 +5,7 @@ import pytest
 from scipy import sparse
 
 from vertebrae import BenchmarkDataset, Evaluator, SeparatixConfig
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 from vertebrae.scoring.separatix import SeparatixScorer
 
@@ -117,7 +117,6 @@ def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapi
         dataset=dataset,
         extractor=PrecomputedExtractor(name="embeddings"),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     )
 
@@ -154,7 +153,6 @@ def test_reports_include_separatix_content(tmp_path, fake_overlapindex):
         extractor=PrecomputedExtractor(name="dense"),
         separatix_config=SeparatixConfig(overlap_threshold=0.80),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -176,7 +174,7 @@ def test_reports_include_separatix_content(tmp_path, fake_overlapindex):
     assert "| 0.9100 |" in markdown
 
 
-def test_native_probes_remain_available_when_explicitly_enabled(fake_overlapindex):
+def test_dataframe_probe_accuracy_comes_from_separatix(fake_overlapindex):
     rng = np.random.default_rng(2)
     embeddings = np.vstack(
         [
@@ -192,19 +190,17 @@ def test_native_probes_remain_available_when_explicitly_enabled(fake_overlapinde
         extractor=PrecomputedExtractor(name="dense"),
         separatix_config=SeparatixConfig(overlap_threshold=0.80),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=True),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
     item = result.extractor_results[0]
     frame = result.to_dataframe()
-    assert item.probes is not None
-    assert item.probes["enabled"] is True
-    assert set(item.probes["results"]) == {"knn", "logistic_regression"}
+    assert item.separatix is not None
+    assert item.separatix.ran is True
     assert frame.loc[0, "probe_accuracy"] not in ("", None)
 
 
-def test_multilabel_benchmark_runs_separatix_and_skips_native_probes(
+def test_multilabel_benchmark_runs_separatix(
     tmp_path,
     fake_overlapindex,
 ):
@@ -230,7 +226,6 @@ def test_multilabel_benchmark_runs_separatix_and_skips_native_probes(
         extractor=PrecomputedExtractor(name="multilabel_dense"),
         separatix_config=SeparatixConfig(overlap_threshold=0.80),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=True),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
 
@@ -245,15 +240,11 @@ def test_multilabel_benchmark_runs_separatix_and_skips_native_probes(
     assert item.separatix is not None
     assert item.separatix.ran is True
     assert item.separatix.metadata["target_type"] == "multi_label"
-    assert item.probes is not None
-    assert item.probes["enabled"] is False
-    assert "single-label only" in item.probes["warnings"][0]
     assert frame.loc[0, "target_type"] == "multi_label"
     assert "Target type: multi_label" in markdown
-    assert "single-label only" in markdown
 
 
-def test_regression_benchmark_uses_regression_threshold_and_skips_native_probes(
+def test_regression_benchmark_uses_regression_threshold(
     tmp_path,
     fake_overlapindex,
 ):
@@ -271,7 +262,6 @@ def test_regression_benchmark_uses_regression_threshold_and_skips_native_probes(
         extractor=PrecomputedExtractor(name="regression_dense"),
         separatix_config=SeparatixConfig(regression_overlap_threshold=0.63),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=True),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
 
@@ -281,9 +271,6 @@ def test_regression_benchmark_uses_regression_threshold_and_skips_native_probes(
     assert item.separatix is not None
     assert item.separatix.ran is False
     assert "below the configured threshold" in (item.separatix.skipped_reason or "")
-    assert item.probes is not None
-    assert item.probes["enabled"] is False
-    assert "classification-only" in item.probes["warnings"][0]
 
 
 def test_reports_include_separatix_mlp_status(tmp_path, fake_overlapindex):
@@ -296,7 +283,6 @@ def test_reports_include_separatix_mlp_status(tmp_path, fake_overlapindex):
         extractor=PrecomputedExtractor(name="dense"),
         separatix_config=SeparatixConfig(overlap_threshold=0.80, mlp_probes=True),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

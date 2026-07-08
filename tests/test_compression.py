@@ -4,7 +4,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from vertebrae import Benchmark, BenchmarkDataset, EmbeddingCompressionConfig, Evaluator
 from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.execution import (
     ScoringJob,
     benchmark_result_from_artifacts,
@@ -31,7 +31,6 @@ def test_pca_compression_reduces_dense_embeddings(fake_overlapindex):
             dtype="float32",
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -58,7 +57,6 @@ def test_truncated_svd_accepts_sparse_embeddings(tmp_path, fake_overlapindex):
             random_state=7,
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
 
@@ -83,7 +81,6 @@ def test_prefix_truncate_dense_embeddings_preserves_prefix(fake_overlapindex):
             assume_matryoshka=True,
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -107,7 +104,6 @@ def test_prefix_truncate_sparse_embeddings_warns_without_matryoshka(fake_overlap
             n_components=4,
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -131,7 +127,6 @@ def test_pca_rejects_sparse_embeddings(fake_overlapindex):
             n_components=2,
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     )
 
@@ -155,7 +150,6 @@ def test_multi_compression_configs_expand_results(fake_overlapindex):
             EmbeddingCompressionConfig(enabled=True, method="pca", n_components=2),
         ],
         stability_config=StabilityConfig(repeats=2),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     )
     benchmark.add_extractor(CallableExtractor("identity", lambda value: value, modality="tabular"))
@@ -181,7 +175,6 @@ def test_quantize_float16_changes_precision(fake_overlapindex):
             precision="float16",
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -206,7 +199,6 @@ def test_quantize_int8_round_trip_records_calibration(fake_overlapindex):
             precision="int8",
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -230,7 +222,6 @@ def test_compressed_embeddings_are_reused_from_cache(tmp_path, fake_overlapindex
         extractor=PrecomputedExtractor("cached"),
         compression_config=config,
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     )
     first = Evaluator(**kwargs).run()
@@ -311,7 +302,6 @@ def test_markdown_report_includes_compression_columns(tmp_path, fake_overlapinde
             n_components=3,
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 
@@ -337,7 +327,6 @@ def test_quantize_sparse_int8_rejects_sparse_input(fake_overlapindex):
             precision="int8",
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     )
 

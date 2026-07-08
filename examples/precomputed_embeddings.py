@@ -3,7 +3,7 @@
 from _common import ensure_output_dir, make_separated_blobs, print_ranking
 
 from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
 
@@ -22,7 +22,6 @@ def main() -> None:
         extractor=PrecomputedExtractor(name="frozen_backbone_embeddings"),
         scoring_config=OverlapScoringConfig(k=4, min_samples_per_cluster=5),
         stability_config=StabilityConfig(repeats=5, random_state=11),
-        probe_config=ProbeConfig(methods=("nearest_centroid", "knn")),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

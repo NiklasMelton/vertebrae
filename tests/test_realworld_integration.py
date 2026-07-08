@@ -22,7 +22,6 @@ from vertebrae.config import (
     ContinuousOverlapScoringConfig,
     EmbeddingConfig,
     OverlapScoringConfig,
-    ProbeConfig,
     SeparatixConfig,
     StabilityConfig,
 )
@@ -124,7 +123,6 @@ def test_digits_benchmark_real_metrics_cache_compression_reports(tmp_path):
             normalize_embeddings=True,
         ),
         stability_config=StabilityConfig(repeats=3, random_state=13),
-        probe_config=ProbeConfig(enabled=True, methods=("nearest_centroid",)),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(cache_dir)),
         compression_configs=[
@@ -153,7 +151,6 @@ def test_digits_benchmark_real_metrics_cache_compression_reports(tmp_path):
     assert set(rows["compression_method"]) == {"none", "pca"}
     assert all(np.isfinite(rows["overlap_score"]))
     assert all(0.0 <= score <= 1.0 for score in rows["overlap_score"])
-    assert all(item.probes and item.probes["enabled"] for item in result.extractor_results)
     assert all(
         item.stability and len(item.stability["scores"]) == 3 for item in result.extractor_results
     )
@@ -193,7 +190,6 @@ def test_diabetes_regression_real_continuous_overlap(tmp_path):
             n_null_permutations=3,
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path / "cache")),
     ).run()
@@ -621,7 +617,6 @@ def _run_real_model_family_benchmark(dataset, extractor, tmp_path):
             kmeans_kwargs={"random_state": 41, "batch_size": 16, "n_init": 2},
         ),
         stability_config=StabilityConfig(enabled=False),
-        probe_config=ProbeConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         cache_config=CacheConfig(enabled=True, cache_dir=str(tmp_path / "family-cache")),
         embedding_config=EmbeddingConfig(batch_size=2),
