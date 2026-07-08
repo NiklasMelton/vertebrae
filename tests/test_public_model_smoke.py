@@ -94,10 +94,7 @@ def test_public_hf_vision_model_smoke(tmp_path):
         "VERTABRAE_PUBLIC_VISION_MODEL",
         "hf-internal-testing/tiny-random-vit",
     )
-    images = [
-        np.full((32, 32, 3), value, dtype=np.uint8)
-        for value in [0, 12, 24, 180, 210, 240]
-    ]
+    images = [np.full((32, 32, 3), value, dtype=np.uint8) for value in [0, 12, 24, 180, 210, 240]]
     dataset = BenchmarkDataset.from_arrays(images, ["dark"] * 3 + ["bright"] * 3, modality="image")
 
     item = _run_public_model_benchmark(
@@ -119,8 +116,7 @@ def test_public_hf_audio_model_smoke(tmp_path):
     )
     low = [np.sin(np.linspace(0, 8 * np.pi, 4096, dtype=np.float32) + phase) for phase in (0, 1, 2)]
     high = [
-        np.sin(np.linspace(0, 24 * np.pi, 4096, dtype=np.float32) + phase)
-        for phase in (0, 1, 2)
+        np.sin(np.linspace(0, 24 * np.pi, 4096, dtype=np.float32) + phase) for phase in (0, 1, 2)
     ]
     dataset = BenchmarkDataset.from_audio_arrays(
         low + high,
@@ -155,8 +151,7 @@ def test_public_hf_multimodal_model_smoke(tmp_path):
     dataset = BenchmarkDataset.from_multimodal(
         inputs={
             "image": [
-                np.full((32, 32, 3), value, dtype=np.uint8)
-                for value in [0, 12, 24, 180, 210, 240]
+                np.full((32, 32, 3), value, dtype=np.uint8) for value in [0, 12, 24, 180, 210, 240]
             ],
             "caption": [
                 "dark product photo",

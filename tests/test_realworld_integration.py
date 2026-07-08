@@ -155,8 +155,7 @@ def test_digits_benchmark_real_metrics_cache_compression_reports(tmp_path):
     assert all(0.0 <= score <= 1.0 for score in rows["overlap_score"])
     assert all(item.probes and item.probes["enabled"] for item in result.extractor_results)
     assert all(
-        item.stability and len(item.stability["scores"]) == 3
-        for item in result.extractor_results
+        item.stability and len(item.stability["scores"]) == 3 for item in result.extractor_results
     )
     assert all("cache_key" in item.embedding_metadata for item in result.extractor_results)
     assert any(item.compression_metadata.get("cache_key") for item in result.extractor_results)
@@ -448,8 +447,7 @@ def test_hf_multimodal_model_family_runs_full_benchmark(monkeypatch, tmp_path):
     dataset = BenchmarkDataset.from_multimodal(
         inputs={
             "image": [
-                np.full((2, 2, 3), value, dtype=np.uint8)
-                for value in [0, 8, 16, 120, 140, 160]
+                np.full((2, 2, 3), value, dtype=np.uint8) for value in [0, 8, 16, 120, 140, 160]
             ],
             "caption": [
                 "small dark product",
@@ -525,10 +523,7 @@ def test_hf_video_model_family_runs_full_benchmark(monkeypatch, tmp_path):
         types.SimpleNamespace(EncodedVideo=FakeEncodedVideo),
     )
     dataset = BenchmarkDataset.from_video_arrays(
-        [
-            np.full((4, 2, 2, 3), value, dtype=np.uint8)
-            for value in [0, 8, 16, 120, 140, 160]
-        ],
+        [np.full((4, 2, 2, 3), value, dtype=np.uint8) for value in [0, 8, 16, 120, 140, 160]],
         ["indoor"] * 3 + ["outdoor"] * 3,
         frame_rate=24.0,
     )
