@@ -125,14 +125,14 @@ def render_markdown_report(result: Any) -> str:
     lines.extend(["", "## Ranking", ""])
     lines.append(
         "| rank | extractor | extractor_type | target_view | label_view | "
-        "overlap_score | overlap_macro | "
+        "primary_metric | primary_score | overlap_score | overlap_macro | "
         "overlap_weighted | stability_interval | "
         "weakest_class | probe_accuracy | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | "
+        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | "
         "--- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(result.ranked_results(), start=1):
@@ -151,9 +151,12 @@ def render_markdown_report(result: Any) -> str:
             separatix_confidence = item.separatix.confidence or ""
         lines.append(
             f"| {rank} | {item.name} | {item.extractor_type} | "
-            f"{target_view} | {label_view} | {item.overlap.score:.4f} | "
-            f"{item.overlap.macro_score:.4f} | "
-            f"{_format_float(item.overlap.weighted_score)} | {interval} | {weakest} | "
+            f"{target_view} | {label_view} | {item.primary_metric_name} | "
+            f"{_format_float(item.primary_score)} | "
+            f"{_format_float(item.overlap.score if item.overlap else None)} | "
+            f"{_format_float(item.overlap.macro_score if item.overlap else None)} | "
+            f"{_format_float(item.overlap.weighted_score if item.overlap else None)} | "
+            f"{interval} | {weakest} | "
             f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
             f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
             f"{separatix_confidence} |"
@@ -161,13 +164,17 @@ def render_markdown_report(result: Any) -> str:
 
     lines.extend(["", "## Per-extractor details", ""])
     for item in result.ranked_results():
+        overlap = item.overlap
+        target_metadata = (
+            overlap.metadata if overlap else item.metrics[item.primary_metric_name].metadata
+        )
         lines.extend(
             [
                 f"### {item.name}",
                 "",
                 f"- Extractor type: {item.extractor_type}",
                 f"- Extractor family: {_extractor_family(item.extractor_type)}",
-                f"- Target type: {item.overlap.metadata.get('target_type', 'single_label')}",
+                f"- Target type: {target_metadata.get('target_type', 'single_label')}",
                 f"- Target view: {(item.target_view or {}).get('name', 'primary')}",
                 f"- Label view: {(item.label_view or {}).get('name', 'primary')}",
                 f"- Modality: {item.embedding_metadata.get('modality', '')}",
@@ -179,10 +186,8 @@ def render_markdown_report(result: Any) -> str:
                 f"- Compression method: {item.compression_metadata.get('method', 'none')}",
                 f"- Compression precision: {item.compression_metadata.get('precision', '')}",
                 f"- Compressed dimension: {item.compression_metadata.get('compressed_dim', '')}",
-                f"- Primary overlap score: {item.overlap.score:.4f}",
-                f"- Overlap macro: {item.overlap.macro_score:.4f}",
-                f"- Overlap weighted: {_format_float(item.overlap.weighted_score)}",
-                f"- Excluded aggregate classes: {item.overlap.metadata.get('exclude_classes', [])}",
+                f"- Primary metric: {item.primary_metric_name}",
+                f"- Primary score: {_format_float(item.primary_score)}",
                 f"- Weakest class: {item.weakest_class or ''}",
                 f"- Recommendation: {item.recommendation}",
                 "",
@@ -190,6 +195,14 @@ def render_markdown_report(result: Any) -> str:
                 "",
             ]
         )
+        if overlap:
+            lines.extend(
+                [
+                    f"- Overlap macro: {overlap.macro_score:.4f}",
+                    f"- Overlap weighted: {_format_float(overlap.weighted_score)}",
+                    f"- Excluded aggregate classes: {overlap.metadata.get('exclude_classes', [])}",
+                ]
+            )
         segmentation = item.embedding_metadata.get("segmentation")
         if segmentation:
             lines.extend(
@@ -242,20 +255,23 @@ def render_markdown_report(result: Any) -> str:
                 lines.append(f"- {key}: {compression_metadata[key]}")
         for warning in compression_metadata.get("warnings", []):
             lines.append(f"- warning: {warning}")
-        lines.extend(
-            [
-                "",
-                "#### Per-class scores",
-                "",
-            ]
-        )
-        if item.overlap.metadata.get("target_type") == "regression":
+        lines.extend(["", "#### Metrics", ""])
+        for metric_name, metric in item.metrics.items():
+            direction = "higher is better" if metric.higher_is_better else "lower is better"
+            lines.append(f"- {metric_name}: {_format_float(metric.score)} ({direction})")
+            for warning in metric.warnings:
+                lines.append(f"  - warning: {warning}")
+        lines.extend(["", "#### Per-class scores", ""])
+        if overlap is None:
+            lines.append("Per-class scores are available only for OverlapIndex scoring.")
+            lines.append("")
+        elif overlap.metadata.get("target_type") == "regression":
             lines.append("Per-class scores are not defined for regression overlap scoring.")
             lines.append("")
-        elif item.overlap.per_class_scores:
+        elif overlap.per_class_scores:
             lines.append("| class | score |")
             lines.append("| --- | ---: |")
-            for label, score in item.overlap.per_class_scores.items():
+            for label, score in overlap.per_class_scores.items():
                 lines.append(f"| {label} | {_format_float(score)} |")
             lines.append("")
         else:

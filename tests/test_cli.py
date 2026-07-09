@@ -181,8 +181,8 @@ def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex
         == 0
     )
     score = json.loads(capsys.readouterr().out)
-    assert score["artifact_type"] == "overlap_score"
-    assert score["score"]["macro_score"] == 0.8
+    assert score["artifact_type"] == "metric_evaluation"
+    assert score["metrics"]["overlap"]["diagnostics"]["macro_score"] == 0.8
 
     repeat_plan_path = tmp_path / "score_repeats.json"
     assert (
@@ -1043,7 +1043,7 @@ def test_cli_scores_multilabel_dataset_from_artifacts(tmp_path, capsys, fake_ove
     score = json.loads(capsys.readouterr().out)
 
     assert label_manifest["target_type"] == "multi_label"
-    assert score["score"]["metadata"]["target_type"] == "multi_label"
+    assert score["metrics"]["overlap"]["metadata"]["target_type"] == "multi_label"
     assert fake_overlapindex.calls[-1]["fit_y_shape"] == [12, 3]
 
 

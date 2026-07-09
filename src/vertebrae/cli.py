@@ -40,6 +40,7 @@ from vertebrae.execution import (
     separatix_artifact_key,
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
+from vertebrae.scoring.metrics import CallableMetric
 from vertebrae.structured import (
     drop_special_rows,
     keep_row_indices,
@@ -156,7 +157,26 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--output-key")
     score.add_argument("--plan-json")
     score.add_argument("--scoring-config-pickle")
+    score.add_argument(
+        "--metric",
+        action="append",
+        default=[],
+        help="Importable custom metric in module:callable form.",
+    )
+    score.add_argument("--metric-name", action="append", default=[])
+    score.add_argument(
+        "--metric-config-json",
+        action="append",
+        default=[],
+        help="JSON object forwarded to the corresponding custom metric as config.",
+    )
+    score.add_argument(
+        "--lower-is-better",
+        action="store_true",
+        help="Rank lower custom metric scores ahead of higher scores.",
+    )
     score.add_argument("--seed", type=int)
+    score.add_argument("--primary-metric", default="overlap")
     score.add_argument("--output-json")
     score.set_defaults(func=_cmd_score)
 
@@ -212,6 +232,11 @@ def build_parser() -> argparse.ArgumentParser:
     repeats.add_argument("--repeats", type=int)
     repeats.add_argument("--random-state", type=int, default=42)
     repeats.add_argument("--scoring-config-pickle")
+    repeats.add_argument("--metric", action="append", default=[])
+    repeats.add_argument("--metric-name", action="append", default=[])
+    repeats.add_argument("--metric-config-json", action="append", default=[])
+    repeats.add_argument("--lower-is-better", action="store_true")
+    repeats.add_argument("--primary-metric", default="overlap")
     _add_backend_args(repeats, include_local_parallel=True)
     repeats.add_argument("--output-json")
     repeats.set_defaults(func=_cmd_score_repeats)
@@ -222,6 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--score-plan-json")
     collect.add_argument("--output-key", required=True)
     collect.add_argument("--interval-level", type=float, default=0.95)
+    collect.add_argument("--metric-name")
     collect.add_argument("--output-json")
     collect.set_defaults(func=_cmd_collect_scores)
 
@@ -443,16 +469,41 @@ def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
     scoring_config = (
         _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
     )
+    metrics = _metrics_from_args(args)
     return score_embedding_artifact(
         ScoringJob(
             embedding_key=embedding_key,
             labels_key=labels_key,
             output_key=output_key,
             scoring_config=scoring_config,
+            metrics=metrics,
+            primary_metric=args.primary_metric,
             seed=args.seed,
         ),
         _store_from_args(args),
     )
+
+
+def _metrics_from_args(args: argparse.Namespace) -> list[CallableMetric]:
+    if len(args.metric_name) > len(args.metric) or len(args.metric_config_json) > len(args.metric):
+        raise ValueError("--metric-name and --metric-config-json must correspond to --metric.")
+    metrics = []
+    for index, path in enumerate(args.metric):
+        raw_config = (
+            args.metric_config_json[index] if index < len(args.metric_config_json) else None
+        )
+        config = json.loads(raw_config) if raw_config else {}
+        if not isinstance(config, dict):
+            raise ValueError("--metric-config-json must decode to a JSON object.")
+        metrics.append(
+            CallableMetric.from_import_path(
+                path,
+                name=args.metric_name[index] if index < len(args.metric_name) else None,
+                config=config,
+                higher_is_better=not args.lower_is_better,
+            )
+        )
+    return metrics
 
 
 def _cmd_diagnose_complexity(args: argparse.Namespace) -> dict[str, Any]:
@@ -521,6 +572,8 @@ def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
         labels_key=labels_key,
         seeds=seeds,
         scoring_config=scoring_config,
+        metrics=_metrics_from_args(args),
+        primary_metric=args.primary_metric,
     )
     backend = _create_backend_from_args(args)
     artifacts = score_embedding_artifacts(jobs, _store_from_args(args), backend)
@@ -533,6 +586,7 @@ def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
         "labels_key": labels_key,
         "score_keys": [artifact["output_key"] for artifact in artifacts],
         "seeds": seeds,
+        "primary_metric": args.primary_metric,
     }
 
 
@@ -546,6 +600,7 @@ def _cmd_collect_scores(args: argparse.Namespace) -> dict[str, Any]:
         store=_store_from_args(args),
         output_key=args.output_key,
         interval_level=args.interval_level,
+        metric_name=args.metric_name,
     )
 
 
@@ -562,6 +617,7 @@ def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
     if args.markdown_output:
         from vertebrae.reports.markdown_report import render_markdown_report
         from vertebrae.results import BenchmarkResult, ExtractorResult
+        from vertebrae.scoring.metrics import MetricResult
         from vertebrae.scoring.overlap import OverlapScoreResult
         from vertebrae.scoring.separatix import SeparatixResult
 
@@ -572,6 +628,7 @@ def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
                 ExtractorResult,
                 OverlapScoreResult,
                 SeparatixResult,
+                MetricResult,
             )
         )
         target = Path(args.markdown_output)
@@ -950,10 +1007,10 @@ def _benchmark_result_from_dict(
     extractor_cls: Any,
     overlap_cls: Any,
     separatix_cls: Any,
+    metric_cls: Any,
 ) -> Any:
     extractor_results = []
     for item in data.get("extractor_results", []):
-        overlap = overlap_cls(**item["overlap"])
         separatix = None
         if item.get("separatix") is not None:
             separatix = separatix_cls(**item["separatix"])
@@ -961,7 +1018,6 @@ def _benchmark_result_from_dict(
             extractor_cls(
                 name=item["name"],
                 extractor_type=item["extractor_type"],
-                overlap=overlap,
                 stability=item.get("stability"),
                 separatix=separatix,
                 embedding_metadata=item.get("embedding_metadata", {}),
@@ -969,7 +1025,12 @@ def _benchmark_result_from_dict(
                 runtime=item.get("runtime", {}),
                 warnings=item.get("warnings", []),
                 recommendation=item.get("recommendation", ""),
+                metrics={
+                    name: metric_cls(**metric) for name, metric in item.get("metrics", {}).items()
+                },
+                primary_metric_name=item.get("primary_metric_name", "overlap"),
                 label_view=item.get("label_view"),
+                target_view=item.get("target_view"),
                 weakest_class=item.get("weakest_class"),
                 weakest_class_score=item.get("weakest_class_score"),
             )

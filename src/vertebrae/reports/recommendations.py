@@ -55,13 +55,32 @@ def recommendations_for_benchmark(extractor_results: List[Any]) -> List[str]:
 
     if not extractor_results:
         return ["No extractors were evaluated."]
-    ranked = sorted(extractor_results, key=lambda item: item.overlap.score, reverse=True)
+    ranked = sorted(
+        extractor_results,
+        key=lambda item: (
+            item.primary_score
+            if item.metrics.get(item.primary_metric_name, None) is None
+            or item.metrics[item.primary_metric_name].higher_is_better
+            else -item.primary_score
+        ),
+        reverse=True,
+    )
     top = ranked[0]
-    top_target_type = top.overlap.metadata.get("target_type", "single_label")
-    top_score_label = "continuous overlap" if top_target_type == "regression" else "overlap macro"
+    top_overlap = top.overlap
+    top_target_type = (top_overlap.metadata if top_overlap else {}).get(
+        "target_type",
+        "single_label",
+    )
+    top_score_label = (
+        "continuous overlap"
+        if top.primary_metric_name == "overlap" and top_target_type == "regression"
+        else "overlap macro"
+        if top.primary_metric_name == "overlap"
+        else top.primary_metric_name
+    )
     messages = [
         f"Top representation under this protocol: {top.name} "
-        f"({top_score_label} {top.overlap.score:.3f})."
+        f"({top_score_label} {float(top.primary_score):.3f})."
     ]
     weak = [
         result

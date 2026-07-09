@@ -102,6 +102,7 @@ from vertebrae.extractors.structured import (
     StructuredOutputSpec,
 )
 from vertebrae.results import BenchmarkResult, ExtractorResult
+from vertebrae.scoring import CallableMetric, EmbeddingMetric, MetricResult, OverlapMetric
 from vertebrae.structured import (
     StructuredAlignment,
     StructuredUnitAligner,
@@ -116,6 +117,7 @@ __all__ = [
     "Benchmark",
     "BenchmarkDataset",
     "BenchmarkResult",
+    "CallableMetric",
     "CacheConfig",
     "CallableSpatialExtractor",
     "CallableStructuredExtractor",
@@ -134,6 +136,7 @@ __all__ = [
     "diagnose_embedding_artifact",
     "drop_special_rows",
     "EmbeddingCompressionConfig",
+    "EmbeddingMetric",
     "EmbeddingConfig",
     "EmbeddingJob",
     "EmbeddingMergeJob",
@@ -168,6 +171,8 @@ __all__ = [
     "materialize_structured_artifacts",
     "materialize_structured_outputs",
     "MemoryConfig",
+    "MetricResult",
+    "OverlapMetric",
     "merge_embedding_shards",
     "OverlapScoringConfig",
     "plan_compression_job",

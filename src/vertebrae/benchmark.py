@@ -32,7 +32,7 @@ from vertebrae.reports.recommendations import (
     recommendations_for_benchmark,
 )
 from vertebrae.results import BenchmarkResult, ExtractorResult
-from vertebrae.scoring.overlap import OverlapIndexScorer
+from vertebrae.scoring.metrics import MetricResult, OverlapMetric, as_embedding_metric
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
 from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix, target_view_suffix
@@ -80,6 +80,8 @@ class Benchmark:
         execution: Optional[Any] = None,
         segmentation_config: Optional[SegmentationConfig] = None,
         structured_aligners: Optional[dict[str, Any]] = None,
+        metrics: Optional[Iterable[Any]] = None,
+        primary_metric: Optional[str] = None,
     ) -> None:
         self.dataset = dataset
         self.extractors = list(extractors or [])
@@ -103,6 +105,36 @@ class Benchmark:
         self.execution = execution or LocalBackend()
         self.segmentation_config = segmentation_config or SegmentationConfig()
         self.structured_aligners = dict(structured_aligners or {})
+        self.metrics = [as_embedding_metric(metric) for metric in (metrics or [])]
+        metric_names = [metric.name for metric in self.metrics]
+        if len(metric_names) != len(set(metric_names)):
+            raise ValueError("Metric names must be unique within a benchmark.")
+        overlap_metrics = [metric for metric in self.metrics if metric.name == "overlap"]
+        if len(overlap_metrics) > 1 or any(
+            not isinstance(metric, OverlapMetric) for metric in overlap_metrics
+        ):
+            raise ValueError("Only one built-in OverlapMetric may use the name 'overlap'.")
+        provided_overlap = bool(overlap_metrics)
+        if not provided_overlap:
+            self.metrics.insert(0, OverlapMetric(config=self.scoring_config))
+        self.overlap_metric = next(metric for metric in self.metrics if metric.name == "overlap")
+        if not isinstance(self.overlap_metric, OverlapMetric):
+            raise ValueError("The overlap metric must be an OverlapMetric instance.")
+        if provided_overlap and self.overlap_metric.config is not None:
+            if scoring_config is not None and scoring_config != self.overlap_metric.config:
+                raise ValueError(
+                    "Provide overlap scoring options through OverlapMetric or "
+                    "scoring_config, not both."
+                )
+            self.scoring_config = self.overlap_metric.config
+            self._explicit_scoring_config = self.overlap_metric.config
+        available_metrics = [metric.name for metric in self.metrics]
+        self.primary_metric = primary_metric or available_metrics[0]
+        if self.primary_metric not in available_metrics:
+            raise ValueError(
+                f"primary_metric {self.primary_metric!r} is not among configured metrics: "
+                f"{available_metrics}."
+            )
 
     def add_extractor(self, extractor: Any) -> "Benchmark":
         """Add an extractor to this benchmark.
@@ -177,6 +209,8 @@ class Benchmark:
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
                 "memory_config": asdict(self.memory_config),
+                "metrics": [metric.recipe() for metric in self.metrics],
+                "primary_metric": self.primary_metric,
                 "label_view_warnings": label_view_warnings,
                 "target_view_warnings": target_view_warnings,
             },
@@ -227,6 +261,8 @@ class Benchmark:
                     embedding_config=self.embedding_config,
                     memory_config=self.memory_config,
                     execution=self.execution,
+                    metrics=[metric for metric in self.metrics if metric.name != "overlap"],
+                    primary_metric=self.primary_metric,
                 ).run()
                 for item in result.extractor_results:
                     item.extractor_type = getattr(extractor, "extractor_type", "spatial")
@@ -265,6 +301,8 @@ class Benchmark:
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
                 "memory_config": asdict(self.memory_config),
+                "metrics": [metric.recipe() for metric in self.metrics],
+                "primary_metric": self.primary_metric,
             },
         )
 
@@ -320,6 +358,8 @@ class Benchmark:
                     embedding_config=self.embedding_config,
                     memory_config=self.memory_config,
                     execution=self.execution,
+                    metrics=[metric for metric in self.metrics if metric.name != "overlap"],
+                    primary_metric=self.primary_metric,
                 ).run()
                 for item in result.extractor_results:
                     item.extractor_type = getattr(extractor, "extractor_type", "structured")
@@ -354,6 +394,8 @@ class Benchmark:
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
                 "memory_config": asdict(self.memory_config),
+                "metrics": [metric.recipe() for metric in self.metrics],
+                "primary_metric": self.primary_metric,
             },
         )
 
@@ -525,26 +567,34 @@ class Benchmark:
                 embedding_metadata.get("sparse"),
             )
             self._admit_scoring_memory(scoring_metadata)
-            overlap = OverlapIndexScorer(scoring_config).score(
-                compressed_embeddings,
-                dataset.y,
-                label_names=dataset.metadata.get("label_names"),
-                target_type=dataset.metadata.get("target_type", "auto"),
-                target_names=dataset.metadata.get("target_names"),
-            )
+            target_metadata = dict(dataset.metadata)
+            target_metadata["target_type"] = dataset.metadata.get("target_type", "auto")
+            groups = dataset.groups() if callable(getattr(dataset, "groups", None)) else None
+            metric_results: dict[str, MetricResult] = {}
+            for metric in self.metrics:
+                metric_result = metric.score(
+                    compressed_embeddings,
+                    dataset.y,
+                    target_metadata=target_metadata,
+                    groups=groups,
+                )
+                metric_result.metadata = {**target_metadata, **metric_result.metadata}
+                metric_results[metric.name] = metric_result
+                variant_warnings.extend(metric_result.warnings)
             variant_runtime["scoring_seconds"] = perf_counter() - score_start
-            variant_warnings.extend(overlap.warnings)
+            overlap = metric_results["overlap"]
 
             separatix_start = perf_counter()
+            separatix = None
             separatix = self._run_separatix_diagnostic(
                 compressed_embeddings,
                 dataset.y,
                 overlap.score,
                 scoring_config=scoring_config,
-                target_type=dataset.metadata.get("target_type", "auto"),
+                target_type=target_metadata["target_type"],
                 label_names=dataset.metadata.get("label_names"),
                 target_names=dataset.metadata.get("target_names"),
-                groups=dataset.groups() if callable(getattr(dataset, "groups", None)) else None,
+                groups=groups,
             )
             variant_runtime["separatix_seconds"] = perf_counter() - separatix_start
             if separatix:
@@ -557,7 +607,7 @@ class Benchmark:
                 scoring_config,
                 self.stability_config,
                 label_names=dataset.metadata.get("label_names"),
-                target_type=dataset.metadata.get("target_type", "auto"),
+                target_type=target_metadata["target_type"],
                 target_names=dataset.metadata.get("target_names"),
             )
             variant_runtime["stability_seconds"] = perf_counter() - stability_start
@@ -575,8 +625,11 @@ class Benchmark:
                     weakest_score,
                     target_type=overlap.metadata.get("target_type", "single_label"),
                 )
-                if overlap.metadata.get("aggregate_valid", True)
+                if self.primary_metric == "overlap"
+                and overlap.metadata.get("aggregate_valid", True)
                 else "aggregate_unavailable"
+                if self.primary_metric == "overlap"
+                else f"ranked_by_{self.primary_metric}"
             )
             result_name = _qualified_result_name(
                 embedding_metadata.get("extractor_name", extractor.name),
@@ -590,7 +643,6 @@ class Benchmark:
                         "extractor_type",
                         getattr(extractor, "extractor_type", "unknown"),
                     ),
-                    overlap=overlap,
                     stability=stability,
                     separatix=separatix,
                     embedding_metadata=embedding_metadata,
@@ -602,6 +654,8 @@ class Benchmark:
                     weakest_class=weakest_class,
                     weakest_class_score=weakest_score,
                     recommendation=recommendation,
+                    metrics=metric_results,
+                    primary_metric_name=self.primary_metric,
                 )
             )
         return results

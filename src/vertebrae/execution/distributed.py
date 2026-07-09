@@ -527,26 +527,38 @@ def score_embedding_artifact(
     )
     embeddings = store.get_array(job.embedding_key)
     labels = store.get_labels(job.labels_key)
-    from vertebrae.config import OverlapScoringConfig
-    from vertebrae.scoring.overlap import OverlapIndexScorer
+    from vertebrae.scoring.metrics import OverlapMetric, as_embedding_metric
 
-    config = job.scoring_config or OverlapScoringConfig()
-    score = OverlapIndexScorer(config).score(
-        embeddings,
-        labels,
-        seed=job.seed,
-        label_names=label_metadata.get("label_names"),
-        target_type=label_metadata.get("target_type", "auto"),
-        target_names=label_metadata.get("target_names"),
-    )
+    configured = [as_embedding_metric(metric) for metric in (job.metrics or [])]
+    if job.metric is not None:
+        configured.append(as_embedding_metric(job.metric))
+    if not any(metric.name == "overlap" for metric in configured):
+        configured.insert(0, OverlapMetric(config=job.scoring_config))
+    names = [metric.name for metric in configured]
+    if len(names) != len(set(names)):
+        raise ValueError("Metric names must be unique within a scoring job.")
+    if job.primary_metric not in names:
+        raise ValueError("primary_metric must name one configured metric.")
+    metric_results = {}
+    for metric in configured:
+        result = metric.score(
+            embeddings,
+            labels,
+            target_metadata=label_metadata,
+            seed=job.seed,
+        )
+        result.metadata = {**label_metadata, **result.metadata}
+        metric_results[metric.name] = result.to_dict()
     artifact = {
-        "artifact_type": "overlap_score",
+        "artifact_type": "metric_evaluation",
         "vertebrae_version": __version__,
         "output_key": job.output_key,
         "embedding_key": job.embedding_key,
         "labels_key": job.labels_key,
         "seed": job.seed,
-        "score": score.to_dict(),
+        "metrics": metric_results,
+        "primary_metric": job.primary_metric,
+        "metric_recipes": [metric.recipe() for metric in configured],
         "embedding_metadata": embedding_metadata,
         "label_metadata": label_metadata,
         "resources": asdict(job.resources),
@@ -567,7 +579,7 @@ def diagnose_embedding_artifact(
         labels_key=job.labels_key,
     )
     score_artifact = store.get_json(job.score_key)
-    score_data = score_artifact.get("score", {})
+    score_data = score_artifact.get("metrics", {}).get("overlap", {})
     overlap_score = float(score_data.get("score", score_data.get("macro_score")))
 
     from vertebrae.config import OverlapScoringConfig, SeparatixConfig
@@ -769,6 +781,9 @@ def plan_scoring_jobs(
     labels_key: str,
     seeds: Iterable[Optional[int]],
     scoring_config: Any = None,
+    metrics: Any = None,
+    primary_metric: str = "overlap",
+    metric: Any = None,
 ) -> list[ScoringJob]:
     """Create scoring jobs for one embedding and label artifact pair.
 
@@ -777,6 +792,8 @@ def plan_scoring_jobs(
         labels_key: Label artifact key.
         seeds: Seeds for scoring jobs. Use `None` for the default single score.
         scoring_config: Optional scoring configuration shared by all jobs.
+        metrics: Optional generic metrics shared by all jobs.
+        primary_metric: Aggregate metric selected for score collection.
 
     Returns:
         Scoring jobs with canonical output keys.
@@ -788,6 +805,9 @@ def plan_scoring_jobs(
             labels_key=labels_key,
             output_key=scoring_artifact_key(embedding_key, seed=seed),
             scoring_config=scoring_config,
+            metrics=metrics,
+            primary_metric=primary_metric,
+            metric=metric,
             seed=seed,
         )
         for seed in seeds
@@ -799,6 +819,7 @@ def collect_score_artifacts(
     store: ArtifactStore,
     output_key: str,
     interval_level: float = 0.95,
+    metric_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """Collect scoring artifacts into a stability-style summary.
 
@@ -815,15 +836,14 @@ def collect_score_artifacts(
     artifacts = [store.get_json(key) for key in score_keys]
     if not artifacts:
         raise ValueError("At least one score artifact is required.")
-    scores = [
-        float(artifact["score"].get("score", artifact["score"]["macro_score"]))
-        for artifact in artifacts
-    ]
+    metric_name = metric_name or artifacts[0].get("primary_metric", "overlap")
+    scores = [float(artifact["metrics"][metric_name]["score"]) for artifact in artifacts]
     warnings = sorted(
         {
             warning
             for artifact in artifacts
-            for warning in artifact.get("score", {}).get("warnings", [])
+            for metric in artifact.get("metrics", {}).values()
+            for warning in metric.get("warnings", [])
         }
     )
     seeds = [artifact.get("seed") for artifact in artifacts]
@@ -839,6 +859,7 @@ def collect_score_artifacts(
         "warnings": warnings,
         "embedding_key": artifacts[0].get("embedding_key"),
         "labels_key": artifacts[0].get("labels_key"),
+        "metric_name": metric_name,
     }
     store.put_json(output_key, collection)
     return collection
@@ -868,10 +889,10 @@ def benchmark_result_from_artifacts(
         recommendations_for_benchmark,
     )
     from vertebrae.results import BenchmarkResult, ExtractorResult
-    from vertebrae.scoring.overlap import OverlapScoreResult
+    from vertebrae.scoring.metrics import MetricResult
 
     score_artifact = store.get_json(score_key)
-    score_data = score_artifact["score"]
+    metrics_data = score_artifact["metrics"]
     embedding_metadata = score_artifact.get("embedding_metadata", {})
     label_metadata = score_artifact.get("label_metadata", {})
     stability = store.get_json(stability_key) if stability_key else None
@@ -879,30 +900,14 @@ def benchmark_result_from_artifacts(
     separatix = None
     if separatix_artifact:
         separatix = SeparatixResult(**separatix_artifact["diagnostic"])
-    score_metadata = score_data.get("metadata", {})
+    metrics = {name: MetricResult(**data) for name, data in metrics_data.items()}
+    overlap = metrics["overlap"]
+    score_metadata = overlap.metadata
     weakest_class, weakest_score = _weakest_class(
-        score_data.get("per_class_scores", {}),
+        overlap.per_class_scores,
         excluded_classes=score_metadata.get("exclude_classes"),
     )
-    overlap = OverlapScoreResult(
-        score=float(score_data.get("score", score_data["macro_score"])),
-        macro_score=float(score_data["macro_score"]),
-        weighted_score=score_data.get("weighted_score"),
-        per_class_scores=score_data.get("per_class_scores", {}),
-        pairwise_scores=score_data.get("pairwise_scores", {}),
-        sparse_adjacency=score_data.get("sparse_adjacency"),
-        class_counts=score_data.get("class_counts", {}),
-        k_per_class=score_data.get("k_per_class", {}),
-        warnings=score_data.get("warnings", []),
-        metadata=score_metadata,
-        actual_loss=score_data.get("actual_loss"),
-        null_loss=score_data.get("null_loss"),
-        loss_ratio=score_data.get("loss_ratio"),
-        prototype_scores=score_data.get("prototype_scores", {}),
-        prototype_support=score_data.get("prototype_support", {}),
-        prototype_target_summary=score_data.get("prototype_target_summary", {}),
-        prototype_adjacency=score_data.get("prototype_adjacency", {}),
-    )
+    primary_metric_name = score_artifact.get("primary_metric", "overlap")
     recommendation = (
         recommendation_for_extractor(
             overlap.score,
@@ -910,8 +915,10 @@ def benchmark_result_from_artifacts(
             weakest_score,
             target_type=overlap.metadata.get("target_type", "single_label"),
         )
-        if overlap.metadata.get("aggregate_valid", True)
+        if primary_metric_name == "overlap" and overlap.metadata.get("aggregate_valid", True)
         else "aggregate_unavailable"
+        if primary_metric_name == "overlap"
+        else f"ranked_by_{primary_metric_name}"
     )
     compression_metadata = embedding_metadata.get("compression", {"method": "none"})
     base_name = embedding_metadata.get("extractor_recipe", {}).get(
@@ -929,18 +936,19 @@ def benchmark_result_from_artifacts(
             "extractor_type",
             embedding_metadata.get("extractor_type", "artifact"),
         ),
-        overlap=overlap,
         stability=stability,
         separatix=separatix,
         embedding_metadata=embedding_metadata,
         compression_metadata=compression_metadata,
         runtime={},
-        warnings=sorted(set(score_data.get("warnings", []))),
+        warnings=sorted({warning for metric in metrics.values() for warning in metric.warnings}),
         label_view=label_view,
         target_view=target_view,
         weakest_class=weakest_class,
         weakest_class_score=weakest_score,
         recommendation=recommendation,
+        metrics=metrics,
+        primary_metric_name=primary_metric_name,
     )
     result = BenchmarkResult(
         dataset_summary={

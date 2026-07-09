@@ -18,6 +18,8 @@ Each extractor contributes an `ExtractorResult` with:
 
 - extractor identity and type,
 - `OverlapScoreResult`,
+- a named collection of normalized metric results,
+- the selected `primary_metric_name` and aggregate `primary_score`,
 - optional stability summary,
 - optional Separatix complexity diagnostic,
 - embedding metadata,
@@ -55,16 +57,17 @@ or `extractor:final[target=role]`. Embedding metadata keeps the original
 
 ## Ranking and tabular views
 
-`BenchmarkResult.ranked_results()` sorts extractors by descending primary overlap
-score. `BenchmarkResult.to_dataframe()` produces a compact comparison table with the
-most important fields for side-by-side inspection.
+`BenchmarkResult.ranked_results()` sorts extractors by the selected primary metric
+score, respecting metrics that declare `higher_is_better=False`.
+`BenchmarkResult.to_dataframe()` includes `primary_metric` and `primary_score` plus
+overlap columns whenever OverlapIndex was enabled.
 
 ```python
 result = benchmark.run()
 
 print(result.to_dataframe())
 best = result.ranked_results()[0]
-print(best.name, best.overlap.score)
+print(best.name, best.primary_metric_name, best.primary_score)
 ```
 
 ## JSON and Markdown output

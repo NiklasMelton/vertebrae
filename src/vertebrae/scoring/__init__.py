@@ -1,5 +1,13 @@
 """Scoring helpers."""
 
+from vertebrae.scoring.metrics import (
+    CallableMetric,
+    EmbeddingMetric,
+    MetricResult,
+    OverlapMetric,
+    as_embedding_metric,
+    load_metric_callable,
+)
 from vertebrae.scoring.overlap import (
     OverlapIndexScorer,
     OverlapScoreResult,
@@ -12,6 +20,12 @@ from vertebrae.scoring.stability import run_stability_analysis
 __all__ = [
     "OverlapIndexScorer",
     "OverlapScoreResult",
+    "CallableMetric",
+    "EmbeddingMetric",
+    "MetricResult",
+    "OverlapMetric",
+    "as_embedding_metric",
+    "load_metric_callable",
     "SeparatixResult",
     "SeparatixScorer",
     "auto_k_for_class",

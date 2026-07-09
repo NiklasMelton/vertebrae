@@ -193,6 +193,39 @@ Separatix is the only downstream-complexity and probe-style diagnostic path in
 vertebrae. Ranking remains based on overlap scores; Separatix probe fields are
 reported only when the Separatix diagnostic runs and includes them.
 
+## Custom embedding metrics
+
+`Benchmark` can score the same full embedding batch with one or more custom metrics.
+Every metric must return one finite aggregate `score`; that score is the only value
+eligible for ranking. Metrics may also return JSON-safe diagnostics, warnings, and
+metadata.
+
+```python
+from vertebrae import Benchmark, CallableMetric, OverlapMetric, OverlapScoringConfig
+
+def label_aware_metric(embeddings, labels, *, target_metadata=None, groups=None, seed=None):
+    return {
+        "score": 0.87,
+        "diagnostics": {"criterion": "my benchmark rule"},
+    }
+
+benchmark = Benchmark(
+    dataset,
+    [extractor],
+    metrics=[
+        OverlapMetric(config=OverlapScoringConfig(k="auto")),
+        CallableMetric("my_metric", label_aware_metric),
+    ],
+    primary_metric="my_metric",
+)
+```
+
+OverlapIndex always runs and is available through `ExtractorResult.overlap` and
+`ExtractorResult.metrics["overlap"]`. Stability and Separatix continue to use this
+built-in overlap metric.
+For distributed or CLI scoring, use an importable callable path such as
+`my_project.metrics:label_aware_metric` with `vertebrae score --metric ...`.
+
 ## Practical guidance
 
 - Keep `normalize_embeddings=True` unless your embedding space already encodes a

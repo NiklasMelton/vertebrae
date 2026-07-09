@@ -211,6 +211,8 @@ class ScoringJob:
         labels_key: Artifact-store key or URI for labels.
         output_key: Artifact-store key for scoring results.
         scoring_config: Optional OverlapIndex scoring configuration.
+        metrics: Optional custom embedding metrics. OverlapIndex is always included.
+        primary_metric: Metric name selected for aggregate score collection.
         seed: Optional scoring seed, commonly used for stability repeats.
         resources: Resource request for scoring.
     """
@@ -219,6 +221,9 @@ class ScoringJob:
     labels_key: str
     output_key: str
     scoring_config: Any = None
+    metrics: Any = None
+    primary_metric: str = "overlap"
+    metric: Any = None
     seed: Optional[int] = None
     resources: ResourceSpec = ResourceSpec()
 

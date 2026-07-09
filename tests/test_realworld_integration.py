@@ -311,7 +311,7 @@ def test_cli_artifact_workflow_scores_real_overlapindex(tmp_path, capsys):
     )
     score = json.loads(capsys.readouterr().out)
 
-    assert score["artifact_type"] == "overlap_score"
+    assert score["artifact_type"] == "metric_evaluation"
     assert np.isfinite(score["score"]["score"])
     assert 0.0 <= score["score"]["score"] <= 1.0
     assert score["score"]["k_per_class"]
