@@ -19,14 +19,16 @@ precomputed embeddings, scikit-learn pipelines, custom callable extractors, ONNX
 models, local PyTorch and Keras modules, segmentation token workflows, optional
 embedding compression, and optional model families spanning Hugging Face,
 sentence-transformers, timm, torchvision, OpenCLIP/SigLIP, TensorFlow Hub,
-JAX/Flax, tree ensembles, graph models, and hosted embedding APIs.
+JAX/Flax, tree ensembles, graph models, and hosted embedding APIs. It can also
+evaluate labeled embedding units such as document regions, tokens, frames,
+keypoints, depth cells, and latent slots emitted directly by a model.
 
 The package uses the `overlapindex` library as its primary separation metric and
 adds a `separatix` complexity diagnostic to reports when an evaluated embedding
 clears a configurable overlap-quality threshold. The full evaluation flow wraps
-those diagnostics with practical dataset handling, caching, memory-aware
-subsampling, stability analysis, probe classifiers, artifact-backed execution,
-and report generation.
+those diagnostics with practical dataset handling, named target and hierarchy
+views, caching, memory-aware subsampling, stability analysis, artifact-backed
+execution, custom embedding metrics, and report generation.
 
 </tr>
 </table>
@@ -180,6 +182,35 @@ result = Evaluator(dataset=dataset, extractor=extractor).run()
 
 Regression scoring uses `ContinuousOverlapIndex` through vertebrae's internal
 scoring adapter and appears in reports as continuous overlap diagnostics.
+
+### Multiple target views
+
+When one embedding should be compared against several aligned targets, register
+named target views on the dataset and enable them in `Benchmark`. Views can be
+classification, multi-label, or regression targets; each is reported as a
+separate result variant.
+
+```python
+from vertebrae import Benchmark, BenchmarkDataset, TargetView, TargetViewConfig
+
+dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=leaf_labels)
+dataset = dataset.with_target_views(
+    [
+        TargetView(name="coarse", targets=coarse_labels),
+        TargetView(name="quality", targets=quality_scores, target_type="regression"),
+    ]
+)
+
+result = Benchmark(
+    dataset,
+    [extractor],
+    target_view_config=TargetViewConfig(enabled=True, views=("coarse", "quality")),
+).run()
+```
+
+For taxonomies represented as label paths, use `with_label_hierarchy(...)` and
+`LabelViewConfig` instead. `output_views` and `output_levels` can route named
+extractor outputs to the target or hierarchy view that they should evaluate.
 
 ### Optional embedding compression
 
@@ -437,6 +468,33 @@ downloads a laptop-sized Caltech-101 subset with a few related category pairs,
 compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
 embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 
+### Custom embedding metrics
+
+Every benchmark always records the built-in overlap metric. You can score the
+same full embedding batch with additional metrics and choose one as the ranking
+criterion. A custom metric returns a finite aggregate `score` and may include
+JSON-safe diagnostics, warnings, and metadata.
+
+```python
+from vertebrae import Benchmark, CallableMetric
+
+def domain_margin(embeddings, labels, *, groups=None, seed=None):
+    return {"score": 0.87, "diagnostics": {"rule": "domain margin"}}
+
+result = Benchmark(
+    dataset,
+    [extractor],
+    metrics=[CallableMetric("domain_margin", domain_margin)],
+    primary_metric="domain_margin",
+).run()
+```
+
+The overlap result remains available in every `ExtractorResult` and continues
+to drive stability and Separatix. For artifact or CLI workflows, use an
+importable callable path such as `my_project.metrics:domain_margin`; see
+[`docs/scoring.md`](docs/scoring.md) and
+[`docs/distributed_readiness.md`](docs/distributed_readiness.md).
+
 ### Dense segmentation tokens
 
 Dense segmentation evaluation scores spatial feature cells after they are aligned
@@ -479,6 +537,43 @@ result = Benchmark(
 See `docs/segmentation.md` for background handling, ambiguity filtering,
 instance caps, grouped diagnostics, and precomputed segmentation embeddings.
 
+### Structured units from native model outputs
+
+Structured extractors flatten one declared per-parent unit matrix into a grouped
+embedding dataset, preserving unit provenance and parent groups. This supports
+representation diagnostics for regions, tokens, frames, keypoints, depth cells,
+and latent slots. It does not substitute task-native metrics such as mAP, IoU,
+WER/CER, OKS, depth error, or reconstruction quality.
+
+```python
+from vertebrae import Benchmark, BenchmarkDataset, UnitAnnotation
+from vertebrae.extractors import CallableStructuredExtractor, StructuredOutputSpec
+
+dataset = BenchmarkDataset.from_arrays(X=pages, y=document_labels, modality="image")
+dataset = dataset.with_unit_annotations(
+    [
+        UnitAnnotation(labels=["heading", "body"]),
+        UnitAnnotation(labels=["heading", "body"]),
+    ],
+    unit_type="document_region",
+)
+
+extractor = CallableStructuredExtractor(
+    name="layout_encoder",
+    transform_fn=extract_region_embeddings,  # one 2D matrix per page
+    output_specs=[StructuredOutputSpec(name="regions", unit_type="document_region")],
+)
+result = Benchmark(dataset, [extractor]).run()
+```
+
+When the model emits unmatched rows (for example special tokens or sampled
+frames), supply an explicit alignment rule such as
+`drop_special_rows(leading=1)` or `select_frame_rows(...)`. Typed adapters are
+also available for detection/layout, sequence labeling, keypoints, depth, and
+latent slots. See [`docs/datasets.md`](docs/datasets.md),
+[`docs/feature_extractors.md`](docs/feature_extractors.md), and the runnable
+`examples/structured_*.py` workflows.
+
 ## Supported Workflows
 
 `vertebrae` is designed for:
@@ -486,11 +581,15 @@ instance caps, grouped diagnostics, and precomputed segmentation embeddings.
 - precomputed dense or sparse embeddings,
 - NumPy arrays and pandas DataFrames,
 - single-label classification, multi-label classification, and explicit regression targets,
-- label hierarchy views for scoring different taxonomy levels,
-- graph-node, graph-edge, entity, pair, and triplet-derived embedding diagnostics,
+- hierarchy label views and named target views for scoring the same embeddings against
+  different targets,
+- graph-node, graph-edge, entity, pair, triplet-derived, and generic labeled-unit
+  embedding diagnostics,
 - scikit-learn transformers and pipelines,
 - custom Python callable extractors,
 - dense segmentation token materialization from spatial feature maps,
+- structured unit materialization from native token, frame, region, keypoint, depth,
+  or latent-slot outputs, with explicit alignment when rows do not already match,
 - Hugging Face text backbones through `HFTextExtractor`,
 - Hugging Face vision backbones through `HFVisionExtractor`,
 - Hugging Face audio backbones through `HFAudioExtractor`,
@@ -509,8 +608,8 @@ instance caps, grouped diagnostics, and precomputed segmentation embeddings.
 - multi-extractor comparisons,
 - JSON and Markdown reports,
 - repeated-run stability analysis,
-- optional native lightweight probe classifier checks,
 - optional Separatix complexity diagnostics in local and artifact-backed reports,
+- custom full-batch embedding metrics with a selectable primary ranking metric,
 - optional embedding compression and compressed-variant comparisons,
 - local embedding caching and reproducible artifacts,
 - artifact-backed distributed embedding and scoring through the `vertebrae` CLI,
@@ -519,7 +618,8 @@ instance caps, grouped diagnostics, and precomputed segmentation embeddings.
 
 Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
 `vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae write-groups`,
-`vertebrae materialize-segmentation`, `vertebrae compress`, `vertebrae score`,
+`vertebrae materialize-segmentation`, `vertebrae materialize-structured`,
+`vertebrae compress`, `vertebrae score`,
 `vertebrae diagnose-complexity`, `vertebrae score-repeats`,
 `vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
 `vertebrae slurm-array`, `vertebrae slurm-score-array`, and
@@ -537,7 +637,9 @@ Each benchmark run returns structured results that include:
 - extractor summary and recipe metadata,
 - overlap scores plus per-class, per-label, or per-target diagnostics,
 - Separatix recommendation, confidence, and report details when the overlap gate passes,
-- label-view, segmentation, grouping, and target-type metadata when present,
+- label-view, target-view, segmentation, structured-unit, grouping, and target-type
+  metadata when present,
+- every configured metric result and the selected primary ranking metric,
 - compression metadata and compressed dimensions,
 - stability summaries,
 - warnings and recommendations,
@@ -574,11 +676,16 @@ markdown table as generated by `examples\sklearn_wine_pipeline.py` is shown belo
 | 3 | wine_standard_scaler_all_features | unsupervised_fitted | 0.9235 | 0.9058-0.9279 | class_1 | 0.9775 | 13 | none | 13 | strong_candidate | linear_likely_sufficient | high |
 | 4 | wine_quantile_pca_1 | unsupervised_fitted | 0.4554 | 0.3455-0.4554 | class_2 |  | 1 | none | 1 | poor_frozen_representation_weak_class_attention |  |  |
 
-Extractors are ranked according to their `overlap_macro` performance.
+By default, extractors are ranked by overlap. When a custom `primary_metric` is
+configured, they are ranked by that metric instead; the overlap columns remain
+available for representation diagnostics and Separatix gating.
 
 The easiest way to interpret the report is:
 
-- Start with `overlap_macro` and the per-class overlap scores. That is the main vertebrae ranking signal.
+- Start with `primary_metric` and `primary_score`. By default these are overlap;
+  with a custom metric they identify the configured ranking signal.
+- Inspect `overlap_macro` and per-class overlap scores as the standard vertebrae
+  representation diagnostic, even when another metric ranks the candidates.
 - Use the vertebrae `recommendation` field as a quick summary of representation quality under the benchmark protocol.
 - Use `separatix_recommendation` and `separatix_confidence` to understand what kind of downstream classifier complexity the labeled embedding seems to imply once the representation is already reasonably separated.
 - When Separatix columns are blank, the embedding did not clear the overlap gate, so vertebrae skipped the extra diagnostic rather than over-interpreting a weak representation.
@@ -624,6 +731,8 @@ Optional integrations are available through extras such as `torch`, `keras`,
 - `HostedEmbeddingExtractor`
 - `CallableSpatialExtractor`
 - `PrecomputedSpatialExtractor`
+- `CallableStructuredExtractor`
+- `PrecomputedStructuredExtractor`
 
 These workflows rely on optional dependencies and lazy imports, so the core package stays lightweight.
 See `examples/onnx_extractor.py` for a local ONNX export workflow.
@@ -647,14 +756,17 @@ merging in local or batch-style workflows. Distributed orchestration commands ac
 cluster connections. Cloud artifact stores use the same `--cache-dir` flag, plus
 provider options such as `--s3-endpoint-url`, `--s3-profile`, `--s3-region`, and
 `--gcs-project`. The CLI can also derive compressed embedding artifacts with
-`vertebrae compress`. Run `vertebrae --help` to see the available commands.
+`vertebrae compress`, materialize structured unit artifacts with
+`vertebrae materialize-structured`, and evaluate importable custom metrics through
+repeatable `vertebrae score --metric module:callable` options. Run
+`vertebrae --help` to see the available commands.
 
 ## Notes
 
 - The package targets Python `>=3.9,<3.15`.
 - The public API is centered on `BenchmarkDataset`, `SegmentationDataset`,
-  `Evaluator`, `Benchmark`, extractor wrappers, config dataclasses, and structured
-  result objects.
+  `Evaluator`, `Benchmark`, extractor wrappers, metric adapters, config
+  dataclasses, and structured result objects.
 
 ## License
 
