@@ -16,10 +16,8 @@ class ExtractorResult:
     Attributes:
         name: Extractor name.
         extractor_type: Extractor family/type metadata.
-        overlap: Read-only alias for the built-in overlap metric result.
         metrics: All normalized metric results, including ``overlap`` when enabled.
         primary_metric_name: Name of the metric used for ranking.
-        primary_score: Read-only aggregate score of `primary_metric_name`.
         stability: Optional stability-analysis summary.
         separatix: Optional Separatix diagnostic summary.
         embedding_metadata: Metadata for the embedding artifact.
