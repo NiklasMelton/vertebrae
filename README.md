@@ -492,8 +492,8 @@ result = Benchmark(
 The overlap result remains available in every `ExtractorResult` and continues
 to drive stability and Separatix. For artifact or CLI workflows, use an
 importable callable path such as `my_project.metrics:domain_margin`; see
-[`docs/scoring.md`](docs/scoring.md) and
-[`docs/distributed_readiness.md`](docs/distributed_readiness.md).
+[the scoring guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/scoring.md)
+and [the distributed-readiness guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/distributed_readiness.md).
 
 ### Dense segmentation tokens
 
@@ -570,8 +570,10 @@ When the model emits unmatched rows (for example special tokens or sampled
 frames), supply an explicit alignment rule such as
 `drop_special_rows(leading=1)` or `select_frame_rows(...)`. Typed adapters are
 also available for detection/layout, sequence labeling, keypoints, depth, and
-latent slots. See [`docs/datasets.md`](docs/datasets.md),
-[`docs/feature_extractors.md`](docs/feature_extractors.md), and the runnable
+latent slots. See
+[the dataset guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/datasets.md)
+and [the extractor guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/feature_extractors.md),
+alongside the runnable
 `examples/structured_*.py` workflows.
 
 ## Supported Workflows
