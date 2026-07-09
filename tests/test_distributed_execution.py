@@ -372,11 +372,14 @@ def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
         store,
     )
 
-    assert score["artifact_type"] == "overlap_score"
-    assert score["score"]["macro_score"] == 0.8
+    assert score["artifact_type"] == "metric_evaluation"
+    assert score["metrics"]["overlap"]["diagnostics"]["macro_score"] == 0.8
     assert score["embedding_key"] == embedding_manifest["output_key"]
     assert score["labels_key"] == labels_artifact_key(dataset)
-    assert store.get_json(score["output_key"])["score"]["metadata"]["backend"] == "MiniBatchKMeans"
+    assert (
+        store.get_json(score["output_key"])["metrics"]["overlap"]["metadata"]["backend"]
+        == "MiniBatchKMeans"
+    )
 
 
 def test_score_embedding_artifact_supports_multilabel_labels(tmp_path, fake_overlapindex):
@@ -425,7 +428,7 @@ def test_score_embedding_artifact_supports_multilabel_labels(tmp_path, fake_over
     assert label_manifest["label_names"] == ["red", "round", "sweet"]
     assert store.get_labels(label_manifest["output_key"]).tolist()[0] == ("red", "round")
     assert fake_overlapindex.calls[-1]["fit_y_shape"] == [12, 3]
-    assert score["score"]["metadata"]["target_type"] == "multi_label"
+    assert score["metrics"]["overlap"]["metadata"]["target_type"] == "multi_label"
     assert result["dataset_summary"]["target_type"] == "multi_label"
     assert result["dataset_summary"]["labelset_counts"]["red + round"] == 2
 
@@ -467,10 +470,10 @@ def test_score_embedding_artifact_supports_regression_labels(tmp_path, fake_over
     assert label_manifest["target_names"] == ["score"]
     assert store.get_labels(label_manifest["output_key"]).shape == (6,)
     assert fake_overlapindex.continuous_calls[-1]["fit_y_shape"] == [6]
-    assert score["score"]["score"] == 0.62
-    assert score["score"]["metadata"]["target_type"] == "regression"
+    assert score["metrics"]["overlap"]["score"] == 0.62
+    assert score["metrics"]["overlap"]["metadata"]["target_type"] == "regression"
     assert result["dataset_summary"]["target_type"] == "regression"
-    assert result["extractor_results"][0]["overlap"]["score"] == 0.62
+    assert result["extractor_results"][0]["metrics"]["overlap"]["score"] == 0.62
 
 
 def test_label_artifact_preserves_active_label_view_metadata(tmp_path):

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from vertebrae.scoring.overlap import OverlapScoreResult
+from vertebrae.scoring.metrics import MetricResult
 from vertebrae.scoring.separatix import SeparatixResult
 from vertebrae.utils.serialization import make_json_safe
 
@@ -16,7 +16,10 @@ class ExtractorResult:
     Attributes:
         name: Extractor name.
         extractor_type: Extractor family/type metadata.
-        overlap: OverlapIndex scoring result.
+        overlap: Read-only alias for the built-in overlap metric result.
+        metrics: All normalized metric results, including ``overlap`` when enabled.
+        primary_metric_name: Name of the metric used for ranking.
+        primary_score: Read-only aggregate score of `primary_metric_name`.
         stability: Optional stability-analysis summary.
         separatix: Optional Separatix diagnostic summary.
         embedding_metadata: Metadata for the embedding artifact.
@@ -31,7 +34,6 @@ class ExtractorResult:
 
     name: str
     extractor_type: str
-    overlap: OverlapScoreResult
     stability: Optional[Dict[str, Any]]
     separatix: Optional[SeparatixResult]
     embedding_metadata: Dict[str, Any]
@@ -39,6 +41,8 @@ class ExtractorResult:
     runtime: Dict[str, Any]
     warnings: List[str]
     recommendation: str
+    metrics: Dict[str, MetricResult] = field(default_factory=dict)
+    primary_metric_name: str = "overlap"
     label_view: Optional[Dict[str, Any]] = None
     target_view: Optional[Dict[str, Any]] = None
     weakest_class: Optional[str] = None
@@ -52,6 +56,19 @@ class ExtractorResult:
         """
 
         return make_json_safe(self)
+
+    @property
+    def overlap(self) -> Optional[MetricResult]:
+        """Return the overlap metric result without duplicating serialized state."""
+
+        metric = self.metrics.get("overlap")
+        return metric if metric and metric.kind == "overlap_index" else None
+
+    @property
+    def primary_score(self) -> float:
+        """Return the aggregate score used for ranking."""
+
+        return self.metrics[self.primary_metric_name].score
 
 
 @dataclass
@@ -80,7 +97,7 @@ class BenchmarkResult:
         return make_json_safe(self)
 
     def ranked_results(self) -> List[ExtractorResult]:
-        """Return extractor results sorted by descending macro score.
+        """Return extractor results sorted by the selected aggregate metric.
 
         Returns:
             Sorted extractor results.
@@ -89,8 +106,8 @@ class BenchmarkResult:
         return sorted(
             self.extractor_results,
             key=lambda item: (
-                bool(item.overlap.metadata.get("aggregate_valid", True)),
-                item.overlap.score,
+                bool(_primary_metric(item).metadata.get("aggregate_valid", True)),
+                _rankable_score(item),
             ),
             reverse=True,
         )
@@ -111,11 +128,14 @@ class BenchmarkResult:
                     "rank": rank,
                     "extractor": item.name,
                     "extractor_type": item.extractor_type,
-                    "overlap_score": item.overlap.score,
-                    "overlap_macro": item.overlap.macro_score,
-                    "overlap_weighted": item.overlap.weighted_score,
-                    "target_type": item.overlap.metadata.get("target_type", "single_label"),
-                    "target_names": item.overlap.metadata.get("target_names"),
+                    "primary_metric": item.primary_metric_name,
+                    "primary_score": item.primary_score,
+                    "primary_higher_is_better": _primary_metric(item).higher_is_better,
+                    "overlap_score": item.overlap.score if item.overlap else None,
+                    "overlap_macro": item.overlap.macro_score if item.overlap else None,
+                    "overlap_weighted": item.overlap.weighted_score if item.overlap else None,
+                    "target_type": _result_target_metadata(item).get("target_type", "single_label"),
+                    "target_names": _result_target_metadata(item).get("target_names"),
                     "target_view": (item.target_view or {}).get("name"),
                     "label_view": (item.label_view or {}).get("name"),
                     "weakest_class": item.weakest_class,
@@ -150,26 +170,33 @@ class BenchmarkResult:
         return pd.DataFrame(rows)
 
     def save_json(self, path: str) -> None:
-        """Save the benchmark result as JSON.
-
-        Args:
-            path: Destination file path.
-        """
+        """Save the benchmark result as JSON."""
 
         from vertebrae.reports.json_report import save_json_report
 
         save_json_report(self, str(Path(path)))
 
     def save_markdown(self, path: str) -> None:
-        """Save the benchmark result as a Markdown report.
-
-        Args:
-            path: Destination file path.
-        """
+        """Save the benchmark result as a Markdown report."""
 
         from vertebrae.reports.markdown_report import save_markdown_report
 
         save_markdown_report(self, str(Path(path)))
+
+
+def _primary_metric(item: ExtractorResult) -> MetricResult:
+    return item.metrics[item.primary_metric_name]
+
+
+def _rankable_score(item: ExtractorResult) -> float:
+    metric = _primary_metric(item)
+    return metric.score if metric.higher_is_better else -metric.score
+
+
+def _result_target_metadata(item: ExtractorResult) -> Dict[str, Any]:
+    if item.overlap is not None:
+        return item.overlap.metadata
+    return _primary_metric(item).metadata
 
 
 def _separatix_probe_accuracy(separatix: Optional[SeparatixResult]) -> Optional[float]:

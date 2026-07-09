@@ -250,6 +250,23 @@ The metric backend remains fixed: all scoring goes through MiniBatchKMeans-backe
 `overlapindex.OverlapIndex` or `overlapindex.ContinuousOverlapIndex` via the
 internal `OverlapIndexScorer` adapter.
 
+Artifact scoring always includes the built-in overlap metric and can evaluate
+additional importable callables in the same job. Repeat `--metric` for each callable
+and select one aggregate result for score collection with `--primary-metric`:
+
+```bash
+vertebrae score \
+  --cache-dir /shared/vertebrae_cache \
+  --plan-json plan.json \
+  --metric my_project.metrics:calibration_score \
+  --metric my_project.metrics:domain_margin \
+  --primary-metric calibration_score
+```
+
+Each scoring artifact is a `metric_evaluation` payload containing every metric
+result and recipe. `collect-scores --metric-name ...` can select a non-primary
+metric when building an interval summary.
+
 Artifact-backed workflows can also attach a Separatix diagnostic artifact after
 overlap scoring. Use the CLI `diagnose-complexity` command with an embedding key,
 labels key, and score key. The score artifact provides the overlap score used to
