@@ -1026,8 +1026,7 @@ def _benchmark_result_from_dict(
                 warnings=item.get("warnings", []),
                 recommendation=item.get("recommendation", ""),
                 metrics={
-                    name: metric_cls(**metric)
-                    for name, metric in item.get("metrics", {}).items()
+                    name: metric_cls(**metric) for name, metric in item.get("metrics", {}).items()
                 },
                 primary_metric_name=item.get("primary_metric_name", "overlap"),
                 label_view=item.get("label_view"),

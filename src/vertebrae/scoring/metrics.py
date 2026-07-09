@@ -197,6 +197,7 @@ class OverlapMetric:
     def recipe(self) -> Dict[str, Any]:
         return {"name": self.name, "kind": "overlap_index", "config": make_json_safe(self.config)}
 
+
 def as_embedding_metric(metric: Any) -> EmbeddingMetric:
     """Normalize a metric object or callable into the embedding metric protocol."""
 
