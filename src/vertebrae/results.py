@@ -124,6 +124,15 @@ class BenchmarkResult:
                     "probe_score": _separatix_probe_accuracy(item.separatix),
                     "probe_accuracy": _separatix_probe_accuracy(item.separatix),
                     "embedding_dim": item.embedding_metadata.get("embedding_dim"),
+                    "task_family": (item.embedding_metadata.get("structured", {}) or {}).get(
+                        "task_family"
+                    ),
+                    "alignment_mode": (item.embedding_metadata.get("structured", {}) or {}).get(
+                        "alignment_mode"
+                    ),
+                    "alignment_recipe": (item.embedding_metadata.get("structured", {}) or {}).get(
+                        "alignment_recipe"
+                    ),
                     "compression_method": item.compression_metadata.get("method", "none"),
                     "compression_precision": item.compression_metadata.get("precision"),
                     "compressed_dim": item.compression_metadata.get(

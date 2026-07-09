@@ -279,6 +279,99 @@ def test_tfhub_extractor_supports_output_adapters(monkeypatch):
     assert output.shape == (2, 2)
 
 
+def test_timm_vision_extractor_supports_structured_outputs(fake_torch, monkeypatch):
+    class FakeTimmModel:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, batch):
+            size = batch.shape[0]
+            return {"tokens": FakeTensor(np.arange(size * 2 * 3, dtype=float).reshape(size, 2, 3))}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "timm",
+        types.SimpleNamespace(
+            create_model=lambda model_name, pretrained, **kwargs: FakeTimmModel(),
+            data=types.SimpleNamespace(
+                create_transform=lambda **kwargs: (
+                    lambda image: FakeTensor(np.asarray(image, dtype=float))
+                )
+            ),
+        ),
+    )
+    extractor = TimmVisionExtractor(
+        "timm_structured",
+        "fake-vit",
+        structured_outputs=[{"name": "tokens", "unit_type": "token"}],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured([np.zeros((2, 2, 3), dtype=np.uint8)] * 3)[0]
+
+    assert len(output.embeddings) == 3
+    assert output.embeddings[0].shape == (2, 3)
+
+
+def test_torchvision_vision_extractor_supports_structured_outputs(fake_torch, monkeypatch):
+    class FakeVisionModel:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, batch):
+            size = batch.shape[0]
+            return {"tokens": FakeTensor(np.arange(size * 2 * 4, dtype=float).reshape(size, 2, 4))}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torchvision",
+        types.SimpleNamespace(
+            models=types.SimpleNamespace(resnet18=lambda weights, **kwargs: FakeVisionModel())
+        ),
+    )
+    extractor = TorchvisionVisionExtractor(
+        "tv_structured",
+        "resnet18",
+        structured_outputs=[{"name": "tokens", "unit_type": "token"}],
+    )
+
+    output = extractor.transform_structured([np.zeros((2, 2, 3), dtype=np.uint8)] * 2)[0]
+
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (2, 4)
+
+
+def test_tfhub_extractor_supports_structured_outputs(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "tensorflow_hub",
+        types.SimpleNamespace(
+            load=lambda handle, **kwargs: (
+                lambda batch, **call_kwargs: {
+                    "tokens": np.arange(len(batch) * 2 * 3, dtype=float).reshape(len(batch), 2, 3)
+                }
+            )
+        ),
+    )
+    extractor = TFHubExtractor(
+        "hub_structured",
+        "fake://hub",
+        input_fn=lambda value: np.asarray(value, dtype=float),
+        structured_outputs=[{"name": "tokens", "unit_type": "token"}],
+    )
+
+    output = extractor.transform_structured([[1.0, 2.0], [3.0, 4.0]])[0]
+
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (2, 3)
+
+
 def test_jax_flax_extractor_jits_apply(monkeypatch):
     jit_calls = []
 
@@ -304,6 +397,29 @@ def test_jax_flax_extractor_jits_apply(monkeypatch):
 
     assert output.shape == (2, 2)
     assert jit_calls == ["called"]
+
+
+def test_jax_flax_extractor_supports_structured_outputs(monkeypatch):
+    class FakeJax:
+        @staticmethod
+        def jit(fn):
+            return fn
+
+    monkeypatch.setitem(sys.modules, "jax", FakeJax)
+    monkeypatch.setitem(sys.modules, "flax", types.SimpleNamespace())
+    extractor = JAXFlaxExtractor(
+        "jax_structured",
+        input_fn=lambda value: np.asarray(value, dtype=float),
+        apply_fn=lambda inputs: {
+            "tokens": np.arange(len(inputs) * 2 * 3, dtype=float).reshape(len(inputs), 2, 3)
+        },
+        structured_outputs=[{"name": "tokens", "unit_type": "token"}],
+    )
+
+    output = extractor.transform_structured([[1.0, 2.0], [3.0, 4.0]])[0]
+
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (2, 3)
 
 
 def test_tree_leaf_extractor_supports_dense_and_sparse_outputs():

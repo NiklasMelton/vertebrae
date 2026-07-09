@@ -261,6 +261,33 @@ def test_hf_multimodal_rejects_invalid_output_shape(fake_multimodal_modules):
         extractor.transform(_dataset().X)
 
 
+def test_hf_multimodal_supports_structured_outputs(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[{"name": "fused", "source": "fused", "model_output": "pooler_output"}],
+        structured_outputs=[
+            {
+                "name": "tokens",
+                "unit_type": "token",
+                "source": "fused",
+                "model_output": "hidden_states",
+                "hidden_layer": 2,
+            }
+        ],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured(_dataset().X)[0]
+
+    assert output.name == "tokens"
+    assert output.unit_type == "token"
+    assert len(output.embeddings) == 4
+    assert output.embeddings[0].shape == (3, 4)
+    assert extractor.recipe()["structured_outputs"][0]["model_output"] == "hidden_states"
+
+
 def test_hf_multimodal_lazy_import_error(monkeypatch):
     monkeypatch.delitem(sys.modules, "torch", raising=False)
     monkeypatch.delitem(sys.modules, "PIL", raising=False)

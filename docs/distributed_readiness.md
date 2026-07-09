@@ -143,6 +143,7 @@ vertebrae materialize-structured \
   --dataset-pickle dataset.pkl \
   --extractor-pickle extractor.pkl \
   --cache-dir .vertebrae_cache \
+  --aligner 'tokens=drop_special_rows:{"leading":1,"trailing":1}' \
   --batch-size 16 \
   --output-json structured_bundle.json
 
@@ -163,6 +164,12 @@ labels, groups, and default score artifact directly from the bundle JSON. If the
 bundle contains multiple outputs, pass `--embedding-key` for the selected output
 and the CLI will resolve that output's aligned label/group artifacts
 automatically.
+
+For structured outputs, `materialize-structured` can attach one standard
+aligner helper per output with repeatable `--aligner` flags in the form
+`output_name=helper_name:{...json params...}`. Supported helpers mirror the
+Python API helpers: `drop_special_rows`, `keep_row_indices`, and
+`select_frame_rows`.
 
 To execute shards or score repeats through Ray or Dask instead of the local backend:
 

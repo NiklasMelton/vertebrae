@@ -11,6 +11,13 @@ Runnable examples live in `examples/`:
   bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare multiple local extractors.
 - `cache_reuse.py`: demonstrate embedding cache reuse.
+- `structured_outputs.py`: materialize OCR/layout regions, ASR tokens, and pose
+  keypoints directly from native structured extractors, then score them as
+  representation-efficacy workflows rather than IoU, WER/CER, or OKS metrics.
+- `structured_depth.py`: evaluate sampled depth cells as regression-style
+  structured unit embeddings rather than RMSE or other depth-estimation metrics.
+- `structured_latent_slots.py`: evaluate latent-slot embeddings with an explicit
+  aligner that drops unmatched leading and trailing rows before scoring.
 - `hf_audio_extractor.py`: demonstrate the Hugging Face audio API.
 - `hf_multimodal_image_text.py`: demonstrate aligned image-text benchmarking with
   branch and fused Hugging Face outputs.

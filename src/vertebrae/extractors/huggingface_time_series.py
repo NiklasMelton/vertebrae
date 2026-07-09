@@ -4,7 +4,14 @@ from typing import Any, Dict, List, Optional, cast
 
 import numpy as np
 
+from vertebrae.extractors._utils import (
+    materialize_structured_parent_matrices,
+    resolve_output_value,
+    resolve_structured_output_specs,
+    structured_spec_to_recipe,
+)
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 
 class HFTimeSeriesExtractor:
@@ -31,6 +38,7 @@ class HFTimeSeriesExtractor:
         pooling: str = "mean",
         hidden_layer: Optional[int] = None,
         outputs: Optional[List[Dict[str, Any]]] = None,
+        structured_outputs: Optional[List[Dict[str, Any]]] = None,
         batch_size: int = 32,
         device: Optional[str] = None,
         revision: Optional[str] = None,
@@ -49,6 +57,7 @@ class HFTimeSeriesExtractor:
             default_pooling=pooling,
             default_hidden_layer=hidden_layer,
         )
+        self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
         self.batch_size = batch_size
         self.device = device
         self.revision = revision
@@ -92,9 +101,9 @@ class HFTimeSeriesExtractor:
         need_hidden_states = any(spec.hidden_layer is not None for spec in self._output_specs)
         with torch.no_grad():
             for batch in _iter_chunks(series_inputs, self.batch_size):
-                encoded = self._encode_batch(batch, torch)
-                model_output = model(
-                    **encoded,
+                model_output = self._forward_batch(
+                    batch,
+                    torch,
                     output_hidden_states=need_hidden_states,
                 )
                 for spec in self._output_specs:
@@ -125,6 +134,42 @@ class HFTimeSeriesExtractor:
             )
         return outputs
 
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError("HFTimeSeriesExtractor was not configured with structured_outputs.")
+        model, torch = self._load_model()
+        series_inputs = _normalize_time_series_inputs(X, owner="HFTimeSeriesExtractor")
+        collected: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._structured_output_specs
+        }
+        model.eval()
+        with torch.no_grad():
+            for batch in _iter_chunks(series_inputs, self.batch_size):
+                model_output = self._forward_batch(batch, torch, output_hidden_states=True)
+                for spec in self._structured_output_specs:
+                    value = self._resolve_structured_value(model_output, spec)
+                    parents = materialize_structured_parent_matrices(
+                        value,
+                        f"HFTimeSeriesExtractor structured output '{spec.name}'",
+                        expected_parents=len(batch),
+                    )
+                    collected[spec.name].extend(
+                        np.asarray(parent, dtype=np.float32) for parent in parents
+                    )
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=collected[spec.name],
+                unit_type=spec.unit_type,
+                recipe=structured_spec_to_recipe(spec),
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable Hugging Face time-series recipe."""
 
@@ -145,6 +190,10 @@ class HFTimeSeriesExtractor:
         }
         if len(self._output_specs) > 1:
             recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                _structured_spec_to_dict(spec) for spec in self._structured_output_specs
+            ]
         return recipe
 
     def _load_model(self) -> Any:
@@ -196,6 +245,19 @@ class HFTimeSeriesExtractor:
             encoded[key] = value.to(self._device(torch)) if hasattr(value, "to") else value
         return encoded
 
+    def _forward_batch(
+        self,
+        batch: List[Dict[str, Any]],
+        torch: Any,
+        output_hidden_states: bool,
+    ) -> Any:
+        model, _ = self._load_model()
+        encoded = self._encode_batch(batch, torch)
+        return model(
+            **encoded,
+            output_hidden_states=output_hidden_states,
+        )
+
     def _select_hidden_state(self, output: Any, hidden_layer: Optional[int]) -> Any:
         if hidden_layer is not None:
             hidden_states = getattr(output, "hidden_states", None)
@@ -223,6 +285,31 @@ class HFTimeSeriesExtractor:
         if pooling == "flatten":
             return hidden.flatten(start_dim=1)
         return hidden.mean(dim=1)
+
+    def _resolve_structured_value(self, output: Any, spec: StructuredOutputSpec) -> Any:
+        selector = spec.metadata.get("selector")
+        if selector:
+            value = resolve_output_value(output, str(selector))
+            if value is None:
+                raise ValueError(
+                    f"HFTimeSeriesExtractor structured output '{spec.name}' could not resolve "
+                    f"selector='{selector}'."
+                )
+            if spec.hidden_layer is not None:
+                if not isinstance(value, (list, tuple)):
+                    raise ValueError(
+                        f"HFTimeSeriesExtractor structured output '{spec.name}' requested "
+                        "hidden_layer but selector does not resolve to hidden states."
+                    )
+                try:
+                    return value[spec.hidden_layer]
+                except IndexError as exc:
+                    raise ValueError(
+                        f"HFTimeSeriesExtractor structured output '{spec.name}' hidden_layer "
+                        f"{spec.hidden_layer} is out of range."
+                    ) from exc
+            return value
+        return self._select_hidden_state(output, spec.hidden_layer)
 
 
 def _normalize_time_series_inputs(value: Any, owner: str) -> List[Dict[str, Any]]:
@@ -313,6 +400,15 @@ def _spec_to_dict(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
     return {
         "name": spec.name,
         "pooling": spec.pooling,
+        "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
+    }
+
+
+def _structured_spec_to_dict(spec: StructuredOutputSpec) -> Dict[str, Any]:
+    return {
+        "name": spec.name,
+        "unit_type": spec.unit_type,
         "hidden_layer": spec.hidden_layer,
         "metadata": dict(spec.metadata),
     }

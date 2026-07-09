@@ -310,6 +310,70 @@ not add native task metrics such as mAP, IoU, WER/CER, OKS, or depth error. The
 downstream workflow is still an embedding-efficacy diagnostic over the flattened
 units, not a task-native OCR, ASR, detection, pose, or depth benchmark.
 
+For the most common structured task families, `vertebrae` also exposes typed
+adapter helpers that normalize domain annotations into the same
+`with_unit_annotations(...)` foundation:
+
+- `DetectionLayoutAdapter` + `RegionAnnotation`
+- `SequenceLabelingAdapter` + `SequenceAnnotation`
+- `KeypointAdapter` + `KeypointAnnotation`
+- `DepthAdapter` + `DepthAnnotation`
+- `LatentSlotAdapter` + `LatentSlotAnnotation`
+
+```python
+from vertebrae import (
+    BenchmarkDataset,
+    DetectionLayoutAdapter,
+    RegionAnnotation,
+)
+
+dataset = DetectionLayoutAdapter(unit_type="document_region").attach(
+    BenchmarkDataset.from_arrays(
+        X=page_images,
+        y=document_labels,
+        modality="image",
+    ),
+    [
+        RegionAnnotation(
+            labels=["header", "table", "footer"],
+            unit_ids=["page-0:h", "page-0:t", "page-0:f"],
+            boxes=[
+                [0.05, 0.05, 0.95, 0.18],
+                [0.08, 0.22, 0.92, 0.76],
+                [0.10, 0.82, 0.85, 0.92],
+            ],
+            page_id="page-0",
+            document_id="doc-0",
+        ),
+    ] * len(page_images),
+)
+```
+
+The adapters preserve domain conventions in metadata and per-unit provenance,
+but they still normalize into the same unit-annotation schema so the standard
+structured benchmark, artifact, report, and scoring paths stay unchanged.
+
+## Explicit structured alignment
+
+Some models emit raw structured outputs with extra rows or a different unit
+order, such as a leading special token, unmatched latent slots, or filtered
+frame outputs. In those cases, pass an explicit `StructuredUnitAligner` to
+`materialize_structured_outputs(...)`, `materialize_structured_artifacts(...)`,
+or `Benchmark(..., structured_aligners=...)`. Most deterministic selection
+patterns can now use the built-in helper factories directly.
+
+```python
+from vertebrae import drop_special_rows, select_frame_rows
+
+token_aligner = drop_special_rows(leading=1, trailing=1)
+frame_aligner = select_frame_rows(indices_metadata_key="sampled_frames")
+```
+
+Aligners must return explicit one-to-one annotation and embedding row matches.
+`vertebrae` validates bounds and uniqueness and records the alignment recipe in
+materialized metadata and provenance. It does not perform automatic IoU-based,
+temporal, Hungarian, or learned matching on the user's behalf.
+
 ## Validation rules
 
 Every constructor validates the dataset immediately. Current validation checks

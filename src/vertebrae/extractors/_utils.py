@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequ
 import numpy as np
 
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 _IMAGE_MODES = {"auto", "grayscale", "preserve", "rgb"}
@@ -160,10 +161,27 @@ def materialize_named_outputs(
     specs: Sequence[EmbeddingOutputSpec],
     owner: str,
     allow_sparse: bool = False,
+    fallback_output: Any = None,
 ) -> List[EmbeddingOutput]:
     outputs: List[EmbeddingOutput] = []
     for spec in specs:
-        value = resolve_output_value(raw_output, spec.metadata.get("selector"))
+        if (
+            spec.metadata.get("selector") is None
+            and isinstance(raw_output, dict)
+            and spec.name in raw_output
+        ):
+            value = raw_output[spec.name]
+        else:
+            value = resolve_output_value(raw_output, spec.metadata.get("selector"))
+        if value is None and fallback_output is not None and fallback_output is not raw_output:
+            if (
+                spec.metadata.get("selector") is None
+                and isinstance(fallback_output, dict)
+                and spec.name in fallback_output
+            ):
+                value = fallback_output[spec.name]
+            else:
+                value = resolve_output_value(fallback_output, spec.metadata.get("selector"))
         embeddings = materialize_output_matrix(
             value,
             f"{owner} output '{spec.name}'",
@@ -175,6 +193,85 @@ def materialize_named_outputs(
                 name=spec.name,
                 embeddings=embeddings,
                 recipe=spec_to_recipe(spec),
+                metadata=dict(spec.metadata),
+            )
+        )
+    return outputs
+
+
+def resolve_structured_output_specs(
+    outputs: Optional[Sequence[Dict[str, Any]]],
+) -> List[StructuredOutputSpec]:
+    if outputs is None:
+        return []
+    if not outputs:
+        raise ValueError("structured_outputs must not be empty.")
+    specs: List[StructuredOutputSpec] = []
+    seen = set()
+    for output in outputs:
+        name = str(output.get("name", "")).strip()
+        if not name:
+            raise ValueError("Structured output specs must include a name.")
+        if name in seen:
+            raise ValueError("Structured output names must be unique.")
+        unit_type = str(output.get("unit_type", "")).strip()
+        if not unit_type:
+            raise ValueError(f"Structured output '{name}' must include a unit_type.")
+        metadata = dict(output.get("metadata") or {})
+        for key in ("selector", "source", "model_output"):
+            if output.get(key) is not None:
+                metadata[key] = str(output[key])
+        specs.append(
+            StructuredOutputSpec(
+                name=name,
+                unit_type=unit_type,
+                hidden_layer=(
+                    int(output["hidden_layer"]) if output.get("hidden_layer") is not None else None
+                ),
+                metadata=metadata,
+            )
+        )
+        seen.add(name)
+    return specs
+
+
+def materialize_named_structured_outputs(
+    projected: Any,
+    specs: Sequence[StructuredOutputSpec],
+    owner: str,
+    raw_output: Any = None,
+    expected_parents: Optional[int] = None,
+) -> List[StructuredEmbeddingOutput]:
+    outputs: List[StructuredEmbeddingOutput] = []
+    for spec in specs:
+        if (
+            spec.metadata.get("selector") is None
+            and isinstance(projected, dict)
+            and spec.name in projected
+        ):
+            value = projected[spec.name]
+        else:
+            value = resolve_output_value(projected, spec.metadata.get("selector"))
+        if value is None and raw_output is not None and raw_output is not projected:
+            if (
+                spec.metadata.get("selector") is None
+                and isinstance(raw_output, dict)
+                and spec.name in raw_output
+            ):
+                value = raw_output[spec.name]
+            else:
+                value = resolve_output_value(raw_output, spec.metadata.get("selector"))
+        embeddings = materialize_structured_parent_matrices(
+            value,
+            f"{owner} structured output '{spec.name}'",
+            expected_parents=expected_parents,
+        )
+        outputs.append(
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=embeddings,
+                unit_type=spec.unit_type,
+                recipe=structured_spec_to_recipe(spec),
                 metadata=dict(spec.metadata),
             )
         )
@@ -220,6 +317,49 @@ def materialize_output_matrix(
     return ensure_numeric_matrix(array, name, allow_sparse=allow_sparse)
 
 
+def materialize_structured_parent_matrices(
+    value: Any,
+    name: str,
+    expected_parents: Optional[int] = None,
+) -> List[Any]:
+    if value is None:
+        raise ValueError(f"{name} could not be resolved from the model output.")
+    value = to_numpy_nested(value)
+    if _is_sparse(value):
+        parents = [ensure_numeric_matrix(value, name, allow_sparse=True)]
+    elif isinstance(value, np.ndarray):
+        if value.ndim == 3:
+            parents = [
+                ensure_numeric_matrix(value[index], name, allow_sparse=True)
+                for index in range(value.shape[0])
+            ]
+        elif value.ndim == 2:
+            parents = [ensure_numeric_matrix(value, name, allow_sparse=True)]
+        elif value.ndim == 1 and value.dtype == object:
+            parents = [
+                ensure_numeric_matrix(item, name, allow_sparse=True) for item in value.tolist()
+            ]
+        else:
+            raise ValueError(
+                f"{name} must resolve to a batched 3D array or a sequence of per-parent "
+                f"2D matrices; got shape {value.shape}."
+            )
+    else:
+        try:
+            items = list(value)
+        except TypeError as exc:
+            raise ValueError(
+                f"{name} must resolve to a batched 3D array or a sequence of per-parent 2D "
+                "matrices."
+            ) from exc
+        parents = [ensure_numeric_matrix(item, name, allow_sparse=True) for item in items]
+    if expected_parents is not None and len(parents) != expected_parents:
+        raise ValueError(
+            f"{name} returned {len(parents)} parents for a batch of {expected_parents}."
+        )
+    return parents
+
+
 def spec_to_recipe(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
     recipe = {
         "name": spec.name,
@@ -227,6 +367,18 @@ def spec_to_recipe(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
         "hidden_layer": spec.hidden_layer,
     }
     for key in ("selector", "source"):
+        if key in spec.metadata:
+            recipe[key] = spec.metadata[key]
+    return recipe
+
+
+def structured_spec_to_recipe(spec: StructuredOutputSpec) -> Dict[str, Any]:
+    recipe = {
+        "name": spec.name,
+        "unit_type": spec.unit_type,
+        "hidden_layer": spec.hidden_layer,
+    }
+    for key in ("selector", "source", "model_output"):
         if key in spec.metadata:
             recipe[key] = spec.metadata[key]
     return recipe
@@ -242,6 +394,14 @@ def stack_batch(values: Sequence[Any], torch_module: Any = None) -> Any:
     if hasattr(first, "shape"):
         return np.stack([np.asarray(tensor_to_numpy(value)) for value in values], axis=0)
     return list(values)
+
+
+def infer_batch_size(value: Any) -> int:
+    if isinstance(value, dict):
+        if not value:
+            return 0
+        return infer_batch_size(next(iter(value.values())))
+    return int(len(value))
 
 
 def _convert_image_mode(value: Any, image_mode: str, alpha_mode: str) -> Any:
