@@ -15,6 +15,7 @@ from vertebrae.extractors.multi_output import MultiOutputExtractor
 from vertebrae.extractors.onnx import ONNXExtractor
 from vertebrae.extractors.openclip import OpenCLIPExtractor
 from vertebrae.extractors.precomputed import PrecomputedExtractor
+from vertebrae.extractors.retrieval import CallableRetrievalExtractor
 from vertebrae.extractors.sentence_transformers import SentenceTransformerExtractor
 from vertebrae.extractors.siglip import SigLIPExtractor
 from vertebrae.extractors.sklearn import SklearnExtractor
@@ -70,4 +71,5 @@ __all__ = [
     "SpatialOutputSpec",
     "StructuredEmbeddingOutput",
     "StructuredOutputSpec",
+    "CallableRetrievalExtractor",
 ]

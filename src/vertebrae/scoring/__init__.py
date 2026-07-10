@@ -3,6 +3,7 @@
 from vertebrae.scoring.metrics import (
     CallableMetric,
     EmbeddingMetric,
+    LabelRetrievalMetric,
     MetricResult,
     OverlapMetric,
     as_embedding_metric,
@@ -14,6 +15,7 @@ from vertebrae.scoring.overlap import (
     auto_k_for_class,
     resolve_kmeans_k,
 )
+from vertebrae.scoring.retrieval import RetrievalScorer, RetrievalScoreResult
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
 
@@ -22,6 +24,7 @@ __all__ = [
     "OverlapScoreResult",
     "CallableMetric",
     "EmbeddingMetric",
+    "LabelRetrievalMetric",
     "MetricResult",
     "OverlapMetric",
     "as_embedding_metric",
@@ -31,4 +34,6 @@ __all__ = [
     "auto_k_for_class",
     "resolve_kmeans_k",
     "run_stability_analysis",
+    "RetrievalScoreResult",
+    "RetrievalScorer",
 ]

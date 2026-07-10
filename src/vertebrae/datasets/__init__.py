@@ -6,6 +6,7 @@ from vertebrae.datasets.base import (
     TargetView,
     UnitAnnotation,
 )
+from vertebrae.datasets.retrieval import RetrievalDataset
 from vertebrae.datasets.segmentation import SegmentationAnnotation, SegmentationDataset
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "UnitAnnotation",
     "SegmentationAnnotation",
     "SegmentationDataset",
+    "RetrievalDataset",
 ]

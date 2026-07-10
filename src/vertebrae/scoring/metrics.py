@@ -198,6 +198,62 @@ class OverlapMetric:
         return {"name": self.name, "kind": "overlap_index", "config": make_json_safe(self.config)}
 
 
+@dataclass
+class LabelRetrievalMetric:
+    """Leave-one-out exact retrieval derived from single-label targets."""
+
+    config: Any = None
+    name: str = "label_retrieval"
+
+    def score(
+        self,
+        embeddings: Any,
+        labels: Any,
+        *,
+        target_metadata: Optional[Dict[str, Any]] = None,
+        groups: Optional[Any] = None,
+        seed: Optional[int] = None,
+    ) -> MetricResult:
+        from vertebrae.config import RetrievalConfig
+        from vertebrae.scoring.retrieval import RetrievalScorer
+
+        metadata = target_metadata or {}
+        if metadata.get("target_type", "single_label") not in {"auto", "single_label"}:
+            raise ValueError(
+                "LabelRetrievalMetric supports single-label datasets only; use an explicit "
+                "RetrievalDataset for multi-label or regression relevance."
+            )
+        label_values = list(labels)
+        relevance = {
+            index: {
+                other: 1.0
+                for other, candidate in enumerate(label_values)
+                if candidate == label and other != index
+            }
+            for index, label in enumerate(label_values)
+        }
+        scorer = RetrievalScorer(self.config or RetrievalConfig())
+        result = scorer.score(
+            embeddings,
+            embeddings,
+            relevance,
+            query_ids=list(range(len(label_values))),
+            gallery_ids=list(range(len(label_values))),
+            exclusions={(index, index) for index in range(len(label_values))},
+        )
+        return MetricResult(
+            name=self.name,
+            score=result.score,
+            kind="label_retrieval",
+            diagnostics={"metrics": result.metrics, **result.metrics, **result.diagnostics},
+            warnings=result.warnings,
+            metadata=result.metadata,
+        )
+
+    def recipe(self) -> Dict[str, Any]:
+        return {"name": self.name, "kind": "label_retrieval", "config": make_json_safe(self.config)}
+
+
 def as_embedding_metric(metric: Any) -> EmbeddingMetric:
     """Normalize a metric object or callable into the embedding metric protocol."""
 

@@ -97,6 +97,11 @@ edge, entity, pair, or triplet-derived row has an aligned label or regression
 target. They do not run retrieval, recommender, ranking, mAP, NDCG, MRR, or
 candidate-set evaluation.
 
+For explicit candidate-set evaluation, use `RetrievalDataset`. It has independent
+query and gallery collections plus a graded relevance relation. Its IDs and optional
+exclusions are separate from `BenchmarkDataset.with_groups(...)`: groups express
+independence/provenance, while relevance declares which candidate is a valid match.
+
 Generic unit embeddings follow the same philosophy: each row is a labeled unit
 embedding, not a task-specific metric evaluation. This supports structured
 representation diagnostics for boxes, OCR/document layout regions, ASR or NLP

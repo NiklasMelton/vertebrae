@@ -97,6 +97,39 @@ class ContinuousOverlapScoringConfig:
 
 
 @dataclass
+class RetrievalConfig:
+    """Configuration for exact, training-free query--gallery retrieval scoring."""
+
+    similarity: str = "cosine"
+    ks: Tuple[int, ...] = (1, 5, 10)
+    primary_metric: str = "ndcg@10"
+    bidirectional: bool = False
+    query_batch_size: int = 128
+    gallery_batch_size: int = 10_000
+    max_dense_bytes: int = 2_000_000_000
+    max_pairwise_comparisons: Optional[int] = None
+    worst_queries: int = 10
+
+    def __post_init__(self) -> None:
+        if self.similarity not in {"cosine", "dot", "squared_l2"}:
+            raise ValueError("similarity must be one of: cosine, dot, squared_l2.")
+        if not self.ks or any(not isinstance(k, int) or k < 1 for k in self.ks):
+            raise ValueError("ks must contain one or more positive integers.")
+        if len(set(self.ks)) != len(self.ks):
+            raise ValueError("ks must not contain duplicate cutoffs.")
+        if self.primary_metric not in {f"ndcg@{k}" for k in self.ks}:
+            raise ValueError("primary_metric must be an ndcg@K entry present in ks.")
+        if self.query_batch_size < 1 or self.gallery_batch_size < 1:
+            raise ValueError("query_batch_size and gallery_batch_size must be >= 1.")
+        if self.max_dense_bytes < 1:
+            raise ValueError("max_dense_bytes must be >= 1.")
+        if self.max_pairwise_comparisons is not None and self.max_pairwise_comparisons < 1:
+            raise ValueError("max_pairwise_comparisons must be >= 1 when provided.")
+        if self.worst_queries < 0:
+            raise ValueError("worst_queries must be >= 0.")
+
+
+@dataclass
 class SeparatixConfig:
     """Configuration for optional Separatix complexity diagnostics.
 

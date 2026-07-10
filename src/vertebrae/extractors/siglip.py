@@ -72,6 +72,9 @@ class SigLIPExtractor:
     def transform_many(self, X: Any) -> List[EmbeddingOutput]:
         return self._delegate.transform_many(X)
 
+    def encode_retrieval(self, X: Any, *, branch: str, modality: str) -> Any:
+        return self._delegate.encode_retrieval(X, branch=branch, modality=modality)
+
     def recipe(self) -> Dict[str, Any]:
         recipe = dict(self._delegate.recipe())
         recipe["extractor_type"] = self.extractor_type
