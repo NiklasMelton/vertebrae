@@ -12,12 +12,16 @@ from vertebrae.cache import (
     ArtifactStoreConfig,
     create_artifact_store_from_config,
 )
-from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
+from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json
 from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
+from vertebrae.compression.base import _compression_metadata, create_embedding_compressor
 from vertebrae.execution.jobs import (
     CompressionJob,
     EmbeddingMergeJob,
     EmbeddingShardJob,
+    RetrievalCompressionJob,
+    RetrievalEmbeddingShardJob,
+    RetrievalScoringJob,
     ScoringJob,
     SeparatixJob,
     ShardSpec,
@@ -48,6 +52,19 @@ def embedding_artifact_key(dataset: Any, extractor: Any) -> str:
     dataset_key = dataset.fingerprint()
     extractor_key = fingerprint_extractor_recipe(extractor.recipe())
     return f"embeddings/{dataset_key}/{extractor_key}"
+
+
+def retrieval_embedding_artifact_key(dataset: Any, extractor: Any, side: str) -> str:
+    """Build the canonical endpoint embedding key for a retrieval dataset."""
+    if side not in {"query", "gallery"}:
+        raise ValueError("side must be 'query' or 'gallery'.")
+    recipe_hash = fingerprint_extractor_recipe(extractor.recipe())
+    return f"retrieval/embeddings/{dataset.fingerprint()}/{recipe_hash}/{side}"
+
+
+def retrieval_embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
+    """Build the deterministic key for one retrieval endpoint shard."""
+    return embedding_shard_key(base_key, shard)
 
 
 def embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
@@ -110,6 +127,24 @@ def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
 
     suffix = "default" if seed is None else f"seed-{seed}"
     return f"{embedding_key}/scores/{suffix}"
+
+
+def retrieval_scoring_artifact_key(query_embedding_key: str, gallery_embedding_key: str) -> str:
+    """Build a stable key for a query--gallery retrieval score artifact."""
+    from vertebrae.cache.fingerprint import hash_json
+
+    identity = {"query": query_embedding_key, "gallery": gallery_embedding_key}
+    return f"retrieval/scores/{hash_json(identity)}"
+
+
+def retrieval_compression_artifact_key(
+    query_embedding_key: str, gallery_embedding_key: str, config: Any
+) -> str:
+    """Build a paired compression artifact prefix."""
+    from vertebrae.compression import compression_recipe_hash
+
+    identity = hash_json({"query": query_embedding_key, "gallery": gallery_embedding_key})
+    return f"retrieval/compressions/{identity}/{compression_recipe_hash(config)}"
 
 
 def separatix_artifact_key(embedding_key: str) -> str:
@@ -565,6 +600,87 @@ def score_embedding_artifact(
     }
     store.put_json(job.output_key, artifact)
     return artifact
+
+
+def score_retrieval_artifact(job: RetrievalScoringJob, store: ArtifactStore) -> dict[str, Any]:
+    """Score persisted query/gallery embeddings using a canonical relevance JSON artifact.
+
+    The relevance artifact contains ``relevance`` as sparse row-index mappings and optional
+    ``query_ids``, ``gallery_ids``, and ``exclusions`` fields. This keeps retrieval scoring
+    independent of raw model objects and compatible with object stores.
+    """
+    from vertebrae.config import RetrievalConfig
+    from vertebrae.scoring.retrieval import RetrievalScorer
+
+    queries = store.get_array(job.query_embedding_key)
+    gallery = store.get_array(job.gallery_embedding_key)
+    query_metadata = store.get_json(job.query_embedding_key)
+    gallery_metadata = store.get_json(job.gallery_embedding_key)
+    relevance_data = store.get_json(job.relevance_key)
+    raw_relevance = relevance_data.get("relevance", relevance_data)
+    n_queries, n_gallery = int(queries.shape[0]), int(gallery.shape[0])
+    if int(query_metadata.get("n_samples", n_queries)) != n_queries:
+        raise ValueError("Query embedding metadata has a different row count than its array.")
+    if int(gallery_metadata.get("n_samples", n_gallery)) != n_gallery:
+        raise ValueError("Gallery embedding metadata has a different row count than its array.")
+    if relevance_data.get("n_queries", n_queries) != n_queries:
+        raise ValueError("Relevance artifact does not align with query embeddings.")
+    if relevance_data.get("n_gallery", n_gallery) != n_gallery:
+        raise ValueError("Relevance artifact does not align with gallery embeddings.")
+    if queries.shape[1] != gallery.shape[1]:
+        raise ValueError("Query and gallery artifacts have incompatible embedding dimensions.")
+    relevance = {
+        int(query): {int(candidate): float(grade) for candidate, grade in values.items()}
+        for query, values in raw_relevance.items()
+    }
+    exclusions_data = store.get_json(job.exclusions_key) if job.exclusions_key else relevance_data
+    exclusions: set[Tuple[int, int]] = {
+        (int(pair[0]), int(pair[1])) for pair in exclusions_data.get("exclusions", [])
+    }
+    query_ids = relevance_data.get("query_ids")
+    gallery_ids = relevance_data.get("gallery_ids")
+    if query_ids is not None and len(query_ids) != n_queries:
+        raise ValueError("Relevance artifact query IDs do not align with query embeddings.")
+    if gallery_ids is not None and len(gallery_ids) != n_gallery:
+        raise ValueError("Relevance artifact gallery IDs do not align with gallery embeddings.")
+    result = RetrievalScorer(job.retrieval_config or RetrievalConfig()).score(
+        queries,
+        gallery,
+        relevance,
+        query_ids=query_ids,
+        gallery_ids=gallery_ids,
+        exclusions=exclusions,
+    )
+    artifact = {
+        "artifact_type": "retrieval_evaluation",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "query_embedding_key": job.query_embedding_key,
+        "gallery_embedding_key": job.gallery_embedding_key,
+        "relevance_key": job.relevance_key,
+        "exclusions_key": job.exclusions_key,
+        "result": result.to_dict(),
+        "resources": asdict(job.resources),
+    }
+    store.put_json(job.output_key, artifact)
+    return artifact
+
+
+def score_retrieval_artifacts(
+    jobs: Iterable[RetrievalScoringJob], store: ArtifactStore, execution: Any
+) -> list[dict[str, Any]]:
+    """Run independent retrieval scoring jobs through a local, Ray, or Dask backend."""
+
+    return execution.map(
+        partial(_score_retrieval_artifact_job, store_config=store.config()),
+        jobs,
+    )
+
+
+def _score_retrieval_artifact_job(
+    job: RetrievalScoringJob, store_config: ArtifactStoreConfig
+) -> dict[str, Any]:
+    return score_retrieval_artifact(job, create_artifact_store_from_config(store_config))
 
 
 def diagnose_embedding_artifact(
@@ -1135,6 +1251,114 @@ def materialize_embedding_shard(
     return manifest
 
 
+def materialize_retrieval_embedding_shard(
+    job: RetrievalEmbeddingShardJob,
+    store: ArtifactStore,
+) -> dict[str, Any]:
+    """Materialize one deterministic query or gallery embedding shard."""
+    dataset = job.dataset
+    dataset.validated()
+    values = dataset.queries if job.side == "query" else dataset.gallery
+    modality = dataset.query_modality if job.side == "query" else dataset.gallery_modality
+    indices = job.shard.indices(len(values))
+    if not len(indices):
+        raise ValueError("Retrieval embedding shard contains no samples.")
+    if job.branch is None:
+        extractor = job.extractor
+        extractor.fit(dataset.gallery, y=None)
+        embeddings = ensure_numeric_matrix(
+            extractor.transform(_take_retrieval_rows(values, indices)),
+            f"Retriever '{extractor.name}' {job.side} shard embeddings",
+            allow_sparse=True,
+        )
+    else:
+        encoder = getattr(job.extractor, "encode_retrieval", None)
+        if not callable(encoder):
+            raise TypeError("Retrieval branch materialization requires encode_retrieval().")
+        embeddings = ensure_numeric_matrix(
+            encoder(_take_retrieval_rows(values, indices), branch=job.branch, modality=modality),
+            f"Retriever '{job.extractor.name}' {job.side} shard embeddings",
+            allow_sparse=True,
+        )
+    if embeddings.shape[0] != len(indices):
+        raise ValueError("Retrieval extractor output does not align with its endpoint shard.")
+    path = store.put_array(job.output_key, embeddings)
+    sparse = is_sparse_matrix(embeddings)
+    manifest = {
+        "artifact_type": "retrieval_embedding_shard",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "artifact_path": path,
+        "dataset_fingerprint": dataset.fingerprint(),
+        "extractor_recipe": job.extractor.recipe(),
+        "recipe_hash": fingerprint_extractor_recipe(job.extractor.recipe()),
+        "side": job.side,
+        "branch": job.branch,
+        "shard": asdict(job.shard),
+        "sample_indices": indices.tolist(),
+        "n_samples": int(embeddings.shape[0]),
+        "embedding_dim": int(embeddings.shape[1]),
+        "shape": list(embeddings.shape),
+        "dtype": str(embeddings.dtype),
+        "sparse": sparse,
+        "storage_format": embeddings.getformat() if sparse else "dense",
+    }
+    store.put_json(job.output_key, manifest)
+    return manifest
+
+
+def compress_retrieval_embedding_artifacts(
+    job: RetrievalCompressionJob,
+    store: ArtifactStore,
+) -> dict[str, Any]:
+    """Fit one compressor on gallery embeddings and transform both retrieval endpoints."""
+    query_metadata = store.get_json(job.query_embedding_key)
+    gallery_metadata = store.get_json(job.gallery_embedding_key)
+    query = store.get_array(job.query_embedding_key)
+    gallery = store.get_array(job.gallery_embedding_key)
+    if query.shape[1] != gallery.shape[1]:
+        raise ValueError("Paired retrieval compression requires matching endpoint dimensions.")
+    config = job.compression_config
+    if not config.enabled or config.method == "none":
+        compression_result = compress_embeddings(gallery, config=config)
+        gallery_result = compression_result.embeddings
+        query_result = query
+        metadata = dict(compression_result.metadata)
+    else:
+        compressor = create_embedding_compressor(config)
+        gallery_result = compressor.fit_transform(gallery)
+        query_result = compressor.transform(query)
+        metadata = _compression_metadata(compressor, gallery, gallery_result, warnings=[])
+    metadata["fit_side"] = "gallery"
+    for key, values, source_metadata, side in (
+        (job.query_output_key, query_result, query_metadata, "query"),
+        (job.gallery_output_key, gallery_result, gallery_metadata, "gallery"),
+    ):
+        path = store.put_array(key, values)
+        manifest = dict(source_metadata)
+        manifest.update(
+            {
+                "artifact_type": "retrieval_compressed_embedding",
+                "output_key": key,
+                "artifact_path": path,
+                "side": side,
+                "n_samples": int(values.shape[0]),
+                "embedding_dim": int(values.shape[1]),
+                "shape": list(values.shape),
+                "compression": metadata,
+            }
+        )
+        store.put_json(key, manifest)
+    return {
+        "artifact_type": "retrieval_compression",
+        "query_output_key": job.query_output_key,
+        "gallery_output_key": job.gallery_output_key,
+        "query_embedding_key": job.query_embedding_key,
+        "gallery_embedding_key": job.gallery_embedding_key,
+        "compression_metadata": metadata,
+    }
+
+
 def merge_embedding_shards(
     job: EmbeddingMergeJob,
     store: ArtifactStore,
@@ -1191,6 +1415,55 @@ def merge_embedding_shards(
     return manifest
 
 
+def merge_retrieval_embedding_shards(
+    job: EmbeddingMergeJob,
+    store: ArtifactStore,
+) -> dict[str, Any]:
+    """Merge retrieval endpoint shards and preserve their endpoint identity."""
+    manifest = merge_embedding_shards(job, store)
+    shards = [store.get_json(key) for key in job.shard_keys]
+    sides = {shard.get("side") for shard in shards}
+    branches = {shard.get("branch") for shard in shards}
+    if len(sides) != 1 or len(branches) != 1:
+        raise ValueError("Retrieval endpoint shards must share one side and branch.")
+    manifest.update(
+        {
+            "artifact_type": "retrieval_embedding",
+            "side": sides.pop(),
+            "branch": branches.pop(),
+        }
+    )
+    store.put_json(job.output_key, manifest)
+    return manifest
+
+
+def plan_retrieval_embedding_shard_jobs(
+    dataset: Any,
+    extractor: Any,
+    total_shards: int,
+    *,
+    side: str,
+    branch: Optional[str] = None,
+    batch_size: int = 128,
+) -> list[RetrievalEmbeddingShardJob]:
+    """Plan deterministic embedding jobs for one retrieval endpoint."""
+    base_key = retrieval_embedding_artifact_key(dataset, extractor, side)
+    return [
+        RetrievalEmbeddingShardJob(
+            dataset=dataset,
+            extractor=extractor,
+            side=side,
+            branch=branch,
+            shard=ShardSpec(total_shards=total_shards, shard_index=index),
+            output_key=retrieval_embedding_shard_key(
+                base_key, ShardSpec(total_shards=total_shards, shard_index=index)
+            ),
+            batch_size=batch_size,
+        )
+        for index in range(total_shards)
+    ]
+
+
 def _local_embedding_batches(
     dataset: Any,
     extractor: Any,
@@ -1210,6 +1483,20 @@ def _local_embedding_batches(
             )
         indices = np.asarray([local_positions[int(index)] for index in batch.indices], dtype=int)
         yield indices, embeddings
+
+
+def _take_retrieval_rows(values: Any, indices: np.ndarray) -> Any:
+    """Select endpoint rows while preserving common raw input containers."""
+    if isinstance(values, dict):
+        return {key: _take_retrieval_rows(value, indices) for key, value in values.items()}
+    if hasattr(values, "iloc"):
+        return values.iloc[indices]
+    if is_sparse_matrix(values):
+        return values[indices]
+    if isinstance(values, np.ndarray):
+        return values[indices]
+    sequence = list(values)
+    return [sequence[int(index)] for index in indices]
 
 
 def _materialize_multi_output_embedding_shard(

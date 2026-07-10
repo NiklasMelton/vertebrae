@@ -229,6 +229,51 @@ class ScoringJob:
 
 
 @dataclass(frozen=True)
+class RetrievalScoringJob:
+    """Score persisted query/gallery embeddings against a relevance artifact."""
+
+    query_embedding_key: str
+    gallery_embedding_key: str
+    relevance_key: str
+    output_key: str
+    retrieval_config: Any = None
+    exclusions_key: Optional[str] = None
+    resources: ResourceSpec = ResourceSpec()
+
+
+@dataclass(frozen=True)
+class RetrievalEmbeddingShardJob:
+    """Materialize one query or gallery endpoint shard for a retrieval dataset."""
+
+    dataset: Any
+    extractor: Any
+    side: str
+    shard: ShardSpec
+    output_key: str
+    branch: Optional[str] = None
+    batch_size: int = 128
+    resources: ResourceSpec = ResourceSpec()
+
+    def __post_init__(self) -> None:
+        if self.side not in {"query", "gallery"}:
+            raise ValueError("RetrievalEmbeddingShardJob.side must be 'query' or 'gallery'.")
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be >= 1.")
+
+
+@dataclass(frozen=True)
+class RetrievalCompressionJob:
+    """Fit compression on a gallery artifact and transform its paired query artifact."""
+
+    query_embedding_key: str
+    gallery_embedding_key: str
+    query_output_key: str
+    gallery_output_key: str
+    compression_config: Any
+    resources: ResourceSpec = ResourceSpec()
+
+
+@dataclass(frozen=True)
 class SeparatixJob:
     """Description of a Separatix diagnostic job over persisted embeddings."""
 

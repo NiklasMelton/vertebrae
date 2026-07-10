@@ -612,6 +612,7 @@ alongside the runnable
 - repeated-run stability analysis,
 - optional Separatix complexity diagnostics in local and artifact-backed reports,
 - custom full-batch embedding metrics with a selectable primary ranking metric,
+- exact, training-free query--gallery retrieval and matching with explicit graded relevance,
 - optional embedding compression and compressed-variant comparisons,
 - local embedding caching and reproducible artifacts,
 - artifact-backed distributed embedding and scoring through the `vertebrae` CLI,

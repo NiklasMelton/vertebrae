@@ -99,3 +99,12 @@ class MultiOutputFeatureExtractor(Protocol):
         """Transform inputs into multiple named embedding outputs."""
 
         ...
+
+
+class RetrievalCapableExtractor(Protocol):
+    """Optional protocol for independent query/gallery branch encoding."""
+
+    def encode_retrieval(self, X: Any, *, branch: str, modality: str) -> Any:
+        """Encode one declared endpoint branch into a numeric embedding matrix."""
+
+        ...

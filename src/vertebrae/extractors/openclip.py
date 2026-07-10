@@ -107,6 +107,45 @@ class OpenCLIPExtractor:
             for spec in self._output_specs
         ]
 
+    def encode_retrieval(self, X: Any, *, branch: str, modality: str) -> np.ndarray:
+        """Encode one independent image or text endpoint for exact retrieval."""
+        spec = next((item for item in self._output_specs if item.name == branch), None)
+        if spec is None:
+            raise ValueError(f"Unknown retrieval branch {branch!r}.")
+        source = spec.metadata.get("source")
+        if source not in {"image", "text"} or modality != source:
+            raise ValueError(f"Retrieval branch {branch!r} requires modality {source!r}.")
+        torch_module, image_module, model, preprocess_fn, tokenizer = self._load_model()
+        values = list(X)
+        collected = []
+        model.eval()
+        with torch_module.no_grad():
+            for batch in iter_chunks(values, self.batch_size):
+                if source == "image":
+                    images = [
+                        preprocess_fn(
+                            coerce_image(value, image_module, self.image_mode, self.alpha_mode)
+                        )
+                        for value in batch
+                    ]
+                    encoded = model.encode_image(
+                        maybe_move_to_device(
+                            stack_batch(images, torch_module),
+                            self._device(torch_module),
+                            torch_module,
+                        )
+                    )
+                else:
+                    encoded = model.encode_text(
+                        maybe_move_to_device(
+                            tokenizer(ensure_text_sequence(batch, "OpenCLIP retrieval")),
+                            self._device(torch_module),
+                            torch_module,
+                        )
+                    )
+                collected.append(np.asarray(tensor_to_numpy(encoded), dtype=np.float32))
+        return np.vstack(collected)
+
     def recipe(self) -> Dict[str, Any]:
         return {
             "name": self.name,

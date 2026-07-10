@@ -17,6 +17,13 @@ Distributed artifact materialization now supports multi-output extractors by
 writing one embedding artifact per named output. Each output remains a normal 2D
 embedding artifact for downstream scoring and compression.
 
+Retrieval uses paired endpoint artifacts. `plan-retrieval` produces deterministic
+query and gallery shard plans; `embed-retrieval-shard` materializes one endpoint
+shard; and `merge-retrieval-embeddings` produces each complete endpoint. Persist the
+declared relevance with `write-retrieval-relevance`, apply gallery-fitted paired
+compression with `compress-retrieval`, and run `score-retrieval`. Endpoint manifests
+preserve side and branch identity so query and gallery artifacts cannot be mixed.
+
 The same artifact flow works for aligned multi-modal datasets because dataset
 pickles preserve structured fields and multi-output extractors still materialize
 ordinary per-output embedding artifacts. Missing modalities are not supported in

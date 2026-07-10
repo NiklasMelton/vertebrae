@@ -13,6 +13,7 @@ segmentation
 feature_extractors
 compression
 scoring
+retrieval
 results_and_reports
 examples
 distributed_readiness

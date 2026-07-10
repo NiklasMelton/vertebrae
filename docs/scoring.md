@@ -200,6 +200,42 @@ Every metric must return one finite aggregate `score`; that score is the only va
 eligible for ranking. Metrics may also return JSON-safe diagnostics, warnings, and
 metadata.
 
+## Retrieval and matching
+
+`RetrievalBenchmark` evaluates frozen query embeddings against a declared gallery and
+explicit relevance grades. It is a separate, exact ranking protocol: it does not fit a
+head, build an ANN index, mine negatives, or replace OverlapIndex in ordinary labeled
+benchmarks. Use it for semantic search, image-text matching, entity lookup, and other
+candidate-ranking use cases.
+
+```python
+from vertebrae import RetrievalBenchmark, RetrievalConfig, RetrievalDataset
+from vertebrae.extractors import PrecomputedExtractor
+
+dataset = RetrievalDataset.from_embeddings(
+    query_embeddings,
+    gallery_embeddings,
+    relevance=[("query-1", "document-9", 2.0)],
+    query_ids=["query-1"],
+    gallery_ids=["document-9"],
+)
+result = RetrievalBenchmark(
+    dataset,
+    [PrecomputedExtractor("candidate")],
+    retrieval_config=RetrievalConfig(primary_metric="ndcg@10"),
+).run()
+```
+
+Relevance may be a dense query-by-gallery grade matrix or sparse
+`(query_id, gallery_id, grade)` records. Grades above zero are relevant for binary
+metrics; NDCG uses the original grades. Results include NDCG, precision, recall, hit
+rate, MRR, mAP, and positive-versus-negative similarity diagnostics. Cosine similarity
+is the default, with dot product and squared L2 available explicitly.
+
+For a normal single-label `Benchmark`, `LabelRetrievalMetric` provides opt-in
+leave-one-out same-label retrieval after embedding compression. It is not inferred for
+multi-label or regression targets because those relevance semantics must be declared.
+
 ```python
 from vertebrae import Benchmark, CallableMetric, OverlapMetric, OverlapScoringConfig
 

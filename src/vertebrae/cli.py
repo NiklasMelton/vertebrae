@@ -4,19 +4,24 @@ import argparse
 import json
 import pickle
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from vertebrae.cache import create_artifact_store
-from vertebrae.config import EmbeddingCompressionConfig
+from vertebrae.config import EmbeddingCompressionConfig, RetrievalConfig
 from vertebrae.execution import (
     EmbeddingMergeJob,
+    RetrievalCompressionJob,
+    RetrievalEmbeddingShardJob,
+    RetrievalScoringJob,
     ScoringJob,
     SeparatixJob,
     ShardSpec,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
     compress_embedding_artifact,
+    compress_retrieval_embedding_artifacts,
     create_execution_backend,
     diagnose_embedding_artifact,
     embedding_artifact_key,
@@ -28,14 +33,22 @@ from vertebrae.execution import (
     materialize_embedding_shard,
     materialize_group_artifact,
     materialize_label_artifact,
+    materialize_retrieval_embedding_shard,
     materialize_segmentation_artifacts,
     materialize_structured_artifacts,
     merge_embedding_shards,
+    merge_retrieval_embedding_shards,
     plan_compression_job,
     plan_embedding_shard_jobs,
+    plan_retrieval_embedding_shard_jobs,
     plan_scoring_jobs,
+    retrieval_compression_artifact_key,
+    retrieval_embedding_artifact_key,
+    retrieval_embedding_shard_key,
+    retrieval_scoring_artifact_key,
     score_embedding_artifact,
     score_embedding_artifacts,
+    score_retrieval_artifact,
     scoring_artifact_key,
     separatix_artifact_key,
 )
@@ -103,6 +116,42 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--n-samples", type=int)
     merge.add_argument("--output-json")
     merge.set_defaults(func=_cmd_merge_embeddings)
+
+    retrieval_plan = subparsers.add_parser(
+        "plan-retrieval", help="Plan deterministic query and gallery embedding shards."
+    )
+    _add_object_args(retrieval_plan)
+    _add_cache_arg(retrieval_plan)
+    retrieval_plan.add_argument("--total-shards", type=int, required=True)
+    retrieval_plan.add_argument("--query-branch")
+    retrieval_plan.add_argument("--gallery-branch")
+    retrieval_plan.add_argument("--batch-size", type=int, default=128)
+    retrieval_plan.add_argument("--output-json")
+    retrieval_plan.set_defaults(func=_cmd_plan_retrieval)
+
+    retrieval_embed = subparsers.add_parser(
+        "embed-retrieval-shard", help="Materialize one query or gallery retrieval endpoint shard."
+    )
+    _add_object_args(retrieval_embed)
+    _add_cache_arg(retrieval_embed)
+    retrieval_embed.add_argument("--side", choices=["query", "gallery"], required=True)
+    retrieval_embed.add_argument("--branch")
+    retrieval_embed.add_argument("--total-shards", type=int, required=True)
+    retrieval_embed.add_argument("--shard-index", type=int, required=True)
+    retrieval_embed.add_argument("--batch-size", type=int, default=128)
+    retrieval_embed.add_argument("--output-key")
+    retrieval_embed.add_argument("--output-json")
+    retrieval_embed.set_defaults(func=_cmd_embed_retrieval_shard)
+
+    retrieval_merge = subparsers.add_parser(
+        "merge-retrieval-embeddings", help="Merge one retrieval endpoint's shard artifacts."
+    )
+    _add_cache_arg(retrieval_merge)
+    retrieval_merge.add_argument("--shard-key", action="append", required=True)
+    retrieval_merge.add_argument("--output-key", required=True)
+    retrieval_merge.add_argument("--n-samples", type=int, required=True)
+    retrieval_merge.add_argument("--output-json")
+    retrieval_merge.set_defaults(func=_cmd_merge_retrieval_embeddings)
 
     labels = subparsers.add_parser("write-labels", help="Materialize dataset labels.")
     labels.add_argument("--dataset-pickle", required=True)
@@ -179,6 +228,40 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--primary-metric", default="overlap")
     score.add_argument("--output-json")
     score.set_defaults(func=_cmd_score)
+
+    retrieval_score = subparsers.add_parser(
+        "score-retrieval", help="Score persisted query/gallery embeddings and relevance."
+    )
+    _add_cache_arg(retrieval_score)
+    retrieval_score.add_argument("--query-embedding-key", required=True)
+    retrieval_score.add_argument("--gallery-embedding-key", required=True)
+    retrieval_score.add_argument("--relevance-key", required=True)
+    retrieval_score.add_argument("--exclusions-key")
+    retrieval_score.add_argument("--retrieval-config-pickle")
+    retrieval_score.add_argument("--output-key")
+    retrieval_score.add_argument("--output-json")
+    retrieval_score.set_defaults(func=_cmd_score_retrieval)
+
+    retrieval_compress = subparsers.add_parser(
+        "compress-retrieval", help="Fit gallery compression and transform paired query embeddings."
+    )
+    _add_cache_arg(retrieval_compress)
+    retrieval_compress.add_argument("--query-embedding-key", required=True)
+    retrieval_compress.add_argument("--gallery-embedding-key", required=True)
+    retrieval_compress.add_argument("--compression-config-pickle", required=True)
+    retrieval_compress.add_argument("--output-prefix")
+    retrieval_compress.add_argument("--output-json")
+    retrieval_compress.set_defaults(func=_cmd_compress_retrieval)
+
+    relevance = subparsers.add_parser(
+        "write-retrieval-relevance",
+        help="Materialize a RetrievalDataset relevance artifact.",
+    )
+    relevance.add_argument("--dataset-pickle", required=True)
+    _add_cache_arg(relevance)
+    relevance.add_argument("--output-key")
+    relevance.add_argument("--output-json")
+    relevance.set_defaults(func=_cmd_write_retrieval_relevance)
 
     diagnose = subparsers.add_parser(
         "diagnose-complexity",
@@ -408,6 +491,65 @@ def _cmd_merge_embeddings(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    query_jobs = plan_retrieval_embedding_shard_jobs(
+        dataset,
+        extractor,
+        args.total_shards,
+        side="query",
+        branch=args.query_branch,
+        batch_size=args.batch_size,
+    )
+    gallery_jobs = plan_retrieval_embedding_shard_jobs(
+        dataset,
+        extractor,
+        args.total_shards,
+        side="gallery",
+        branch=args.gallery_branch,
+        batch_size=args.batch_size,
+    )
+    return {
+        "artifact_type": "retrieval_embedding_plan",
+        "dataset_fingerprint": dataset.fingerprint(),
+        "query_embedding_key": retrieval_embedding_artifact_key(dataset, extractor, "query"),
+        "gallery_embedding_key": retrieval_embedding_artifact_key(dataset, extractor, "gallery"),
+        "query_shard_jobs": [asdict(job) for job in query_jobs],
+        "gallery_shard_jobs": [asdict(job) for job in gallery_jobs],
+    }
+
+
+def _cmd_embed_retrieval_shard(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    shard = ShardSpec(total_shards=args.total_shards, shard_index=args.shard_index)
+    base_key = retrieval_embedding_artifact_key(dataset, extractor, args.side)
+    return materialize_retrieval_embedding_shard(
+        RetrievalEmbeddingShardJob(
+            dataset=dataset,
+            extractor=extractor,
+            side=args.side,
+            branch=args.branch,
+            shard=shard,
+            output_key=args.output_key or retrieval_embedding_shard_key(base_key, shard),
+            batch_size=args.batch_size,
+        ),
+        _store_from_args(args),
+    )
+
+
+def _cmd_merge_retrieval_embeddings(args: argparse.Namespace) -> dict[str, Any]:
+    return merge_retrieval_embedding_shards(
+        EmbeddingMergeJob(
+            shard_keys=tuple(args.shard_key),
+            output_key=args.output_key,
+            n_samples=args.n_samples,
+        ),
+        _store_from_args(args),
+    )
+
+
 def _cmd_write_labels(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     return materialize_label_artifact(
@@ -482,6 +624,68 @@ def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
         ),
         _store_from_args(args),
     )
+
+
+def _cmd_score_retrieval(args: argparse.Namespace) -> dict[str, Any]:
+    config = (
+        _load_pickle(args.retrieval_config_pickle)
+        if args.retrieval_config_pickle
+        else RetrievalConfig()
+    )
+    if not isinstance(config, RetrievalConfig):
+        raise TypeError("--retrieval-config-pickle must contain a RetrievalConfig.")
+    output_key = args.output_key or retrieval_scoring_artifact_key(
+        args.query_embedding_key, args.gallery_embedding_key
+    )
+    return score_retrieval_artifact(
+        RetrievalScoringJob(
+            query_embedding_key=args.query_embedding_key,
+            gallery_embedding_key=args.gallery_embedding_key,
+            relevance_key=args.relevance_key,
+            exclusions_key=args.exclusions_key,
+            output_key=output_key,
+            retrieval_config=config,
+        ),
+        _store_from_args(args),
+    )
+
+
+def _cmd_compress_retrieval(args: argparse.Namespace) -> dict[str, Any]:
+    config = _load_pickle(args.compression_config_pickle)
+    prefix = args.output_prefix or retrieval_compression_artifact_key(
+        args.query_embedding_key, args.gallery_embedding_key, config
+    )
+    return compress_retrieval_embedding_artifacts(
+        RetrievalCompressionJob(
+            query_embedding_key=args.query_embedding_key,
+            gallery_embedding_key=args.gallery_embedding_key,
+            query_output_key=f"{prefix}/query",
+            gallery_output_key=f"{prefix}/gallery",
+            compression_config=config,
+        ),
+        _store_from_args(args),
+    )
+
+
+def _cmd_write_retrieval_relevance(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    if not all(
+        hasattr(dataset, attribute) for attribute in ("relevance", "query_ids", "gallery_ids")
+    ):
+        raise TypeError("--dataset-pickle must contain a RetrievalDataset.")
+    output_key = args.output_key or f"retrieval/relevance/{dataset.fingerprint()}"
+    payload = {
+        "artifact_type": "retrieval_relevance",
+        "query_ids": list(dataset.query_ids),
+        "gallery_ids": list(dataset.gallery_ids),
+        "n_queries": len(dataset.query_ids),
+        "n_gallery": len(dataset.gallery_ids),
+        "relevance": dataset.relevance,
+        "exclusions": sorted(dataset.exclusions or ()),
+        "dataset_fingerprint": dataset.fingerprint(),
+    }
+    _store_from_args(args).put_json(output_key, payload)
+    return {"output_key": output_key, **payload}
 
 
 def _metrics_from_args(args: argparse.Namespace) -> list[CallableMetric]:

@@ -148,6 +148,46 @@ class HFMultimodalExtractor:
             )
         return materialized
 
+    def encode_retrieval(self, X: Any, *, branch: str, modality: str) -> np.ndarray:
+        """Encode one independent branch when the wrapped model exposes it explicitly."""
+        spec = next((item for item in self._output_specs if item.name == branch), None)
+        if spec is None:
+            raise ValueError(f"Unknown retrieval branch {branch!r}.")
+        source = str(spec.metadata.get("source"))
+        if source not in {"image", "text"} or modality != source:
+            raise ValueError(
+                f"Retrieval branch {branch!r} requires independently encodable {source!r} inputs."
+            )
+        processor, model, torch, image_module = self._load_model()
+        method = getattr(model, f"get_{source}_features", None)
+        if not callable(method):
+            raise ValueError(
+                f"Model {self.model_id!r} does not expose get_{source}_features(); provide "
+                "a CallableRetrievalExtractor or an explicit retrieval-capable adapter."
+            )
+        field = next(
+            (key for key, value in self.input_modalities.items() if value == source), source
+        )
+        values = list(X)
+        outputs = []
+        model.eval()
+        with torch.no_grad():
+            for start in range(0, len(values), self.batch_size):
+                batch = [{field: value} for value in values[start : start + self.batch_size]]
+                raw = _default_processor_inputs(
+                    batch=batch,
+                    input_modalities={field: source},
+                    input_map={field: source},
+                    image_module=image_module,
+                    image_mode=self.image_mode,
+                    alpha_mode=self.alpha_mode,
+                )
+                encoded = processor(return_tensors="pt", **raw, **self.processor_kwargs)
+                encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
+                value = method(**encoded)
+                outputs.append(_materialize_output_matrix(value, spec, torch, len(batch)))
+        return np.vstack(outputs).astype(np.float32, copy=False)
+
     def structured_output_specs(self) -> List[StructuredOutputSpec]:
         return list(self._structured_output_specs)
 
