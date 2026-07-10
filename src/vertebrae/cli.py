@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from vertebrae.cache import create_artifact_store
+from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.config import EmbeddingCompressionConfig, RetrievalConfig
 from vertebrae.execution import (
     EmbeddingMergeJob,
@@ -147,9 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
         "merge-retrieval-embeddings", help="Merge one retrieval endpoint's shard artifacts."
     )
     _add_cache_arg(retrieval_merge)
-    retrieval_merge.add_argument("--shard-key", action="append", required=True)
-    retrieval_merge.add_argument("--output-key", required=True)
-    retrieval_merge.add_argument("--n-samples", type=int, required=True)
+    retrieval_merge.add_argument("--plan-json")
+    retrieval_merge.add_argument("--side", choices=["query", "gallery"])
+    retrieval_merge.add_argument("--shard-key", action="append", default=[])
+    retrieval_merge.add_argument("--output-key")
+    retrieval_merge.add_argument("--n-samples", type=int)
     retrieval_merge.add_argument("--output-json")
     retrieval_merge.set_defaults(func=_cmd_merge_retrieval_embeddings)
 
@@ -513,10 +516,38 @@ def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "artifact_type": "retrieval_embedding_plan",
         "dataset_fingerprint": dataset.fingerprint(),
-        "query_embedding_key": retrieval_embedding_artifact_key(dataset, extractor, "query"),
-        "gallery_embedding_key": retrieval_embedding_artifact_key(dataset, extractor, "gallery"),
-        "query_shard_jobs": [asdict(job) for job in query_jobs],
-        "gallery_shard_jobs": [asdict(job) for job in gallery_jobs],
+        "extractor_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+        "endpoints": {
+            "query": _retrieval_endpoint_plan(query_jobs),
+            "gallery": _retrieval_endpoint_plan(gallery_jobs),
+        },
+    }
+
+
+def _retrieval_endpoint_plan(jobs: Sequence[RetrievalEmbeddingShardJob]) -> dict[str, Any]:
+    """Serialize endpoint jobs without embedding live dataset or extractor objects."""
+    if not jobs:
+        raise ValueError("Retrieval endpoint planning requires at least one shard job.")
+    first = jobs[0]
+    values = first.dataset.queries if first.side == "query" else first.dataset.gallery
+    base_key = retrieval_embedding_artifact_key(
+        first.dataset, first.extractor, first.side, first.branch
+    )
+    return {
+        "side": first.side,
+        "branch": first.branch,
+        "n_samples": len(values),
+        "output_key": base_key,
+        "shards": [
+            {
+                "side": job.side,
+                "branch": job.branch,
+                "shard": asdict(job.shard),
+                "output_key": job.output_key,
+                "batch_size": job.batch_size,
+            }
+            for job in jobs
+        ],
     }
 
 
@@ -524,7 +555,7 @@ def _cmd_embed_retrieval_shard(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
     shard = ShardSpec(total_shards=args.total_shards, shard_index=args.shard_index)
-    base_key = retrieval_embedding_artifact_key(dataset, extractor, args.side)
+    base_key = retrieval_embedding_artifact_key(dataset, extractor, args.side, args.branch)
     return materialize_retrieval_embedding_shard(
         RetrievalEmbeddingShardJob(
             dataset=dataset,
@@ -540,11 +571,23 @@ def _cmd_embed_retrieval_shard(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_merge_retrieval_embeddings(args: argparse.Namespace) -> dict[str, Any]:
+    plan = _load_json(args.plan_json) if args.plan_json else {}
+    endpoint = plan.get("endpoints", {}).get(args.side) if args.side else None
+    shard_keys = tuple(
+        args.shard_key or (job["output_key"] for job in (endpoint or {}).get("shards", []))
+    )
+    output_key = args.output_key or (endpoint or {}).get("output_key")
+    n_samples = args.n_samples or (endpoint or {}).get("n_samples")
+    if not shard_keys or output_key is None or n_samples is None:
+        raise ValueError(
+            "merge-retrieval-embeddings requires explicit shard keys, output key, and sample count "
+            "or --plan-json with --side."
+        )
     return merge_retrieval_embedding_shards(
         EmbeddingMergeJob(
-            shard_keys=tuple(args.shard_key),
-            output_key=args.output_key,
-            n_samples=args.n_samples,
+            shard_keys=shard_keys,
+            output_key=output_key,
+            n_samples=int(n_samples),
         ),
         _store_from_args(args),
     )
@@ -652,6 +695,8 @@ def _cmd_score_retrieval(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_compress_retrieval(args: argparse.Namespace) -> dict[str, Any]:
     config = _load_pickle(args.compression_config_pickle)
+    if not isinstance(config, EmbeddingCompressionConfig):
+        raise TypeError("--compression-config-pickle must contain an EmbeddingCompressionConfig.")
     prefix = args.output_prefix or retrieval_compression_artifact_key(
         args.query_embedding_key, args.gallery_embedding_key, config
     )

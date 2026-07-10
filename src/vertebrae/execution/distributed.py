@@ -54,12 +54,15 @@ def embedding_artifact_key(dataset: Any, extractor: Any) -> str:
     return f"embeddings/{dataset_key}/{extractor_key}"
 
 
-def retrieval_embedding_artifact_key(dataset: Any, extractor: Any, side: str) -> str:
+def retrieval_embedding_artifact_key(
+    dataset: Any, extractor: Any, side: str, branch: Optional[str] = None
+) -> str:
     """Build the canonical endpoint embedding key for a retrieval dataset."""
     if side not in {"query", "gallery"}:
         raise ValueError("side must be 'query' or 'gallery'.")
     recipe_hash = fingerprint_extractor_recipe(extractor.recipe())
-    return f"retrieval/embeddings/{dataset.fingerprint()}/{recipe_hash}/{side}"
+    branch_key = "default" if branch is None else hash_json({"branch": branch})
+    return f"retrieval/embeddings/{dataset.fingerprint()}/{recipe_hash}/{side}/{branch_key}"
 
 
 def retrieval_embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
@@ -612,11 +615,12 @@ def score_retrieval_artifact(job: RetrievalScoringJob, store: ArtifactStore) -> 
     from vertebrae.config import RetrievalConfig
     from vertebrae.scoring.retrieval import RetrievalScorer
 
-    queries = store.get_array(job.query_embedding_key)
-    gallery = store.get_array(job.gallery_embedding_key)
     query_metadata = store.get_json(job.query_embedding_key)
     gallery_metadata = store.get_json(job.gallery_embedding_key)
     relevance_data = store.get_json(job.relevance_key)
+    _validate_retrieval_pair_metadata(query_metadata, gallery_metadata, relevance_data)
+    queries = store.get_array(job.query_embedding_key)
+    gallery = store.get_array(job.gallery_embedding_key)
     raw_relevance = relevance_data.get("relevance", relevance_data)
     n_queries, n_gallery = int(queries.shape[0]), int(gallery.shape[0])
     if int(query_metadata.get("n_samples", n_queries)) != n_queries:
@@ -1265,7 +1269,11 @@ def materialize_retrieval_embedding_shard(
         raise ValueError("Retrieval embedding shard contains no samples.")
     if job.branch is None:
         extractor = job.extractor
-        extractor.fit(dataset.gallery, y=None)
+        if getattr(extractor, "already_fitted", True) is False:
+            raise ValueError(
+                "Distributed retrieval shards require a frozen or already-fitted extractor; "
+                "fit it before serializing the extractor pickle."
+            )
         embeddings = ensure_numeric_matrix(
             extractor.transform(_take_retrieval_rows(values, indices)),
             f"Retriever '{extractor.name}' {job.side} shard embeddings",
@@ -1314,6 +1322,7 @@ def compress_retrieval_embedding_artifacts(
     """Fit one compressor on gallery embeddings and transform both retrieval endpoints."""
     query_metadata = store.get_json(job.query_embedding_key)
     gallery_metadata = store.get_json(job.gallery_embedding_key)
+    _validate_retrieval_pair_metadata(query_metadata, gallery_metadata)
     query = store.get_array(job.query_embedding_key)
     gallery = store.get_array(job.gallery_embedding_key)
     if query.shape[1] != gallery.shape[1]:
@@ -1330,6 +1339,7 @@ def compress_retrieval_embedding_artifacts(
         query_result = compressor.transform(query)
         metadata = _compression_metadata(compressor, gallery, gallery_result, warnings=[])
     metadata["fit_side"] = "gallery"
+    manifests: list[dict[str, Any]] = []
     for key, values, source_metadata, side in (
         (job.query_output_key, query_result, query_metadata, "query"),
         (job.gallery_output_key, gallery_result, gallery_metadata, "gallery"),
@@ -1348,8 +1358,10 @@ def compress_retrieval_embedding_artifacts(
                 "compression": metadata,
             }
         )
-        store.put_json(key, manifest)
-    return {
+        manifests.append(manifest)
+    for manifest in manifests:
+        store.put_json(manifest["output_key"], manifest)
+    artifact = {
         "artifact_type": "retrieval_compression",
         "query_output_key": job.query_output_key,
         "gallery_output_key": job.gallery_output_key,
@@ -1357,6 +1369,10 @@ def compress_retrieval_embedding_artifacts(
         "gallery_embedding_key": job.gallery_embedding_key,
         "compression_metadata": metadata,
     }
+    prefix = _shared_artifact_prefix(job.query_output_key, job.gallery_output_key)
+    if prefix:
+        store.put_json(prefix, artifact)
+    return artifact
 
 
 def merge_embedding_shards(
@@ -1420,8 +1436,9 @@ def merge_retrieval_embedding_shards(
     store: ArtifactStore,
 ) -> dict[str, Any]:
     """Merge retrieval endpoint shards and preserve their endpoint identity."""
-    manifest = merge_embedding_shards(job, store)
     shards = [store.get_json(key) for key in job.shard_keys]
+    _validate_retrieval_shard_manifests(shards, expected_n_samples=job.n_samples)
+    manifest = merge_embedding_shards(job, store)
     sides = {shard.get("side") for shard in shards}
     branches = {shard.get("branch") for shard in shards}
     if len(sides) != 1 or len(branches) != 1:
@@ -1447,7 +1464,7 @@ def plan_retrieval_embedding_shard_jobs(
     batch_size: int = 128,
 ) -> list[RetrievalEmbeddingShardJob]:
     """Plan deterministic embedding jobs for one retrieval endpoint."""
-    base_key = retrieval_embedding_artifact_key(dataset, extractor, side)
+    base_key = retrieval_embedding_artifact_key(dataset, extractor, side, branch)
     return [
         RetrievalEmbeddingShardJob(
             dataset=dataset,
@@ -1757,3 +1774,50 @@ def _validate_shard_manifests(
     if not bool(np.all(written)):
         missing = np.flatnonzero(~written)
         raise ValueError(f"Embedding shards did not cover all samples; missing {missing[:10]}.")
+
+
+def _validate_retrieval_shard_manifests(
+    manifests: Iterable[dict[str, Any]], expected_n_samples: int
+) -> None:
+    """Validate endpoint identity before a retrieval merge writes any output."""
+    manifest_list = list(manifests)
+    if any(
+        manifest.get("artifact_type") != "retrieval_embedding_shard" for manifest in manifest_list
+    ):
+        raise ValueError("Retrieval merges require retrieval_embedding_shard artifacts.")
+    _validate_shard_manifests(manifest_list, expected_n_samples)
+    sides = {manifest.get("side") for manifest in manifest_list}
+    branches = {manifest.get("branch") for manifest in manifest_list}
+    if len(sides) != 1 or sides == {None}:
+        raise ValueError("Retrieval endpoint shards must share one valid side.")
+    if len(branches) != 1:
+        raise ValueError("Retrieval endpoint shards must share one branch.")
+
+
+def _validate_retrieval_pair_metadata(
+    query_metadata: dict[str, Any],
+    gallery_metadata: dict[str, Any],
+    relevance_metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    """Ensure paired artifacts belong to one retrieval dataset and extractor recipe."""
+    if query_metadata.get("side") != "query" or gallery_metadata.get("side") != "gallery":
+        raise ValueError("Retrieval artifacts must declare query and gallery endpoint sides.")
+    query_fingerprint = query_metadata.get("dataset_fingerprint")
+    gallery_fingerprint = gallery_metadata.get("dataset_fingerprint")
+    if not query_fingerprint or query_fingerprint != gallery_fingerprint:
+        raise ValueError("Query and gallery artifacts have incompatible dataset fingerprints.")
+    query_recipe = query_metadata.get("recipe_hash")
+    gallery_recipe = gallery_metadata.get("recipe_hash")
+    if not query_recipe or query_recipe != gallery_recipe:
+        raise ValueError("Query and gallery artifacts have incompatible extractor recipes.")
+    if relevance_metadata is not None:
+        relevance_fingerprint = relevance_metadata.get("dataset_fingerprint")
+        if not relevance_fingerprint or relevance_fingerprint != query_fingerprint:
+            raise ValueError("Relevance artifact has an incompatible dataset fingerprint.")
+
+
+def _shared_artifact_prefix(query_key: str, gallery_key: str) -> Optional[str]:
+    """Return a paired endpoint prefix when output keys use the standard layout."""
+    if query_key.endswith("/query") and gallery_key == f"{query_key[:-6]}/gallery":
+        return query_key[:-6]
+    return None

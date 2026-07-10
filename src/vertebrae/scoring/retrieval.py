@@ -80,7 +80,11 @@ class RetrievalScorer:
                 "candidate set or raise the explicit limit."
             )
         required = _dense_bytes(query_matrix) + _dense_bytes(gallery_matrix)
-        required += min(self.config.gallery_batch_size, n_gallery) * 8
+        required += (
+            min(self.config.query_batch_size, n_queries)
+            * min(self.config.gallery_batch_size, n_gallery)
+            * np.dtype(np.float64).itemsize
+        )
         if required > self.config.max_dense_bytes:
             raise MemoryError(
                 "Retrieval inputs and one gallery score block exceed "
@@ -97,36 +101,31 @@ class RetrievalScorer:
         margins: List[float] = []
         worst: List[Tuple[float, int, Dict[str, float]]] = []
         warnings: List[str] = []
-        for q_index in range(n_queries):
-            positives = {
-                index: grade
-                for index, grade in relevance[q_index].items()
-                if (q_index, index) not in exclusions and grade > 0
-            }
-            if not positives:
-                query_id = query_ids[q_index] if query_ids else q_index
-                warnings.append(f"Query {query_id!r} has no eligible positive.")
-                continue
-            eligible_count = n_gallery - sum(
-                1 for index in range(n_gallery) if (q_index, index) in exclusions
+        for query_start in range(0, n_queries, self.config.query_batch_size):
+            query_stop = min(query_start + self.config.query_batch_size, n_queries)
+            batch_indices = np.arange(query_start, query_stop)
+            batch_results = self._score_query_batch_blockwise(
+                query_dense[query_start:query_stop],
+                gallery_dense,
+                batch_indices,
+                relevance,
+                exclusions,
             )
-            if not eligible_count:
-                query_id = query_ids[q_index] if query_ids else q_index
-                warnings.append(f"Query {query_id!r} has no eligible candidates.")
-                continue
-            row, query_diagnostics = self._score_query_blockwise(
-                query_dense[q_index], gallery_dense, q_index, positives, exclusions
-            )
-            metric_rows.append(row)
-            positive_sims.extend(query_diagnostics["positive_scores"])
-            nearest_negative = query_diagnostics["nearest_negative"]
-            if nearest_negative is not None:
-                negative_sims.append(nearest_negative)
-                margins.append(max(query_diagnostics["positive_scores"]) - nearest_negative)
-            else:
-                query_id = query_ids[q_index] if query_ids else q_index
-                warnings.append(f"Query {query_id!r} has no negative candidates.")
-            worst.append((row[self.config.primary_metric], q_index, row))
+            for q_index, row, query_diagnostics, warning in batch_results:
+                if warning is not None:
+                    query_id = query_ids[q_index] if query_ids else q_index
+                    warnings.append(f"Query {query_id!r} {warning}")
+                    continue
+                metric_rows.append(row)
+                positive_sims.extend(query_diagnostics["positive_scores"])
+                nearest_negative = query_diagnostics["nearest_negative"]
+                if nearest_negative is not None:
+                    negative_sims.append(nearest_negative)
+                    margins.append(max(query_diagnostics["positive_scores"]) - nearest_negative)
+                else:
+                    query_id = query_ids[q_index] if query_ids else q_index
+                    warnings.append(f"Query {query_id!r} has no negative candidates.")
+                worst.append((row[self.config.primary_metric], q_index, row))
         if not metric_rows:
             raise ValueError("Retrieval scoring has no eligible queries.")
         metrics = {key: float(np.mean([row[key] for row in metric_rows])) for key in metric_rows[0]}
@@ -162,6 +161,102 @@ class RetrievalScorer:
             return gallery @ query
         difference = gallery - query
         return -np.einsum("ij,ij->i", difference, difference)
+
+    def _scores_for_queries(self, queries: np.ndarray, gallery: np.ndarray) -> np.ndarray:
+        if self.config.similarity in {"cosine", "dot"}:
+            return gallery @ queries.T
+        gallery_norms = np.einsum("ij,ij->i", gallery, gallery)[:, None]
+        query_norms = np.einsum("ij,ij->i", queries, queries)[None, :]
+        return -(gallery_norms + query_norms - 2.0 * (gallery @ queries.T))
+
+    def _score_query_batch_blockwise(
+        self,
+        queries: np.ndarray,
+        gallery: np.ndarray,
+        query_indices: np.ndarray,
+        relevance: Dict[int, Dict[int, float]],
+        exclusions: set[Tuple[int, int]],
+    ) -> List[Tuple[int, Dict[str, float], Dict[str, Any], Optional[str]]]:
+        states: List[Optional[Dict[str, Any]]] = []
+        for query_index, query in zip(query_indices, queries):
+            positives = {
+                index: grade
+                for index, grade in relevance[int(query_index)].items()
+                if (int(query_index), index) not in exclusions and grade > 0
+            }
+            if not positives:
+                states.append(None)
+                continue
+            eligible_count = len(gallery) - sum(
+                1 for index in range(len(gallery)) if (int(query_index), index) in exclusions
+            )
+            if not eligible_count:
+                states.append({"error": "has no eligible candidates."})
+                continue
+            positive_indices = np.asarray(sorted(positives), dtype=int)
+            positive_scores = self._scores_for_query(query, gallery[positive_indices])
+            states.append(
+                {
+                    "positives": positives,
+                    "positive_indices": positive_indices,
+                    "positive_scores": positive_scores,
+                    "ranks": np.ones(len(positive_indices), dtype=int),
+                    "nearest_negative": None,
+                }
+            )
+        for start in range(0, len(gallery), self.config.gallery_batch_size):
+            stop = min(start + self.config.gallery_batch_size, len(gallery))
+            gallery_indices = np.arange(start, stop)
+            score_block = self._scores_for_queries(queries, gallery[start:stop])
+            for position, (query_index, state) in enumerate(zip(query_indices, states)):
+                if state is None or "error" in state:
+                    continue
+                eligible = np.asarray(
+                    [(int(query_index), int(index)) not in exclusions for index in gallery_indices],
+                    dtype=bool,
+                )
+                if not np.any(eligible):
+                    continue
+                eligible_indices = gallery_indices[eligible]
+                eligible_scores = score_block[eligible, position]
+                for positive_position, positive_index in enumerate(state["positive_indices"]):
+                    better = eligible_scores > state["positive_scores"][positive_position]
+                    tied_before = (
+                        eligible_scores == state["positive_scores"][positive_position]
+                    ) & (eligible_indices < positive_index)
+                    state["ranks"][positive_position] += int(np.count_nonzero(better | tied_before))
+                negative_mask = np.asarray(
+                    [int(index) not in state["positives"] for index in eligible_indices]
+                )
+                if np.any(negative_mask):
+                    candidate = float(np.max(eligible_scores[negative_mask]))
+                    nearest = state["nearest_negative"]
+                    state["nearest_negative"] = (
+                        candidate if nearest is None else max(nearest, candidate)
+                    )
+        output: List[Tuple[int, Dict[str, float], Dict[str, Any], Optional[str]]] = []
+        for query_index, state in zip(query_indices, states):
+            if state is None:
+                output.append((int(query_index), {}, {}, "has no eligible positive."))
+                continue
+            if "error" in state:
+                output.append((int(query_index), {}, {}, state["error"]))
+                continue
+            grades = np.asarray(
+                [state["positives"][int(index)] for index in state["positive_indices"]], dtype=float
+            )
+            output.append(
+                (
+                    int(query_index),
+                    _query_metrics_from_ranks(state["ranks"], grades, self.config.ks),
+                    {
+                        "positive_scores": state["positive_scores"].tolist(),
+                        "nearest_negative": state["nearest_negative"],
+                    },
+                    None,
+                )
+            )
+        return output
 
     def _score_query_blockwise(
         self,

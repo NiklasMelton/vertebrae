@@ -17,12 +17,18 @@ Distributed artifact materialization now supports multi-output extractors by
 writing one embedding artifact per named output. Each output remains a normal 2D
 embedding artifact for downstream scoring and compression.
 
-Retrieval uses paired endpoint artifacts. `plan-retrieval` produces deterministic
-query and gallery shard plans; `embed-retrieval-shard` materializes one endpoint
-shard; and `merge-retrieval-embeddings` produces each complete endpoint. Persist the
-declared relevance with `write-retrieval-relevance`, apply gallery-fitted paired
-compression with `compress-retrieval`, and run `score-retrieval`. Endpoint manifests
-preserve side and branch identity so query and gallery artifacts cannot be mixed.
+Retrieval uses paired endpoint artifacts. `plan-retrieval` produces JSON-native,
+deterministic query and gallery shard plans; `embed-retrieval-shard` materializes one
+endpoint shard; and `merge-retrieval-embeddings --plan-json ... --side ...` produces
+each complete endpoint. Persist the declared relevance with `write-retrieval-relevance`,
+apply gallery-fitted paired compression with `compress-retrieval`, and run
+`score-retrieval`. Endpoint keys and manifests preserve side, branch, dataset, and
+extractor-recipe identities; compression and scoring reject incompatible pairs.
+
+Distributed endpoint workers transform frozen or already-fitted extractor pickles;
+they do not fit independently on their shards. This keeps query and gallery embeddings
+in one representation space. Local `RetrievalBenchmark` continues to fit compatible
+standard extractors once on the gallery before transforming both endpoints.
 
 The same artifact flow works for aligned multi-modal datasets because dataset
 pickles preserve structured fields and multi-output extractors still materialize

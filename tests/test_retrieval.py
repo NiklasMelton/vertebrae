@@ -18,6 +18,7 @@ from vertebrae.execution import (
     compress_retrieval_embedding_artifacts,
     materialize_retrieval_embedding_shard,
     merge_retrieval_embedding_shards,
+    retrieval_embedding_artifact_key,
     score_retrieval_artifact,
 )
 from vertebrae.extractors import CallableRetrievalExtractor, PrecomputedExtractor
@@ -62,6 +63,23 @@ def test_blockwise_scoring_matches_large_gallery_blocks():
         RetrievalConfig(ks=(1, 2), primary_metric="ndcg@1", gallery_batch_size=1)
     ).score(queries, gallery, relevance)
     assert blocked.metrics == pytest.approx(full.metrics)
+
+
+def test_query_batch_scoring_matches_single_query_batches():
+    queries = np.asarray([[1.0, 0.0], [0.0, 1.0], [0.8, 0.2]])
+    gallery = np.asarray([[1.0, 0.0], [0.2, 0.8], [0.0, 1.0], [0.8, 0.2]])
+    relevance = {0: {0: 2.0, 3: 1.0}, 1: {2: 2.0}, 2: {3: 1.0}}
+    single = RetrievalScorer(
+        RetrievalConfig(
+            ks=(1, 2), primary_metric="ndcg@1", query_batch_size=1, gallery_batch_size=2
+        )
+    ).score(queries, gallery, relevance)
+    batched = RetrievalScorer(
+        RetrievalConfig(
+            ks=(1, 2), primary_metric="ndcg@1", query_batch_size=3, gallery_batch_size=2
+        )
+    ).score(queries, gallery, relevance)
+    assert batched.metrics == pytest.approx(single.metrics)
 
 
 def test_dense_relevance_matrix_and_gallery_compression_benchmark():
@@ -154,10 +172,16 @@ def test_label_retrieval_is_leave_one_out_and_rejects_multilabel():
 def test_retrieval_artifact_scoring_round_trip(tmp_path):
     store = LocalArtifactStore(str(tmp_path))
     store.put_array("q", np.eye(2))
-    store.put_json("q", {"n_samples": 2})
+    store.put_json(
+        "q", {"n_samples": 2, "side": "query", "dataset_fingerprint": "d", "recipe_hash": "e"}
+    )
     store.put_array("g", np.eye(2))
-    store.put_json("g", {"n_samples": 2})
-    store.put_json("r", {"relevance": {"0": {"0": 1.0}, "1": {"1": 2.0}}})
+    store.put_json(
+        "g", {"n_samples": 2, "side": "gallery", "dataset_fingerprint": "d", "recipe_hash": "e"}
+    )
+    store.put_json(
+        "r", {"relevance": {"0": {"0": 1.0}, "1": {"1": 2.0}}, "dataset_fingerprint": "d"}
+    )
     artifact = score_retrieval_artifact(
         RetrievalScoringJob(
             "q", "g", "r", "out", RetrievalConfig(ks=(1,), primary_metric="ndcg@1")
@@ -171,12 +195,20 @@ def test_retrieval_artifact_scoring_round_trip(tmp_path):
 def test_retrieval_artifact_rejects_misaligned_ids(tmp_path):
     store = LocalArtifactStore(str(tmp_path))
     store.put_array("q", np.eye(2))
-    store.put_json("q", {"n_samples": 2})
+    store.put_json(
+        "q", {"n_samples": 2, "side": "query", "dataset_fingerprint": "d", "recipe_hash": "e"}
+    )
     store.put_array("g", np.eye(2))
-    store.put_json("g", {"n_samples": 2})
+    store.put_json(
+        "g", {"n_samples": 2, "side": "gallery", "dataset_fingerprint": "d", "recipe_hash": "e"}
+    )
     store.put_json(
         "r",
-        {"relevance": {"0": {"0": 1.0}, "1": {"1": 1.0}}, "query_ids": ["one"]},
+        {
+            "relevance": {"0": {"0": 1.0}, "1": {"1": 1.0}},
+            "query_ids": ["one"],
+            "dataset_fingerprint": "d",
+        },
     )
     with pytest.raises(ValueError, match="query IDs"):
         score_retrieval_artifact(
@@ -231,3 +263,23 @@ def test_retrieval_endpoint_shards_merge_and_paired_compression(tmp_path):
     assert store.get_array("compressed/query").shape == (4, 2)
     assert store.get_array("compressed/gallery").shape == (4, 2)
     assert artifact["compression_metadata"]["fit_side"] == "gallery"
+
+
+def test_retrieval_branch_keys_are_distinct_and_wrong_provenance_is_rejected(tmp_path):
+    dataset = RetrievalDataset.from_embeddings(np.eye(2), np.eye(2), [(0, 0, 1), (1, 1, 1)])
+    extractor = PrecomputedExtractor()
+    assert retrieval_embedding_artifact_key(
+        dataset, extractor, "query", "first"
+    ) != retrieval_embedding_artifact_key(dataset, extractor, "query", "second")
+    store = LocalArtifactStore(str(tmp_path))
+    store.put_array("q", np.eye(2))
+    store.put_array("g", np.eye(2))
+    store.put_json(
+        "q", {"n_samples": 2, "side": "query", "dataset_fingerprint": "one", "recipe_hash": "e"}
+    )
+    store.put_json(
+        "g", {"n_samples": 2, "side": "gallery", "dataset_fingerprint": "two", "recipe_hash": "e"}
+    )
+    store.put_json("r", {"relevance": {"0": {"0": 1}, "1": {"1": 1}}, "dataset_fingerprint": "one"})
+    with pytest.raises(ValueError, match="dataset fingerprints"):
+        score_retrieval_artifact(RetrievalScoringJob("q", "g", "r", "out"), store)

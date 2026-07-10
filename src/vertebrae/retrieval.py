@@ -135,7 +135,13 @@ class RetrievalBenchmark:
                         set(self.dataset.exclusions or ()),
                         len(self.dataset.gallery_ids),
                     )
-                    if any(not values for values in reverse_relevance.values()):
+                    if any(
+                        not any(
+                            (gallery_index, query_index) not in reverse_exclusions
+                            for query_index in values
+                        )
+                        for gallery_index, values in reverse_relevance.items()
+                    ):
                         raise ValueError(
                             "bidirectional retrieval requires every gallery item to have an "
                             "eligible reverse relevance relation."
