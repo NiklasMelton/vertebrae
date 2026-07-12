@@ -723,6 +723,6 @@ def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(
     assert result["extractor_results"][0]["separatix"]["recommendation"] == (
         "smooth_nonlinear_recommended"
     )
-    assert result["extractor_results"][0]["separatix"]["probe_summary"][
-        "best_probe"
-    ] == "smooth_poly"
+    assert (
+        result["extractor_results"][0]["separatix"]["probe_summary"]["best_probe"] == "smooth_poly"
+    )

@@ -308,9 +308,7 @@ def render_markdown_report(result: Any) -> str:
             evaluation = probe.get("evaluation") or {}
             sampling = evaluation.get("sampling") or {}
             lines.append(f"- Recommendation: {item.separatix.recommendation or ''}")
-            lines.append(
-                f"- Recommendation confidence: {item.separatix.confidence or ''}"
-            )
+            lines.append(f"- Recommendation confidence: {item.separatix.confidence or ''}")
             lines.append(f"- Summary: {(item.separatix.recommendation_text or '').strip()}")
             lines.append(f"- Probe status: {probe.get('status', '')}")
             lines.append(f"- Best probe: {probe.get('best_probe') or ''}")
@@ -359,10 +357,7 @@ def render_markdown_report(result: Any) -> str:
                     f"favored family={comparison.get('favored_family', '')}"
                 )
                 if comparison.get("confidence") is not None:
-                    lines.append(
-                        "  - Comparison confidence: "
-                        f"{comparison.get('confidence')}"
-                    )
+                    lines.append("  - Comparison confidence: " f"{comparison.get('confidence')}")
             mlp = ((item.separatix.report or {}).get("metrics", {}) or {}).get("mlp_probes", {})
             if mlp:
                 lines.append(f"- MLP status: {mlp.get('status', '')}")

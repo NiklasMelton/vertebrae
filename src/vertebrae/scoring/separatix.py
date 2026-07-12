@@ -91,9 +91,7 @@ class SeparatixScorer:
             target_names=label_metadata.get("target_names"),
         )
         grouped = normalized_groups is not None
-        n_groups = (
-            int(len(np.unique(normalized_groups))) if normalized_groups is not None else None
-        )
+        n_groups = int(len(np.unique(normalized_groups))) if normalized_groups is not None else None
         return SeparatixResult(
             ran=True,
             recommendation=report_dict.get("recommendation"),
@@ -293,9 +291,8 @@ def summarize_probe_diagnostics(
     status = "executed" if best_probe and metric_map else "unavailable"
     evaluation = {
         "mode": best_metrics.get("evaluation_mode"),
-        "sampling": best_metrics.get("sample_info") or (report.get("sampling", {}) or {}).get(
-            "probe"
-        ),
+        "sampling": best_metrics.get("sample_info")
+        or (report.get("sampling", {}) or {}).get("probe"),
         "grouped": grouped,
         "n_groups": n_groups,
     }
