@@ -130,6 +130,37 @@ class RetrievalConfig:
 
 
 @dataclass
+class ZeroShotConfig:
+    """Configuration for exact, training-free zero-shot semantic alignment.
+
+    Zero-shot evaluation compares frozen sample embeddings with frozen text prompt
+    prototypes.  It intentionally has no learned calibration, prompt search, or
+    fitted classification head.
+    """
+
+    similarity: str = "cosine"
+    top_k: Tuple[int, ...] = (1, 5)
+    primary_metric: str = "accuracy"
+    max_dense_bytes: int = 2_000_000_000
+    worst_samples: int = 10
+
+    def __post_init__(self) -> None:
+        if self.similarity not in {"cosine", "dot", "squared_l2"}:
+            raise ValueError("similarity must be one of: cosine, dot, squared_l2.")
+        if not self.top_k or any(not isinstance(k, int) or k < 1 for k in self.top_k):
+            raise ValueError("top_k must contain one or more positive integers.")
+        if len(set(self.top_k)) != len(self.top_k):
+            raise ValueError("top_k must not contain duplicate cutoffs.")
+        allowed_metrics = {"accuracy", "macro_f1", "balanced_accuracy"}
+        if self.primary_metric not in allowed_metrics:
+            raise ValueError(f"primary_metric must be one of {sorted(allowed_metrics)}.")
+        if self.max_dense_bytes < 1:
+            raise ValueError("max_dense_bytes must be >= 1.")
+        if self.worst_samples < 0:
+            raise ValueError("worst_samples must be >= 0.")
+
+
+@dataclass
 class SeparatixConfig:
     """Configuration for optional Separatix complexity diagnostics.
 

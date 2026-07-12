@@ -110,9 +110,17 @@ class OpenCLIPExtractor:
     def encode_retrieval(self, X: Any, *, branch: str, modality: str) -> np.ndarray:
         """Encode one independent image or text endpoint for exact retrieval."""
         spec = next((item for item in self._output_specs if item.name == branch), None)
-        if spec is None:
+        source: Any
+        # Retrieval endpoints are native OpenCLIP capabilities, rather than a
+        # declaration that ordinary transform_many() happens to expose.  Keep the
+        # historical image-only transform default while always allowing its paired
+        # text endpoint for zero-shot/retrieval protocols.
+        if spec is None and branch in {"image_branch", "text_branch"}:
+            source = "image" if branch == "image_branch" else "text"
+        elif spec is None:
             raise ValueError(f"Unknown retrieval branch {branch!r}.")
-        source = spec.metadata.get("source")
+        else:
+            source = spec.metadata.get("source")
         if source not in {"image", "text"} or modality != source:
             raise ValueError(f"Retrieval branch {branch!r} requires modality {source!r}.")
         torch_module, image_module, model, preprocess_fn, tokenizer = self._load_model()

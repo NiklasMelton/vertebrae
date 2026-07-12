@@ -10,7 +10,11 @@ import numpy as np
 from vertebrae import __version__
 from vertebrae.cache import ArtifactStore, create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
-from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
+from vertebrae.compression import (
+    compress_embedding_artifact_key,
+    compress_embeddings,
+    compression_variant_name,
+)
 from vertebrae.config import (
     CacheConfig,
     ContinuousOverlapScoringConfig,
@@ -1782,16 +1786,7 @@ def _label_is_excluded_exact(label: Any, excluded: List[Any]) -> bool:
 
 
 def _variant_extractor_name(name: str, compression_metadata: dict) -> str:
-    method = compression_metadata.get("method", "none")
-    if method == "none":
-        return name
-    precision = compression_metadata.get("precision")
-    if precision:
-        return f"{name}[{method}_{precision}]"
-    compressed_dim = compression_metadata.get("compressed_dim")
-    if compressed_dim is None:
-        return f"{name}[{method}]"
-    return f"{name}[{method}_{compressed_dim}]"
+    return compression_variant_name(name, compression_metadata)
 
 
 def _qualified_result_name(

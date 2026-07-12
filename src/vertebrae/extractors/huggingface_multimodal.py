@@ -177,7 +177,7 @@ class HFMultimodalExtractor:
                 raw = _default_processor_inputs(
                     batch=batch,
                     input_modalities={field: source},
-                    input_map={field: source},
+                    input_map={field: "images" if source == "image" else "text"},
                     image_module=image_module,
                     image_mode=self.image_mode,
                     alpha_mode=self.alpha_mode,

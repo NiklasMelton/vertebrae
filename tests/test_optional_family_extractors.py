@@ -5,7 +5,13 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from vertebrae import BenchmarkDataset, CacheConfig, Evaluator
+from vertebrae import (
+    BenchmarkDataset,
+    CacheConfig,
+    Evaluator,
+    ZeroShotBenchmark,
+    ZeroShotDataset,
+)
 from vertebrae.config import OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import (
     GraphModelExtractor,
@@ -161,7 +167,9 @@ def test_torchvision_vision_extractor_uses_weight_transforms(fake_torch, monkeyp
     assert "torchvision-default" in extractor.recipe()["preprocess_fn"]
 
 
-def test_openclip_extractor_emits_image_and_text_branches(fake_torch, monkeypatch):
+def test_openclip_extractor_emits_image_and_text_branches(
+    fake_torch, fake_overlapindex, monkeypatch
+):
     class FakeOpenCLIPModel:
         def to(self, device):
             return self
@@ -210,12 +218,36 @@ def test_openclip_extractor_emits_image_and_text_branches(fake_torch, monkeypatc
     assert [output.name for output in outputs] == ["image_branch", "text_branch"]
     assert outputs[0].embeddings.shape == (4, 3)
     assert outputs[1].embeddings.shape == (4, 3)
+    default = OpenCLIPExtractor("default-clip", "fake-clip", batch_size=2)
+    assert default.transform_many(dataset)[0].name == "image_branch"
+    text_embeddings = default.encode_retrieval(
+        ["left", "right"], branch="text_branch", modality="text"
+    )
+    assert text_embeddings.shape == (
+        2,
+        3,
+    )
+    protocol = ZeroShotDataset.from_templates(
+        BenchmarkDataset.from_arrays(
+            dataset["image"],
+            ["left", "left", "right", "right"],
+            modality="image",
+        ),
+        ["{label}"],
+    )
+    result = ZeroShotBenchmark(
+        protocol,
+        [default],
+        sample_branch="image_branch",
+        text_branch="text_branch",
+    ).run()
+    assert result.extractor_results[0].embedding_metadata["text_branch"] == "text_branch"
 
 
-def test_siglip_extractor_uses_hf_multimodal_delegate(fake_torch, monkeypatch):
+def test_siglip_extractor_uses_hf_multimodal_delegate(fake_torch, fake_overlapindex, monkeypatch):
     class FakeProcessor:
         def __call__(self, **kwargs):
-            size = len(kwargs["text"])
+            size = len(kwargs["text"] if "text" in kwargs else kwargs["images"])
             return {
                 "input_ids": FakeTensor(np.arange(size * 2).reshape(size, 2)),
                 "pixel_values": FakeTensor(np.zeros((size, 3, 2, 2))),
@@ -234,6 +266,12 @@ def test_siglip_extractor_uses_hf_multimodal_delegate(fake_torch, monkeypatch):
                 image_embeds=FakeTensor(np.full((size, 4), 11.0)),
                 text_embeds=FakeTensor(np.full((size, 4), 13.0)),
             )
+
+        def get_image_features(self, **kwargs):
+            return FakeTensor(np.full((kwargs["input_ids"].shape[0], 4), 11.0))
+
+        def get_text_features(self, **kwargs):
+            return FakeTensor(np.full((kwargs["input_ids"].shape[0], 4), 13.0))
 
     monkeypatch.setitem(
         sys.modules,
@@ -255,6 +293,21 @@ def test_siglip_extractor_uses_hf_multimodal_delegate(fake_torch, monkeypatch):
 
     assert extractor.recipe()["extractor_type"] == "siglip"
     assert [item.name for item in output] == ["image_branch", "text_branch"]
+    protocol = ZeroShotDataset.from_templates(
+        BenchmarkDataset.from_arrays(
+            [np.zeros((2, 2, 3), dtype=np.uint8)] * 4,
+            ["left", "left", "right", "right"],
+            modality="image",
+        ),
+        ["{label}"],
+    )
+    result = ZeroShotBenchmark(
+        protocol,
+        [extractor],
+        sample_branch="image_branch",
+        text_branch="text_branch",
+    ).run()
+    assert result.extractor_results[0].zero_shot.metrics["accuracy"] >= 0.0
 
 
 def test_tfhub_extractor_supports_output_adapters(monkeypatch):

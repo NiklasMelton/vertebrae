@@ -468,6 +468,20 @@ downloads a laptop-sized Caltech-101 subset with a few related category pairs,
 compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
 embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 
+### Fixed-prompt zero-shot alignment
+
+For contrastive extractors with independently encodable sample and text branches,
+`ZeroShotBenchmark` evaluates whether fixed class prompts address the dataset in the
+model's shared embedding space. It trains no head and requires explicit prompts. The
+zero-shot rank and ordinary sample-embedding overlap are reported side by side; they
+are not combined into a universal backbone score. See `docs/zero_shot.md` and the
+network-free `examples/zero_shot_callable.py` workflow.
+
+Use `ZeroShotCandidate(extractor, sample_branch, text_branch)` when compared models
+use different branch names. OpenCLIP keeps its image-only ordinary default while its
+native `text_branch` remains available for zero-shot. Callable adapters cache only
+when their functions have portable paths or an explicit `cache_identity`.
+
 ### Custom embedding metrics
 
 Every benchmark always records the built-in overlap metric. You can score the
@@ -613,6 +627,7 @@ alongside the runnable
 - optional Separatix complexity diagnostics in local and artifact-backed reports,
 - custom full-batch embedding metrics with a selectable primary ranking metric,
 - exact, training-free query--gallery retrieval and matching with explicit graded relevance,
+- fixed-prompt, training-free zero-shot semantic alignment for compatible text-aligned models,
 - optional embedding compression and compressed-variant comparisons,
 - local embedding caching and reproducible artifacts,
 - artifact-backed distributed embedding and scoring through the `vertebrae` CLI,
@@ -623,6 +638,10 @@ Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
 `vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae write-groups`,
 `vertebrae materialize-segmentation`, `vertebrae materialize-structured`,
 `vertebrae compress`, `vertebrae score`,
+`vertebrae plan-zero-shot`, `vertebrae embed-zero-shot-shard`,
+`vertebrae merge-zero-shot-embeddings`, `vertebrae write-zero-shot-protocol`,
+`vertebrae compress-zero-shot`, `vertebrae score-zero-shot`,
+`vertebrae zero-shot-from-artifacts`,
 `vertebrae diagnose-complexity`, `vertebrae score-repeats`,
 `vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
 `vertebrae slurm-array`, `vertebrae slurm-score-array`, and

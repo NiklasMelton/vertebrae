@@ -160,6 +160,29 @@ def test_multi_compression_configs_expand_results(fake_overlapindex):
     assert set(result.to_dataframe()["compression_method"]) == {"none", "pca"}
 
 
+def test_skipped_compression_variants_keep_requested_dimensions_in_names(fake_overlapindex):
+    X = np.arange(60, dtype=float).reshape(20, 3)
+    y = np.array(["a"] * 10 + ["b"] * 10)
+    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    benchmark = Benchmark(
+        dataset,
+        compression_configs=[
+            EmbeddingCompressionConfig(enabled=True, method="pca", n_components=3),
+            EmbeddingCompressionConfig(enabled=True, method="pca", n_components=4),
+        ],
+        cache_config=CacheConfig(enabled=False),
+    )
+    benchmark.add_extractor(CallableExtractor("identity", lambda value: value, modality="tabular"))
+
+    result = benchmark.run()
+
+    assert {item.name for item in result.extractor_results} == {
+        "identity[pca_3]",
+        "identity[pca_4]",
+    }
+    assert {item.compression_metadata["compressed_dim"] for item in result.extractor_results} == {3}
+
+
 def test_quantize_float16_changes_precision(fake_overlapindex):
     rng = np.random.default_rng(4)
     embeddings = rng.normal(size=(12, 6)).astype(np.float32)

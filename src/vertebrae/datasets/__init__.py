@@ -8,6 +8,7 @@ from vertebrae.datasets.base import (
 )
 from vertebrae.datasets.retrieval import RetrievalDataset
 from vertebrae.datasets.segmentation import SegmentationAnnotation, SegmentationDataset
+from vertebrae.datasets.zero_shot import ZeroShotClassSpec, ZeroShotDataset
 
 __all__ = [
     "BenchmarkDataset",
@@ -17,4 +18,6 @@ __all__ = [
     "SegmentationAnnotation",
     "SegmentationDataset",
     "RetrievalDataset",
+    "ZeroShotClassSpec",
+    "ZeroShotDataset",
 ]

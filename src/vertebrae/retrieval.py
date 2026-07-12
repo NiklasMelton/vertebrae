@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from time import perf_counter
 from typing import Any, Dict, Iterable, List, Optional
 
-from vertebrae.compression import compress_embeddings
+from vertebrae.compression import compress_embeddings, compression_variant_name
 from vertebrae.compression.base import _compression_metadata, create_embedding_compressor
 from vertebrae.config import EmbeddingCompressionConfig, RetrievalConfig
 from vertebrae.datasets.retrieval import RetrievalDataset
@@ -251,8 +251,7 @@ def _transpose_relations(
 
 
 def _variant_name(name: str, compression: Dict[str, Any]) -> str:
-    method = compression.get("method", "none")
-    return name if method == "none" else f"{name}[{method}]"
+    return compression_variant_name(name, compression)
 
 
 def render_retrieval_markdown_report(result: RetrievalBenchmarkResult) -> str:

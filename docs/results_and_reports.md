@@ -82,6 +82,14 @@ result.save_markdown("report.md")
 The JSON report is the most complete machine-readable artifact. The Markdown report
 is aimed at practical review and sharing.
 
+`ZeroShotBenchmarkResult` is a separate result type for fixed prompt-prototype
+evaluation. Its ranking uses the configured zero-shot metric (Top-1 accuracy by
+default), while the report retains OverlapIndex as contextual sample-embedding
+evidence. The values are intentionally not combined into one universal score.
+Its serialized protocol preserves the complete ordered prompt declaration, and a
+compressed variant name retains the requested dimension even when compression is
+skipped and the reported output dimension is unchanged.
+
 At a high level, reports include:
 
 - dataset summary,

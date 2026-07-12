@@ -274,6 +274,51 @@ class RetrievalCompressionJob:
 
 
 @dataclass(frozen=True)
+class ZeroShotEmbeddingShardJob:
+    """Materialize one sample or prompt endpoint shard for zero-shot evaluation."""
+
+    dataset: Any
+    extractor: Any
+    side: str
+    branch: str
+    shard: ShardSpec
+    output_key: str
+    resources: ResourceSpec = ResourceSpec()
+
+    def __post_init__(self) -> None:
+        if self.side not in {"samples", "prompts"}:
+            raise ValueError("ZeroShotEmbeddingShardJob.side must be 'samples' or 'prompts'.")
+        if not self.branch:
+            raise ValueError("ZeroShotEmbeddingShardJob.branch must be non-empty.")
+
+
+@dataclass(frozen=True)
+class ZeroShotCompressionJob:
+    """Fit sample-side compression and transform paired zero-shot prompts."""
+
+    sample_embedding_key: str
+    prompt_embedding_key: str
+    sample_output_key: str
+    prompt_output_key: str
+    compression_config: Any
+    output_key: Optional[str] = None
+    resources: ResourceSpec = ResourceSpec()
+
+
+@dataclass(frozen=True)
+class ZeroShotScoringJob:
+    """Score paired zero-shot endpoint artifacts against a prompt protocol."""
+
+    sample_embedding_key: str
+    prompt_embedding_key: str
+    protocol_key: str
+    output_key: str
+    zero_shot_config: Any = None
+    scoring_config: Any = None
+    resources: ResourceSpec = ResourceSpec()
+
+
+@dataclass(frozen=True)
 class SeparatixJob:
     """Description of a Separatix diagnostic job over persisted embeddings."""
 
