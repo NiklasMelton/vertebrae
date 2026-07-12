@@ -14,6 +14,7 @@ feature_extractors
 compression
 scoring
 retrieval
+zero_shot
 results_and_reports
 examples
 distributed_readiness

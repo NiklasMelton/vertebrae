@@ -25,6 +25,25 @@ apply gallery-fitted paired compression with `compress-retrieval`, and run
 `score-retrieval`. Endpoint keys and manifests preserve side, branch, dataset, and
 extractor-recipe identities; compression and scoring reject incompatible pairs.
 
+Zero-shot uses the same endpoint-artifact discipline with a sample endpoint, a
+text-prompt endpoint, and a serialized prompt protocol. `plan-zero-shot`,
+`embed-zero-shot-shard`, `merge-zero-shot-embeddings`, `write-zero-shot-protocol`,
+`compress-zero-shot`, and `score-zero-shot` preserve the fixed prompts and source
+dataset identity. Compression is fit on samples and applied to prompts. Planned shard
+counts are capped independently for samples and prompts; pass the plan entry to
+`embed-zero-shot-shard --plan-json ...` so workers use its endpoint-specific branch,
+key, and shard count. Sample manifests deliberately omit prompt-protocol identity so
+they can be reused with a revised prompt protocol, while prompt artifacts remain
+protocol-specific. `zero-shot-from-artifacts` reconstructs JSON/Markdown reports from
+one or more persisted score artifacts. Compressed endpoint pairs carry a shared fitted
+compression identity and score artifacts are configuration-specific, so mixed pairs or
+different evaluation settings are rejected before ranking.
+
+Protocol artifacts use a versioned semantic-label catalog. Workers score stable label
+keys, so non-string labels neither require user class imports nor collapse into
+identically rendered strings. Protocol contents are fingerprinted and revalidated
+before scoring, and the versioned label encoding is required.
+
 Distributed endpoint workers transform frozen or already-fitted extractor pickles;
 they do not fit independently on their shards. This keeps query and gallery embeddings
 in one representation space. Local `RetrievalBenchmark` continues to fit compatible

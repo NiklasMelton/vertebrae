@@ -18,6 +18,7 @@ from vertebrae.scoring.overlap import (
 from vertebrae.scoring.retrieval import RetrievalScorer, RetrievalScoreResult
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
+from vertebrae.scoring.zero_shot import ZeroShotScorer, ZeroShotScoreResult
 
 __all__ = [
     "OverlapIndexScorer",
@@ -36,4 +37,6 @@ __all__ = [
     "run_stability_analysis",
     "RetrievalScoreResult",
     "RetrievalScorer",
+    "ZeroShotScoreResult",
+    "ZeroShotScorer",
 ]

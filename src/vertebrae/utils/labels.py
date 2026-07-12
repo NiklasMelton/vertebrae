@@ -143,11 +143,7 @@ def class_counts(
     if metadata["target_type"] == MULTI_LABEL_TARGET:
         return _multi_label_counts(labels, tuple(metadata["label_names"]))
 
-    unique, counts = np.unique(labels, return_counts=True)
-    return {
-        label.item() if hasattr(label, "item") else label: int(count)
-        for label, count in zip(unique, counts)
-    }
+    return _single_label_counts(labels)
 
 
 def labelset_counts(
@@ -595,11 +591,13 @@ def _target_metadata(
 
 
 def _single_label_counts(labels: np.ndarray) -> Dict[Any, int]:
-    unique, counts = np.unique(labels, return_counts=True)
-    return {
-        label.item() if hasattr(label, "item") else label: int(count)
-        for label, count in zip(unique, counts)
-    }
+    """Count labels in first-observed order without requiring them to be sortable."""
+
+    counts: Dict[Any, int] = {}
+    for value in labels:
+        label = value.item() if hasattr(value, "item") else value
+        counts[label] = counts.get(label, 0) + 1
+    return counts
 
 
 def _multi_label_counts(labels: np.ndarray, label_names: Sequence[Any]) -> Dict[Any, int]:
@@ -790,7 +788,7 @@ def _single_label_subsample_indices(
     min_samples_per_class: int,
 ) -> np.ndarray:
     selected = []
-    for label in np.unique(labels):
+    for label in _ordered_unique_labels(labels):
         class_indices = np.flatnonzero(labels == label)
         target = int(np.floor(len(class_indices) * rate))
         if len(class_indices) >= min_samples_per_class:
@@ -798,6 +796,12 @@ def _single_label_subsample_indices(
         target = max(1, min(len(class_indices), target))
         selected.extend(rng.choice(class_indices, size=target, replace=False).tolist())
     return np.asarray(sorted(selected), dtype=int)
+
+
+def _ordered_unique_labels(labels: np.ndarray) -> Tuple[Any, ...]:
+    """Return hashable labels in first-observed order without sorting custom types."""
+
+    return tuple(_single_label_counts(labels))
 
 
 def _format_label_prefix(prefix: Sequence[Any]) -> str:

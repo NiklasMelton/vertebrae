@@ -4,7 +4,7 @@ import types
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, ZeroShotBenchmark, ZeroShotDataset
 from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
 from vertebrae.extractors import HFMultimodalExtractor
 
@@ -62,7 +62,7 @@ class FakeProcessor:
 
     def __call__(self, **kwargs):
         self.__class__.last_kwargs = kwargs
-        batch = len(kwargs["text"])
+        batch = len(kwargs["text"] if "text" in kwargs else kwargs["images"])
         return {
             "input_ids": FakeTensor(np.arange(batch * 4).reshape(batch, 4)),
             "pixel_values": FakeTensor(np.zeros((batch, 3, 2, 2))),
@@ -85,6 +85,12 @@ class FakeModel:
             pooler_output=FakeTensor(np.full((batch, 4), 5.0)),
             hidden_states=tuple(FakeTensor(hidden + index * 100.0) for index in range(4)),
         )
+
+    def get_image_features(self, **encoded):
+        return FakeTensor(np.full((encoded["input_ids"].shape[0], 4), 2.0))
+
+    def get_text_features(self, **encoded):
+        return FakeTensor(np.full((encoded["input_ids"].shape[0], 4), 3.0))
 
 
 class FakeAutoProcessor:
@@ -154,6 +160,33 @@ def test_hf_multimodal_transform_many_uses_default_text_image_mapping(fake_multi
     assert all(output.embeddings.shape == (4, 4) for output in outputs)
     assert FakeProcessor.last_kwargs["text"] == ["three", "four"]
     assert len(FakeProcessor.last_kwargs["images"]) == 2
+
+
+def test_hf_multimodal_runs_zero_shot_protocol(fake_multimodal_modules, fake_overlapindex):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[
+            {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
+            {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
+        ],
+    )
+    protocol = ZeroShotDataset.from_templates(
+        BenchmarkDataset.from_arrays(
+            [np.zeros((2, 2, 3), dtype=np.uint8)] * 4,
+            ["left", "left", "right", "right"],
+            modality="image",
+        ),
+        ["{label}"],
+    )
+    result = ZeroShotBenchmark(
+        protocol,
+        [extractor],
+        sample_branch="image_branch",
+        text_branch="text_branch",
+    ).run()
+    assert result.extractor_results[0].zero_shot.metrics["accuracy"] >= 0.0
 
 
 def test_hf_multimodal_supports_input_and_output_adapters(fake_multimodal_modules):

@@ -11,6 +11,8 @@ Runnable examples live in `examples/`:
   bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare multiple local extractors.
 - `cache_reuse.py`: demonstrate embedding cache reuse.
+- `zero_shot_callable.py`: compare a synthetic frozen image/text-aligned adapter with
+  an explicit prompt protocol, without downloads or a learned head.
 - `structured_outputs.py`: materialize OCR/layout regions, ASR tokens, and pose
   keypoints directly from native structured extractors, then score them as
   representation-efficacy workflows rather than IoU, WER/CER, or OKS metrics.

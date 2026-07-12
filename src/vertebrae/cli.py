@@ -10,7 +10,12 @@ from typing import Any, Callable, Optional, Sequence
 
 from vertebrae.cache import create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
-from vertebrae.config import EmbeddingCompressionConfig, RetrievalConfig
+from vertebrae.config import (
+    EmbeddingCompressionConfig,
+    OverlapScoringConfig,
+    RetrievalConfig,
+    ZeroShotConfig,
+)
 from vertebrae.execution import (
     EmbeddingMergeJob,
     RetrievalCompressionJob,
@@ -19,10 +24,14 @@ from vertebrae.execution import (
     ScoringJob,
     SeparatixJob,
     ShardSpec,
+    ZeroShotCompressionJob,
+    ZeroShotEmbeddingShardJob,
+    ZeroShotScoringJob,
     benchmark_result_from_artifacts,
     collect_score_artifacts,
     compress_embedding_artifact,
     compress_retrieval_embedding_artifacts,
+    compress_zero_shot_embedding_artifacts,
     create_execution_backend,
     diagnose_embedding_artifact,
     embedding_artifact_key,
@@ -37,12 +46,16 @@ from vertebrae.execution import (
     materialize_retrieval_embedding_shard,
     materialize_segmentation_artifacts,
     materialize_structured_artifacts,
+    materialize_zero_shot_embedding_shard,
+    materialize_zero_shot_protocol,
     merge_embedding_shards,
     merge_retrieval_embedding_shards,
+    merge_zero_shot_embedding_shards,
     plan_compression_job,
     plan_embedding_shard_jobs,
     plan_retrieval_embedding_shard_jobs,
     plan_scoring_jobs,
+    plan_zero_shot_embedding_shard_jobs,
     retrieval_compression_artifact_key,
     retrieval_embedding_artifact_key,
     retrieval_embedding_shard_key,
@@ -50,8 +63,14 @@ from vertebrae.execution import (
     score_embedding_artifact,
     score_embedding_artifacts,
     score_retrieval_artifact,
+    score_zero_shot_artifact,
     scoring_artifact_key,
     separatix_artifact_key,
+    zero_shot_benchmark_result_from_artifacts,
+    zero_shot_compression_artifact_key,
+    zero_shot_embedding_artifact_key,
+    zero_shot_protocol_artifact_key,
+    zero_shot_scoring_artifact_key,
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
 from vertebrae.scoring.metrics import CallableMetric
@@ -155,6 +174,52 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval_merge.add_argument("--n-samples", type=int)
     retrieval_merge.add_argument("--output-json")
     retrieval_merge.set_defaults(func=_cmd_merge_retrieval_embeddings)
+
+    zero_plan = subparsers.add_parser(
+        "plan-zero-shot", help="Plan deterministic sample and prompt embedding shards."
+    )
+    _add_object_args(zero_plan)
+    _add_cache_arg(zero_plan)
+    zero_plan.add_argument("--total-shards", type=int, required=True)
+    zero_plan.add_argument("--sample-branch", required=True)
+    zero_plan.add_argument("--text-branch", required=True)
+    zero_plan.add_argument("--output-json")
+    zero_plan.set_defaults(func=_cmd_plan_zero_shot)
+
+    zero_embed = subparsers.add_parser(
+        "embed-zero-shot-shard", help="Materialize one zero-shot sample or prompt shard."
+    )
+    _add_object_args(zero_embed)
+    _add_cache_arg(zero_embed)
+    zero_embed.add_argument("--side", choices=["samples", "prompts"], required=True)
+    zero_embed.add_argument("--plan-json")
+    zero_embed.add_argument("--branch")
+    zero_embed.add_argument("--total-shards", type=int)
+    zero_embed.add_argument("--shard-index", type=int, required=True)
+    zero_embed.add_argument("--output-key")
+    zero_embed.add_argument("--output-json")
+    zero_embed.set_defaults(func=_cmd_embed_zero_shot_shard)
+
+    zero_merge = subparsers.add_parser(
+        "merge-zero-shot-embeddings", help="Merge one zero-shot endpoint's shard artifacts."
+    )
+    _add_cache_arg(zero_merge)
+    zero_merge.add_argument("--plan-json")
+    zero_merge.add_argument("--side", choices=["samples", "prompts"])
+    zero_merge.add_argument("--shard-key", action="append", default=[])
+    zero_merge.add_argument("--output-key")
+    zero_merge.add_argument("--n-samples", type=int)
+    zero_merge.add_argument("--output-json")
+    zero_merge.set_defaults(func=_cmd_merge_zero_shot_embeddings)
+
+    zero_protocol = subparsers.add_parser(
+        "write-zero-shot-protocol", help="Materialize a ZeroShotDataset prompt protocol."
+    )
+    zero_protocol.add_argument("--dataset-pickle", required=True)
+    _add_cache_arg(zero_protocol)
+    zero_protocol.add_argument("--output-key")
+    zero_protocol.add_argument("--output-json")
+    zero_protocol.set_defaults(func=_cmd_write_zero_shot_protocol)
 
     labels = subparsers.add_parser("write-labels", help="Materialize dataset labels.")
     labels.add_argument("--dataset-pickle", required=True)
@@ -265,6 +330,42 @@ def build_parser() -> argparse.ArgumentParser:
     relevance.add_argument("--output-key")
     relevance.add_argument("--output-json")
     relevance.set_defaults(func=_cmd_write_retrieval_relevance)
+
+    zero_score = subparsers.add_parser(
+        "score-zero-shot", help="Score persisted frozen sample and prompt embeddings."
+    )
+    _add_cache_arg(zero_score)
+    zero_score.add_argument("--sample-embedding-key", required=True)
+    zero_score.add_argument("--prompt-embedding-key", required=True)
+    zero_score.add_argument("--protocol-key", required=True)
+    zero_score.add_argument("--zero-shot-config-pickle")
+    zero_score.add_argument("--scoring-config-pickle")
+    zero_score.add_argument("--output-key")
+    zero_score.add_argument("--output-json")
+    zero_score.set_defaults(func=_cmd_score_zero_shot)
+
+    zero_compress = subparsers.add_parser(
+        "compress-zero-shot", help="Fit sample compression and transform paired prompts."
+    )
+    _add_cache_arg(zero_compress)
+    zero_compress.add_argument("--sample-embedding-key", required=True)
+    zero_compress.add_argument("--prompt-embedding-key", required=True)
+    zero_compress.add_argument("--compression-config-pickle", required=True)
+    zero_compress.add_argument("--output-prefix")
+    zero_compress.add_argument("--output-json")
+    zero_compress.set_defaults(func=_cmd_compress_zero_shot)
+
+    zero_collect = subparsers.add_parser(
+        "zero-shot-from-artifacts",
+        help="Reconstruct ranked zero-shot JSON and Markdown reports from score artifacts.",
+    )
+    _add_cache_arg(zero_collect)
+    zero_collect.add_argument("--score-key", action="append", required=True)
+    zero_collect.add_argument("--output-key")
+    zero_collect.add_argument("--json-output")
+    zero_collect.add_argument("--markdown-output")
+    zero_collect.add_argument("--output-json")
+    zero_collect.set_defaults(func=_cmd_zero_shot_from_artifacts)
 
     diagnose = subparsers.add_parser(
         "diagnose-complexity",
@@ -593,6 +694,140 @@ def _cmd_merge_retrieval_embeddings(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _cmd_plan_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    sample_jobs = plan_zero_shot_embedding_shard_jobs(
+        dataset,
+        extractor,
+        args.total_shards,
+        side="samples",
+        branch=args.sample_branch,
+    )
+    prompt_jobs = plan_zero_shot_embedding_shard_jobs(
+        dataset,
+        extractor,
+        args.total_shards,
+        side="prompts",
+        branch=args.text_branch,
+    )
+    return {
+        "artifact_type": "zero_shot_embedding_plan",
+        "dataset_fingerprint": dataset.fingerprint(),
+        "extractor_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+        "protocol_key": zero_shot_protocol_artifact_key(dataset),
+        "endpoints": {
+            "samples": _zero_shot_endpoint_plan(sample_jobs),
+            "prompts": _zero_shot_endpoint_plan(prompt_jobs),
+        },
+    }
+
+
+def _zero_shot_endpoint_plan(jobs: Sequence[ZeroShotEmbeddingShardJob]) -> dict[str, Any]:
+    if not jobs:
+        raise ValueError("Zero-shot endpoint planning requires at least one shard job.")
+    first = jobs[0]
+    values = first.dataset.samples if first.side == "samples" else first.dataset.prompt_rows()[0]
+    base_key = zero_shot_embedding_artifact_key(
+        first.dataset, first.extractor, first.side, first.branch
+    )
+    return {
+        "side": first.side,
+        "branch": first.branch,
+        "n_samples": len(values),
+        "output_key": base_key,
+        "shards": [
+            {
+                "side": job.side,
+                "branch": job.branch,
+                "shard": asdict(job.shard),
+                "output_key": job.output_key,
+            }
+            for job in jobs
+        ],
+    }
+
+
+def _cmd_embed_zero_shot_shard(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor = _load_pickle(args.extractor_pickle)
+    plan = _load_json(args.plan_json) if args.plan_json else None
+    planned = None
+    if plan is not None:
+        endpoint = plan.get("endpoints", {}).get(args.side)
+        if endpoint is None:
+            raise ValueError("--plan-json does not contain the requested zero-shot endpoint.")
+        planned = next(
+            (
+                item
+                for item in endpoint.get("shards", [])
+                if item.get("shard", {}).get("shard_index") == args.shard_index
+            ),
+            None,
+        )
+        if planned is None:
+            raise ValueError("--plan-json does not contain the requested zero-shot shard index.")
+        if args.branch is not None and args.branch != planned["branch"]:
+            raise ValueError("--branch conflicts with the selected zero-shot plan entry.")
+        if args.total_shards is not None and args.total_shards != planned["shard"]["total_shards"]:
+            raise ValueError("--total-shards conflicts with the selected zero-shot plan entry.")
+        branch = planned["branch"]
+        shard = ShardSpec(**planned["shard"])
+        output_key = args.output_key or planned["output_key"]
+    else:
+        if not args.branch or args.total_shards is None:
+            raise ValueError(
+                "embed-zero-shot-shard requires --branch and --total-shards without --plan-json."
+            )
+        branch = args.branch
+        shard = ShardSpec(total_shards=args.total_shards, shard_index=args.shard_index)
+        base_key = zero_shot_embedding_artifact_key(dataset, extractor, args.side, branch)
+        output_key = args.output_key or (
+            f"{base_key}/shards/{args.shard_index:05d}-of-{args.total_shards:05d}"
+        )
+    return materialize_zero_shot_embedding_shard(
+        ZeroShotEmbeddingShardJob(
+            dataset=dataset,
+            extractor=extractor,
+            side=args.side,
+            branch=branch,
+            shard=shard,
+            output_key=output_key,
+        ),
+        _store_from_args(args),
+    )
+
+
+def _cmd_merge_zero_shot_embeddings(args: argparse.Namespace) -> dict[str, Any]:
+    plan = _load_json(args.plan_json) if args.plan_json else {}
+    endpoint = plan.get("endpoints", {}).get(args.side) if args.side else None
+    shard_keys = tuple(
+        args.shard_key or (item["output_key"] for item in (endpoint or {}).get("shards", []))
+    )
+    output_key = args.output_key or (endpoint or {}).get("output_key")
+    n_samples = args.n_samples or (endpoint or {}).get("n_samples")
+    if not shard_keys or output_key is None or n_samples is None:
+        raise ValueError(
+            "merge-zero-shot-embeddings requires explicit shard keys, output key, and sample "
+            "count or --plan-json with --side."
+        )
+    return merge_zero_shot_embedding_shards(
+        EmbeddingMergeJob(shard_keys=shard_keys, output_key=output_key, n_samples=int(n_samples)),
+        _store_from_args(args),
+    )
+
+
+def _cmd_write_zero_shot_protocol(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    if not hasattr(dataset, "prompt_rows"):
+        raise TypeError("--dataset-pickle must contain a ZeroShotDataset.")
+    return materialize_zero_shot_protocol(
+        dataset,
+        _store_from_args(args),
+        key=args.output_key,
+    )
+
+
 def _cmd_write_labels(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     return materialize_label_artifact(
@@ -731,6 +966,76 @@ def _cmd_write_retrieval_relevance(args: argparse.Namespace) -> dict[str, Any]:
     }
     _store_from_args(args).put_json(output_key, payload)
     return {"output_key": output_key, **payload}
+
+
+def _cmd_score_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
+    zero_config = (
+        _load_pickle(args.zero_shot_config_pickle)
+        if args.zero_shot_config_pickle
+        else ZeroShotConfig()
+    )
+    if not isinstance(zero_config, ZeroShotConfig):
+        raise TypeError("--zero-shot-config-pickle must contain a ZeroShotConfig.")
+    scoring_config = (
+        _load_pickle(args.scoring_config_pickle)
+        if args.scoring_config_pickle
+        else OverlapScoringConfig()
+    )
+    if not isinstance(scoring_config, OverlapScoringConfig):
+        raise TypeError("--scoring-config-pickle must contain an OverlapScoringConfig.")
+    output_key = args.output_key or zero_shot_scoring_artifact_key(
+        args.sample_embedding_key,
+        args.prompt_embedding_key,
+        args.protocol_key,
+        zero_config,
+        scoring_config,
+    )
+    return score_zero_shot_artifact(
+        ZeroShotScoringJob(
+            sample_embedding_key=args.sample_embedding_key,
+            prompt_embedding_key=args.prompt_embedding_key,
+            protocol_key=args.protocol_key,
+            output_key=output_key,
+            zero_shot_config=zero_config,
+            scoring_config=scoring_config,
+        ),
+        _store_from_args(args),
+    )
+
+
+def _cmd_compress_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
+    config = _load_pickle(args.compression_config_pickle)
+    if not isinstance(config, EmbeddingCompressionConfig):
+        raise TypeError("--compression-config-pickle must contain an EmbeddingCompressionConfig.")
+    prefix = args.output_prefix or zero_shot_compression_artifact_key(
+        args.sample_embedding_key,
+        args.prompt_embedding_key,
+        config,
+    )
+    return compress_zero_shot_embedding_artifacts(
+        ZeroShotCompressionJob(
+            sample_embedding_key=args.sample_embedding_key,
+            prompt_embedding_key=args.prompt_embedding_key,
+            sample_output_key=f"{prefix}/samples",
+            prompt_output_key=f"{prefix}/prompts",
+            compression_config=config,
+            output_key=prefix,
+        ),
+        _store_from_args(args),
+    )
+
+
+def _cmd_zero_shot_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
+    result = zero_shot_benchmark_result_from_artifacts(
+        args.score_key,
+        _store_from_args(args),
+        output_key=args.output_key,
+    )
+    if args.json_output:
+        result.save_json(args.json_output)
+    if args.markdown_output:
+        result.save_markdown(args.markdown_output)
+    return result.to_dict()
 
 
 def _metrics_from_args(args: argparse.Namespace) -> list[CallableMetric]:

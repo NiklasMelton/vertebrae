@@ -186,6 +186,11 @@ Hosted API
 extractors are streaming-safe, but benchmark artifact reuse is only enabled when
 the extractor sets `cache_embeddings=True`.
 
+Text-aligned extractors that expose `encode_retrieval(...)` can also participate in
+the explicit `ZeroShotBenchmark` protocol. Zero-shot evaluation requires separately
+declared sample and text branches in one shared embedding space; it does not infer
+zero-shot capability from an arbitrary pooled extractor output.
+
 `HFMultimodalExtractor` accepts dict inputs keyed by declared field names. For
 common image-text models it maps image fields to processor `images` and text
 fields to processor `text` by default. Use `input_map` or `input_fn` for custom

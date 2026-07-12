@@ -13,7 +13,11 @@ from vertebrae.cache import (
     create_artifact_store_from_config,
 )
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json
-from vertebrae.compression import compress_embedding_artifact_key, compress_embeddings
+from vertebrae.compression import (
+    compress_embedding_artifact_key,
+    compress_embeddings,
+    compression_variant_name,
+)
 from vertebrae.compression.base import _compression_metadata, create_embedding_compressor
 from vertebrae.execution.jobs import (
     CompressionJob,
@@ -60,7 +64,13 @@ def retrieval_embedding_artifact_key(
     """Build the canonical endpoint embedding key for a retrieval dataset."""
     if side not in {"query", "gallery"}:
         raise ValueError("side must be 'query' or 'gallery'.")
-    recipe_hash = fingerprint_extractor_recipe(extractor.recipe())
+    recipe = extractor.recipe()
+    if recipe.get("cache_safe") is False:
+        raise ValueError(
+            "Cannot plan canonical retrieval artifacts for a callable extractor without "
+            "portable callable paths or cache_identity."
+        )
+    recipe_hash = fingerprint_extractor_recipe(recipe)
     branch_key = "default" if branch is None else hash_json({"branch": branch})
     return f"retrieval/embeddings/{dataset.fingerprint()}/{recipe_hash}/{side}/{branch_key}"
 
@@ -1149,16 +1159,7 @@ def _weakest_class(
 
 
 def _variant_extractor_name(name: str, compression_metadata: dict[str, Any]) -> str:
-    method = compression_metadata.get("method", "none")
-    if method == "none":
-        return name
-    precision = compression_metadata.get("precision")
-    if precision:
-        return f"{name}[{method}_{precision}]"
-    compressed_dim = compression_metadata.get("compressed_dim")
-    if compressed_dim is None:
-        return f"{name}[{method}]"
-    return f"{name}[{method}_{compressed_dim}]"
+    return compression_variant_name(name, compression_metadata)
 
 
 def _materialize_embedding_shard_job(
