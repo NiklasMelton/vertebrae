@@ -183,7 +183,8 @@ Current behavior:
 - Regression targets are passed with `target_mode="regression"`.
 - Optional Separatix MLP probes can be enabled with `mlp_probes=True`.
 - The full Separatix report is preserved in JSON outputs, while Markdown reports
-  show a compact recommendation, confidence, decision path, key scores, and skips.
+  show a compact recommendation, confidence, decision path, key scores, probe
+  evidence, evaluation context, and skips.
 
 Separatix follows the same normalization convention as overlap scoring when
 `normalize_embeddings=True`. Sparse inputs remain sparse at the vertebrae boundary,
@@ -192,6 +193,19 @@ and Separatix uses its own densification policy internally.
 Separatix is the only downstream-complexity and probe-style diagnostic path in
 vertebrae. Ranking remains based on overlap scores; Separatix probe fields are
 reported only when the Separatix diagnostic runs and includes them.
+
+`SeparatixResult.probe_summary` normalizes the existing probe evidence without
+fitting another model. It records the best probe, a target-appropriate primary
+metric when Separatix declares one, the complete reported metric map, comparable
+linear/nonlinear evidence, evaluation and sampling context, grouping counts, and
+probe-specific skip reasons. Single-label fallback summaries use Separatix's
+balanced-accuracy baseline contract. Multi-label and regression summaries never
+invent an accuracy value or select an undeclared primary metric.
+
+These fields are descriptive diagnostics. They do not participate in ranking,
+aggregate validity, or vertebrae's benchmark recommendations. Recommendation
+confidence and probe-comparison confidence are reported separately because they
+describe different evidence.
 
 ## Custom embedding metrics
 

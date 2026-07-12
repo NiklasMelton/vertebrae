@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Any, List
 
+from vertebrae.scoring.separatix import probe_summary_for_result
+
 
 def save_markdown_report(result: Any, path: str) -> None:
     """Save a benchmark result as a Markdown report.
@@ -127,18 +129,19 @@ def render_markdown_report(result: Any) -> str:
         "| rank | extractor | extractor_type | target_view | label_view | "
         "primary_metric | primary_score | overlap_score | overlap_macro | "
         "overlap_weighted | stability_interval | "
-        "weakest_class | probe_accuracy | embedding_dim | compression | "
+        "weakest_class | best_probe | probe_metric | probe_score | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | ---: | ---: | "
-        "--- | ---: | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | "
+        "--- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(result.ranked_results(), start=1):
         interval = _format_interval(item.stability)
         weakest = item.weakest_class if item.weakest_class is not None else ""
-        probe_accuracy = _separatix_probe_accuracy(item.separatix)
+        probe = probe_summary_for_result(item.separatix)
+        primary_probe_metric = probe.get("primary_metric") or {}
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
         target_view = (item.target_view or {}).get("name", "primary")
         label_view = (item.label_view or {}).get("name", "primary")
@@ -157,7 +160,9 @@ def render_markdown_report(result: Any) -> str:
             f"{_format_float(item.overlap.macro_score if item.overlap else None)} | "
             f"{_format_float(item.overlap.weighted_score if item.overlap else None)} | "
             f"{interval} | {weakest} | "
-            f"{probe_accuracy} | {embedding_dim} | {compression_method} | "
+            f"{probe.get('best_probe') or ''} | {primary_probe_metric.get('name') or ''} | "
+            f"{_format_float(primary_probe_metric.get('value'))} | "
+            f"{embedding_dim} | {compression_method} | "
             f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
             f"{separatix_confidence} |"
         )
@@ -297,12 +302,75 @@ def render_markdown_report(result: Any) -> str:
         elif not item.separatix.ran:
             lines.append(f"- Skipped: {item.separatix.skipped_reason or ''}")
         else:
+            probe = probe_summary_for_result(item.separatix)
+            primary_probe_metric = probe.get("primary_metric") or {}
+            comparison = probe.get("comparison") or {}
+            evaluation = probe.get("evaluation") or {}
+            sampling = evaluation.get("sampling") or {}
             lines.append(f"- Recommendation: {item.separatix.recommendation or ''}")
-            lines.append(f"- Confidence: {item.separatix.confidence or ''}")
+            lines.append(
+                f"- Recommendation confidence: {item.separatix.confidence or ''}"
+            )
             lines.append(f"- Summary: {(item.separatix.recommendation_text or '').strip()}")
+            lines.append(f"- Probe status: {probe.get('status', '')}")
+            lines.append(f"- Best probe: {probe.get('best_probe') or ''}")
+            if primary_probe_metric:
+                lines.append(
+                    "- Primary probe metric: "
+                    f"{primary_probe_metric.get('name')}="
+                    f"{_format_float(primary_probe_metric.get('value'))}"
+                )
+            if probe.get("skip_reason"):
+                lines.append(f"- Probe unavailable: {probe.get('skip_reason')}")
+            lines.append(f"- Probe evaluation mode: {evaluation.get('mode') or ''}")
+            lines.append(f"- Grouped evaluation: {bool(evaluation.get('grouped', False))}")
+            if evaluation.get("n_groups") is not None:
+                lines.append(f"- Independence groups: {evaluation.get('n_groups')}")
+            if sampling:
+                lines.append(
+                    "- Probe sampling: "
+                    f"sampled={sampling.get('sampled', False)}, "
+                    f"used={sampling.get('n_used', '')}, "
+                    f"original={sampling.get('n_original', '')}"
+                )
+            if probe.get("metrics"):
+                lines.append("")
+                lines.append("| probe metric | value |")
+                lines.append("| --- | ---: |")
+                for key, value in probe["metrics"].items():
+                    lines.append(f"| {key} | {_format_float(value)} |")
+            if comparison:
+                lines.append("")
+                lines.append("- Linear/nonlinear probe comparison:")
+                lines.append(
+                    "  - "
+                    f"{comparison.get('linear_probe', 'linear')}: "
+                    f"{_format_float(comparison.get('linear_value'))}"
+                )
+                lines.append(
+                    "  - "
+                    f"{comparison.get('nonlinear_probe', 'nonlinear')}: "
+                    f"{_format_float(comparison.get('nonlinear_value'))}"
+                )
+                lines.append(
+                    "  - "
+                    f"Delta ({comparison.get('metric', '')}): "
+                    f"{_format_float(comparison.get('delta'))}; "
+                    f"favored family={comparison.get('favored_family', '')}"
+                )
+                if comparison.get("confidence") is not None:
+                    lines.append(
+                        "  - Comparison confidence: "
+                        f"{comparison.get('confidence')}"
+                    )
             mlp = ((item.separatix.report or {}).get("metrics", {}) or {}).get("mlp_probes", {})
             if mlp:
                 lines.append(f"- MLP status: {mlp.get('status', '')}")
+                if mlp.get("reason"):
+                    lines.append(f"- MLP reason: {mlp.get('reason')}")
+                trigger = mlp.get("trigger", {}) or {}
+                if trigger.get("reason"):
+                    lines.append(f"- MLP trigger reason: {trigger.get('reason')}")
                 backend = mlp.get("backend", {})
                 if backend:
                     lines.append(
@@ -355,23 +423,6 @@ def _format_interval(stability: Any) -> str:
         return ""
     summary = stability.get("summary", {})
     return f"{_format_float(summary.get('lower'))}-{_format_float(summary.get('upper'))}"
-
-
-def _separatix_probe_accuracy(separatix: Any) -> str:
-    if not separatix or not getattr(separatix, "ran", False):
-        return ""
-    report = getattr(separatix, "report", None) or {}
-    metrics = report.get("metrics", {})
-    baseline = metrics.get("baseline", {})
-    probes = metrics.get("probes", {})
-    best_probe = baseline.get("best_probe")
-    if not best_probe:
-        return ""
-    best_probe_metrics = probes.get(best_probe, {})
-    accuracy = best_probe_metrics.get("accuracy")
-    if accuracy is None:
-        return ""
-    return _format_float(accuracy)
 
 
 def _alignment_recipe_label(recipe: Any) -> str:

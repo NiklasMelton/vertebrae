@@ -379,6 +379,9 @@ def test_cli_diagnose_complexity_and_benchmark_from_artifacts(
     assert payload["extractor_results"][0]["separatix"]["recommendation"] == (
         "smooth_nonlinear_recommended"
     )
+    assert payload["extractor_results"][0]["separatix"]["probe_summary"]["status"] == (
+        "executed"
+    )
 
 
 def test_cli_materialize_structured_single_output_bundle_supports_scoring(tmp_path, capsys):
