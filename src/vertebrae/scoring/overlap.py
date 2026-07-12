@@ -8,6 +8,7 @@ import numpy as np
 
 from vertebrae.config import ContinuousOverlapScoringConfig, OverlapScoringConfig
 from vertebrae.utils.labels import (
+    MULTI_LABEL_TARGET,
     REGRESSION_TARGET,
     class_counts,
     display_label,
@@ -189,12 +190,24 @@ class OverlapIndexScorer:
         if seed is not None:
             kmeans_kwargs["random_state"] = seed
 
+        backend_k = k_per_class
+        if label_metadata["target_type"] == MULTI_LABEL_TARGET:
+            # OverlapIndex expands indicator targets using their column indices.
+            # Keep semantic label names in vertebrae metadata, but key the backend
+            # mapping by those expanded integer labels.
+            label_names = tuple(label_metadata.get("label_names") or ())
+            backend_k = {
+                index: k_per_class[label]
+                for index, label in enumerate(label_names)
+                if label in k_per_class
+            }
+
         OverlapIndex = _load_overlap_index()
         index = _instantiate_with_supported_kwargs(
             OverlapIndex,
             {
                 "model_type": "MiniBatchKMeans",
-                "kmeans_k": k_per_class,
+                "kmeans_k": backend_k,
                 "kmeans_kwargs": kmeans_kwargs,
                 "offline_chunk_size": config.offline_chunk_size,
                 "exclude_classes": config.exclude_classes,
@@ -215,6 +228,14 @@ class OverlapIndexScorer:
             label for label in observed_classes if not _label_is_excluded(label, excluded_classes)
         ]
         aggregate_valid = bool(included_classes)
+        per_class_scores = getattr(index, "singleton_index", {})
+        pairwise_scores = getattr(index, "pairwise_index", {})
+        if label_metadata["target_type"] == MULTI_LABEL_TARGET:
+            per_class_scores, pairwise_scores = _restore_multilabel_names(
+                per_class_scores,
+                pairwise_scores,
+                tuple(label_metadata.get("label_names") or ()),
+            )
 
         metadata = {
             "backend": "MiniBatchKMeans",
@@ -237,8 +258,8 @@ class OverlapIndexScorer:
             score=macro_score,
             macro_score=macro_score,
             weighted_score=weighted_score,
-            per_class_scores=make_json_safe(getattr(index, "singleton_index", {})),
-            pairwise_scores=make_json_safe(getattr(index, "pairwise_index", {})),
+            per_class_scores=make_json_safe(per_class_scores),
+            pairwise_scores=make_json_safe(pairwise_scores),
             sparse_adjacency=make_json_safe(getattr(index, "sparse_adj", None)),
             class_counts=summary["class_counts"],
             k_per_class=k_per_class,
@@ -364,6 +385,29 @@ def _lookup_class_k(configured: Dict[Any, int], label: Any) -> int:
     if label_str in configured:
         return int(configured[label_str])
     raise ValueError(f"Missing k value for class {display_label(label)}.")
+
+
+def _restore_multilabel_names(
+    per_class_scores: Dict[Any, Any],
+    pairwise_scores: Dict[Any, Any],
+    label_names: Tuple[Any, ...],
+) -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
+    def restore(label: Any) -> Any:
+        value = label.item() if hasattr(label, "item") else label
+        if isinstance(value, str) and value.isdigit():
+            value = int(value)
+        if isinstance(value, int) and 0 <= value < len(label_names):
+            return label_names[value]
+        return value
+
+    restored_per_class = {restore(label): score for label, score in per_class_scores.items()}
+    restored_pairwise = {}
+    for pair, score in pairwise_scores.items():
+        if isinstance(pair, tuple) and len(pair) == 2:
+            restored_pairwise[(restore(pair[0]), restore(pair[1]))] = score
+        else:
+            restored_pairwise[pair] = score
+    return restored_per_class, restored_pairwise
 
 
 def _load_overlap_index() -> Any:

@@ -33,7 +33,7 @@ Each script writes reports to `examples/output/`.
 - `precomputed_embeddings.py`: evaluate embeddings that were already generated
   elsewhere.
 - `multilabel_precomputed_embeddings.py`: evaluate precomputed embeddings against
-  a small multi-label classification target.
+  a small multi-label classification target and write JSON/Markdown reports.
 - `relational_embeddings.py`: evaluate graph node and edge embeddings through the
   same overlap-based transfer-learning diagnostics as other precomputed
   embeddings. This is not a graph-link, retrieval, or ranking benchmark.

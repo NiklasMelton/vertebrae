@@ -43,11 +43,8 @@ def test_overlap_scorer_passes_multilabel_indicator_targets(fake_overlapindex):
     assert result.metadata["target_type"] == "multi_label"
     assert result.metadata["label_names"] == ("red", "round", "sweet")
     assert result.class_counts == {"red": 3, "round": 3, "sweet": 3}
-    assert fake_overlapindex.calls[-1]["kmeans_k"] == {
-        "red": 2,
-        "round": 2,
-        "sweet": 2,
-    }
+    assert set(result.per_class_scores) == {"red", "round", "sweet"}
+    assert fake_overlapindex.calls[-1]["kmeans_k"] == {0: 2, 1: 2, 2: 2}
     assert fake_overlapindex.calls[-1]["fit_y_shape"] == [6, 3]
     assert fake_overlapindex.calls[-1]["fit_y"].tolist() == [
         [1, 1, 0],

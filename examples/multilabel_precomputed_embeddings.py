@@ -1,6 +1,7 @@
 """Evaluate precomputed embeddings for a multi-label classification dataset."""
 
 import numpy as np
+from _common import ensure_output_dir
 
 from vertebrae import CacheConfig, Evaluator, StabilityConfig
 from vertebrae.datasets import BenchmarkDataset
@@ -44,7 +45,11 @@ def main() -> None:
         cache_config=CacheConfig(enabled=False),
     ).run()
 
+    output_dir = ensure_output_dir()
+    result.save_json(str(output_dir / "multilabel_precomputed_embeddings.json"))
+    result.save_markdown(str(output_dir / "multilabel_precomputed_embeddings.md"))
     print(result.to_dataframe())
+    print(f"\nReports written to {output_dir}")
 
 
 if __name__ == "__main__":
