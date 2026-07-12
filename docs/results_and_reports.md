@@ -127,9 +127,23 @@ retrieval, recommender, or ranking benchmark reports.
 
 Separatix is the default classifier-complexity diagnostic when the overlap gate
 passes, including multi-label datasets. Probe-style report columns are derived
-from Separatix baseline probe metrics when present. When Separatix MLP probes are
-enabled, JSON outputs preserve the full trigger and comparison payload and
-Markdown reports summarize the MLP status.
+from Separatix baseline probe metrics when present. Tabular results expose
+`probe_metric` and `probe_score` only when the diagnostic declares a suitable
+primary metric, plus the best probe, complete metric map, linear/nonlinear
+comparison, evaluation mode, sampling, grouping context, and skip reason. There
+is intentionally no universal `probe_accuracy` column because it is misleading
+for regression and incomplete for multi-label diagnostics.
+
+JSON outputs preserve both the normalized `probe_summary` and the complete raw
+Separatix report. Markdown ranking tables show the compact best-probe metric while
+per-extractor details show the full descriptive context. When Separatix MLP probes
+are enabled, their trigger, status, reason, and comparison payload remain separate
+from the ordinary baseline probe summary.
+
+`probe_summary` is required in the current alpha result contract. Serialized
+artifacts created before this field was introduced are not backward compatible and
+are not reconstructed from the raw Separatix report. The raw report remains
+available for detailed evidence and reproducibility, not as a legacy result schema.
 
 ## What recommendations mean
 

@@ -7,7 +7,11 @@ from scipy import sparse
 from vertebrae import BenchmarkDataset, Evaluator, SeparatixConfig
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
-from vertebrae.scoring.separatix import SeparatixScorer
+from vertebrae.scoring.separatix import (
+    SeparatixScorer,
+    probe_summary_for_result,
+    summarize_probe_diagnostics,
+)
 
 
 def test_separatix_config_validates_threshold_and_limits():
@@ -76,6 +80,8 @@ def test_separatix_scorer_passes_groups_without_serializing_ids(fake_separatix):
     assert call["groups"].tolist() == groups.tolist()
     assert result.metadata["grouped"] is True
     assert result.metadata["n_groups"] == 4
+    assert result.probe_summary["evaluation"]["grouped"] is True
+    assert result.probe_summary["evaluation"]["n_groups"] == 4
     assert "image-a" not in json.dumps(result.to_dict())
 
 
@@ -106,6 +112,8 @@ def test_separatix_scorer_passes_regression_target_mode_and_mlp_settings(fake_se
     assert call["mlp_probes"] is True
     assert call["mlp_max_parameters"] == 1000
     assert result.report["metrics"]["mlp_probes"]["status"] == "executed"
+    assert result.probe_summary["primary_metric"] == {"name": "r2", "value": 0.84}
+    assert result.probe_summary["metrics"] == {"r2": 0.84, "mae": 0.11, "rmse": 0.15}
 
 
 def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapindex):
@@ -137,6 +145,7 @@ def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapi
     assert skipped_item.separatix is not None
     assert skipped_item.separatix.ran is False
     assert "below the configured threshold" in (skipped_item.separatix.skipped_reason or "")
+    assert skipped_item.separatix.probe_summary["status"] == "skipped"
     assert bool(frame.loc[0, "separatix_ran"]) is True
     assert frame.loc[0, "separatix_recommendation"] == "smooth_nonlinear_recommended"
     assert frame.loc[0, "separatix_confidence"] == "high"
@@ -168,13 +177,17 @@ def test_reports_include_separatix_content(tmp_path, fake_overlapindex):
     assert extractor_payload["separatix"]["report"]["recommendation"] == (
         "smooth_nonlinear_recommended"
     )
+    assert extractor_payload["separatix"]["probe_summary"]["primary_metric"] == {
+        "name": "balanced_accuracy",
+        "value": 0.89,
+    }
     assert "Separatix complexity diagnostic" in markdown
     assert "smooth_nonlinear_recommended" in markdown
     assert "Probe signal is strong." in markdown
     assert "| 0.9100 |" in markdown
 
 
-def test_dataframe_probe_accuracy_comes_from_separatix(fake_overlapindex):
+def test_dataframe_uses_target_appropriate_separatix_probe_fields(fake_overlapindex):
     rng = np.random.default_rng(2)
     embeddings = np.vstack(
         [
@@ -197,7 +210,17 @@ def test_dataframe_probe_accuracy_comes_from_separatix(fake_overlapindex):
     frame = result.to_dataframe()
     assert item.separatix is not None
     assert item.separatix.ran is True
-    assert frame.loc[0, "probe_accuracy"] not in ("", None)
+    assert "probe_accuracy" not in frame.columns
+    assert frame.loc[0, "probe_status"] == "executed"
+    assert frame.loc[0, "best_probe"] == "smooth_poly"
+    assert frame.loc[0, "probe_metric"] == "balanced_accuracy"
+    assert frame.loc[0, "probe_score"] == 0.89
+    assert frame.loc[0, "probe_metrics"]["accuracy"] == 0.91
+    assert frame.loc[0, "probe_linear_score"] == 0.82
+    assert frame.loc[0, "probe_nonlinear_score"] == 0.89
+    assert frame.loc[0, "probe_nonlinear_delta"] == pytest.approx(0.07)
+    assert frame.loc[0, "probe_evaluation_mode"] == "cross_validation"
+    assert bool(frame.loc[0, "probe_sampled"]) is False
 
 
 def test_multilabel_benchmark_runs_separatix(
@@ -241,7 +264,16 @@ def test_multilabel_benchmark_runs_separatix(
     assert item.separatix.ran is True
     assert item.separatix.metadata["target_type"] == "multi_label"
     assert frame.loc[0, "target_type"] == "multi_label"
+    assert frame.loc[0, "probe_metric"] == "macro_f1"
+    assert frame.loc[0, "probe_score"] == 0.82
+    assert frame.loc[0, "probe_metrics"] == {
+        "micro_f1": 0.86,
+        "macro_f1": 0.82,
+        "sample_jaccard": 0.77,
+    }
+    assert "accuracy" not in frame.loc[0, "probe_metrics"]
     assert "Target type: multi_label" in markdown
+    assert "| macro_f1 | 0.8200 |" in markdown
 
 
 def test_regression_benchmark_uses_regression_threshold(
@@ -292,3 +324,39 @@ def test_reports_include_separatix_mlp_status(tmp_path, fake_overlapindex):
 
     assert "MLP status" in markdown
     assert "executed" in markdown
+    assert "MLP reason" in markdown
+
+
+def test_disabled_separatix_has_probe_summary_without_result():
+    summary = probe_summary_for_result(None)
+
+    assert summary["status"] == "disabled"
+    assert summary["best_probe"] is None
+    assert summary["skip_reason"] == "Separatix diagnostics were disabled."
+
+
+def test_multilabel_summary_does_not_invent_primary_metric():
+    summary = summarize_probe_diagnostics(
+        {
+            "metrics": {
+                "baseline": {"best_probe": "linear", "best_probe_score": 0.72},
+                "probes": {
+                    "linear": {
+                        "micro_f1": 0.76,
+                        "macro_f1": 0.72,
+                        "sample_jaccard": 0.65,
+                    }
+                },
+            }
+        },
+        target_type="multi_label",
+        grouped=False,
+        n_groups=None,
+    )
+
+    assert summary["primary_metric"] is None
+    assert summary["metrics"] == {
+        "micro_f1": 0.76,
+        "macro_f1": 0.72,
+        "sample_jaccard": 0.65,
+    }

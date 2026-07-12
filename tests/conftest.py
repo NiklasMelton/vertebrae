@@ -154,6 +154,57 @@ def _build_fake_mlp_payload(X, kwargs):
 def _build_fake_separatix_payload(X, y, kwargs):
     label_summary = _fake_class_summary(y)
     mlp_payload = _build_fake_mlp_payload(X, kwargs)
+    target_mode = kwargs.get("target_mode", "singlelabel")
+    if target_mode == "multilabel":
+        probe_scores = {
+            "dummy": {"micro_f1": 0.30, "macro_f1": 0.20, "sample_jaccard": 0.10},
+            "linear": {"micro_f1": 0.78, "macro_f1": 0.74, "sample_jaccard": 0.68},
+            "knn": {"micro_f1": 0.76, "macro_f1": 0.72, "sample_jaccard": 0.66},
+            "smooth_poly": {
+                "micro_f1": 0.86,
+                "macro_f1": 0.82,
+                "sample_jaccard": 0.77,
+            },
+            "kernel_approx": {
+                "micro_f1": 0.83,
+                "macro_f1": 0.79,
+                "sample_jaccard": 0.73,
+            },
+        }
+        best_probe_metric = "macro_f1"
+    elif target_mode == "regression":
+        probe_scores = {
+            "dummy": {"r2": 0.0, "mae": 0.30, "rmse": 0.35},
+            "linear": {"r2": 0.71, "mae": 0.16, "rmse": 0.20},
+            "knn": {"r2": 0.68, "mae": 0.18, "rmse": 0.22},
+            "smooth_poly": {"r2": 0.84, "mae": 0.11, "rmse": 0.15},
+            "kernel_approx": {"r2": 0.80, "mae": 0.13, "rmse": 0.17},
+        }
+        best_probe_metric = "r2"
+    else:
+        probe_scores = {
+            "dummy": {"accuracy": 0.50, "balanced_accuracy": 0.50, "macro_f1": 0.33},
+            "linear": {"accuracy": 0.83, "balanced_accuracy": 0.82, "macro_f1": 0.82},
+            "knn": {"accuracy": 0.79, "balanced_accuracy": 0.78, "macro_f1": 0.78},
+            "smooth_poly": {
+                "accuracy": 0.91,
+                "balanced_accuracy": 0.89,
+                "macro_f1": 0.89,
+            },
+            "kernel_approx": {
+                "accuracy": 0.87,
+                "balanced_accuracy": 0.86,
+                "macro_f1": 0.86,
+            },
+        }
+        best_probe_metric = None
+    for probe in probe_scores.values():
+        probe["evaluation_mode"] = "cross_validation"
+        probe["sample_info"] = {
+            "sampled": False,
+            "n_original": int(X.shape[0]),
+            "n_used": int(X.shape[0]),
+        }
     return {
         "recommendation": "smooth_nonlinear_recommended",
         "recommendation_text": "Recommendation: smooth nonlinear boundary.",
@@ -161,36 +212,13 @@ def _build_fake_separatix_payload(X, y, kwargs):
         "metrics": {
             "audit": {"n_samples": int(X.shape[0]), "n_features": int(X.shape[1])},
             "geometry": {},
-            "probes": {
-                "dummy": {
-                    "accuracy": 0.50,
-                    "balanced_accuracy": 0.50,
-                    "macro_f1": 0.33,
-                },
-                "linear": {
-                    "accuracy": 0.83,
-                    "balanced_accuracy": 0.82,
-                    "macro_f1": 0.82,
-                },
-                "knn": {
-                    "accuracy": 0.79,
-                    "balanced_accuracy": 0.78,
-                    "macro_f1": 0.78,
-                },
-                "smooth_poly": {
-                    "accuracy": 0.91,
-                    "balanced_accuracy": 0.89,
-                    "macro_f1": 0.89,
-                },
-                "kernel_approx": {
-                    "accuracy": 0.87,
-                    "balanced_accuracy": 0.86,
-                    "macro_f1": 0.86,
-                },
-            },
+            "probes": probe_scores,
             "baseline": {
                 "best_probe": "smooth_poly",
-                "best_probe_score": 0.89,
+                "best_probe_score": probe_scores["smooth_poly"][
+                    best_probe_metric or "balanced_accuracy"
+                ],
+                **({"best_probe_metric": best_probe_metric} if best_probe_metric else {}),
             },
             "neighborhood": {},
             "boundary": {},

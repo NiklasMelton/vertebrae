@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from vertebrae.scoring.metrics import MetricResult
-from vertebrae.scoring.separatix import SeparatixResult
+from vertebrae.scoring.separatix import SeparatixResult, probe_summary_for_result
 from vertebrae.utils.serialization import make_json_safe
 
 
@@ -121,6 +121,11 @@ class BenchmarkResult:
 
         rows = []
         for rank, item in enumerate(self.ranked_results(), start=1):
+            probe = probe_summary_for_result(item.separatix)
+            primary_probe_metric = probe.get("primary_metric") or {}
+            comparison = probe.get("comparison") or {}
+            evaluation = probe.get("evaluation") or {}
+            sampling = evaluation.get("sampling") or {}
             rows.append(
                 {
                     "rank": rank,
@@ -138,9 +143,22 @@ class BenchmarkResult:
                     "label_view": (item.label_view or {}).get("name"),
                     "weakest_class": item.weakest_class,
                     "weakest_class_score": item.weakest_class_score,
-                    "probe_metric": _separatix_probe_metric_name(item.separatix),
-                    "probe_score": _separatix_probe_accuracy(item.separatix),
-                    "probe_accuracy": _separatix_probe_accuracy(item.separatix),
+                    "probe_status": probe.get("status"),
+                    "best_probe": probe.get("best_probe"),
+                    "probe_metric": primary_probe_metric.get("name"),
+                    "probe_score": primary_probe_metric.get("value"),
+                    "probe_metrics": probe.get("metrics", {}),
+                    "probe_linear_score": comparison.get("linear_value"),
+                    "probe_nonlinear_score": comparison.get("nonlinear_value"),
+                    "probe_nonlinear_delta": comparison.get("delta"),
+                    "probe_comparison_confidence": comparison.get("confidence"),
+                    "probe_evaluation_mode": evaluation.get("mode"),
+                    "probe_sampled": sampling.get("sampled"),
+                    "probe_n_samples_original": sampling.get("n_original"),
+                    "probe_n_samples_used": sampling.get("n_used"),
+                    "probe_grouped": evaluation.get("grouped"),
+                    "probe_n_groups": evaluation.get("n_groups"),
+                    "probe_skip_reason": probe.get("skip_reason"),
                     "embedding_dim": item.embedding_metadata.get("embedding_dim"),
                     "task_family": (item.embedding_metadata.get("structured", {}) or {}).get(
                         "task_family"
@@ -163,6 +181,9 @@ class BenchmarkResult:
                         item.separatix.recommendation if item.separatix else None
                     ),
                     "separatix_confidence": (item.separatix.confidence if item.separatix else None),
+                    "separatix_skip_reason": (
+                        item.separatix.skipped_reason if item.separatix else None
+                    ),
                 }
             )
         return pd.DataFrame(rows)
@@ -195,26 +216,3 @@ def _result_target_metadata(item: ExtractorResult) -> Dict[str, Any]:
     if item.overlap is not None:
         return item.overlap.metadata
     return _primary_metric(item).metadata
-
-
-def _separatix_probe_accuracy(separatix: Optional[SeparatixResult]) -> Optional[float]:
-    if not separatix or not separatix.ran:
-        return None
-    report = separatix.report or {}
-    metrics = report.get("metrics", {})
-    baseline = metrics.get("baseline", {})
-    probes = metrics.get("probes", {})
-    best_probe = baseline.get("best_probe")
-    if not best_probe:
-        return None
-    best_probe_metrics = probes.get(best_probe, {})
-    accuracy = best_probe_metrics.get("accuracy")
-    if accuracy is None:
-        return None
-    return float(accuracy)
-
-
-def _separatix_probe_metric_name(separatix: Optional[SeparatixResult]) -> Optional[str]:
-    if _separatix_probe_accuracy(separatix) is None:
-        return None
-    return "accuracy"
