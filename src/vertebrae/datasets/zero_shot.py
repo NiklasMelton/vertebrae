@@ -169,8 +169,10 @@ class ZeroShotDataset:
             value is not None for value in template_presence
         ):
             raise ValueError("template_ids must be supplied for every class or for no classes.")
-        if template_presence and template_presence[0] is not None and any(
-            value != template_presence[0] for value in template_presence
+        if (
+            template_presence
+            and template_presence[0] is not None
+            and any(value != template_presence[0] for value in template_presence)
         ):
             raise ValueError(
                 "Template-generated zero-shot classes must share the same template IDs."

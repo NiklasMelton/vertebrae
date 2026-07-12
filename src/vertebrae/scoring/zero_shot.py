@@ -51,8 +51,7 @@ class ZeroShotScoreResult:
         coherence = diagnostics.get("prompt_coherence")
         if isinstance(coherence, dict):
             diagnostics["prompt_coherence"] = {
-                label_key(label): portable_json(metrics)
-                for label, metrics in coherence.items()
+                label_key(label): portable_json(metrics) for label, metrics in coherence.items()
             }
         worst_samples = diagnostics.get("worst_samples")
         if isinstance(worst_samples, list):
@@ -315,9 +314,11 @@ def _classification_metrics(
         }
         for index, label in enumerate(classes)
     }
-    matrix = confusion_matrix(
-        target_indices, predicted_indices, labels=encoded_classes
-    ).astype(int).tolist()
+    matrix = (
+        confusion_matrix(target_indices, predicted_indices, labels=encoded_classes)
+        .astype(int)
+        .tolist()
+    )
     return metrics, per_class, matrix
 
 

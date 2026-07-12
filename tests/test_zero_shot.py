@@ -134,9 +134,7 @@ def test_zero_shot_dataset_requires_explicit_complete_prompts():
     with pytest.raises(ValueError, match="exactly"):
         ZeroShotDataset.from_dataset(dataset, {"left": "left label"})
     with pytest.raises(ValueError, match="unique"):
-        ZeroShotDataset.from_dataset(
-            dataset, {"left": "same", "right": "same"}
-        )
+        ZeroShotDataset.from_dataset(dataset, {"left": "same", "right": "same"})
     protocol = ZeroShotDataset.from_templates(
         dataset,
         ["a photo of {label}", "a close-up of {label}"],
@@ -155,9 +153,7 @@ def test_zero_shot_protocol_and_evaluation_identities_hash_complete_content():
     )
     left_prompts = [f"left prompt {index}" for index in range(101)]
     right_prompts = [f"right prompt {index}" for index in range(101)]
-    first = ZeroShotDataset.from_dataset(
-        dataset, {"left": left_prompts, "right": right_prompts}
-    )
+    first = ZeroShotDataset.from_dataset(dataset, {"left": left_prompts, "right": right_prompts})
     changed_prompts = list(left_prompts)
     changed_prompts[-1] = "left changed after the sampled-hash truncation boundary"
     second = ZeroShotDataset.from_dataset(
@@ -417,9 +413,7 @@ def test_zero_shot_protocol_artifact_tampering_is_rejected(tmp_path, fake_overla
 
 
 @pytest.mark.parametrize("encoding", [None, "vertebrae.semantic-label/v0"])
-def test_zero_shot_protocol_requires_current_label_encoding(
-    tmp_path, fake_overlapindex, encoding
-):
+def test_zero_shot_protocol_requires_current_label_encoding(tmp_path, fake_overlapindex, encoding):
     dataset = BenchmarkDataset.from_arrays(
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
@@ -665,97 +659,115 @@ def test_zero_shot_cli_round_trip(tmp_path, fake_overlapindex):
     plan_path = tmp_path / "plan.json"
     cache_dir = tmp_path / "cache"
     common = ["--cache-dir", str(cache_dir)]
-    assert main(
-        [
-            "plan-zero-shot",
-            "--dataset-pickle",
-            str(dataset_path),
-            "--extractor-pickle",
-            str(extractor_path),
-            "--total-shards",
-            "1",
-            "--sample-branch",
-            "query",
-            "--text-branch",
-            "gallery",
-            "--output-json",
-            str(plan_path),
-            *common,
-        ]
-    ) == 0
-    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    for side in ("samples", "prompts"):
-        assert main(
+    assert (
+        main(
             [
-                "embed-zero-shot-shard",
+                "plan-zero-shot",
                 "--dataset-pickle",
                 str(dataset_path),
                 "--extractor-pickle",
                 str(extractor_path),
-                "--side",
-                side,
-                "--branch",
-                plan["endpoints"][side]["branch"],
                 "--total-shards",
                 "1",
-                "--shard-index",
-                "0",
-                *common,
-            ]
-        ) == 0
-        assert main(
-            [
-                "merge-zero-shot-embeddings",
-                "--plan-json",
+                "--sample-branch",
+                "query",
+                "--text-branch",
+                "gallery",
+                "--output-json",
                 str(plan_path),
-                "--side",
-                side,
                 *common,
             ]
-        ) == 0
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    for side in ("samples", "prompts"):
+        assert (
+            main(
+                [
+                    "embed-zero-shot-shard",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--side",
+                    side,
+                    "--branch",
+                    plan["endpoints"][side]["branch"],
+                    "--total-shards",
+                    "1",
+                    "--shard-index",
+                    "0",
+                    *common,
+                ]
+            )
+            == 0
+        )
+        assert (
+            main(
+                [
+                    "merge-zero-shot-embeddings",
+                    "--plan-json",
+                    str(plan_path),
+                    "--side",
+                    side,
+                    *common,
+                ]
+            )
+            == 0
+        )
     protocol_path = tmp_path / "protocol.json"
-    assert main(
-        [
-            "write-zero-shot-protocol",
-            "--dataset-pickle",
-            str(dataset_path),
-            "--output-json",
-            str(protocol_path),
-            *common,
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "write-zero-shot-protocol",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--output-json",
+                str(protocol_path),
+                *common,
+            ]
+        )
+        == 0
+    )
     protocol_key = json.loads(protocol_path.read_text(encoding="utf-8"))["output_key"]
     score_path = tmp_path / "score.json"
-    assert main(
-        [
-            "score-zero-shot",
-            "--sample-embedding-key",
-            plan["endpoints"]["samples"]["output_key"],
-            "--prompt-embedding-key",
-            plan["endpoints"]["prompts"]["output_key"],
-            "--protocol-key",
-            protocol_key,
-            "--output-json",
-            str(score_path),
-            *common,
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "score-zero-shot",
+                "--sample-embedding-key",
+                plan["endpoints"]["samples"]["output_key"],
+                "--prompt-embedding-key",
+                plan["endpoints"]["prompts"]["output_key"],
+                "--protocol-key",
+                protocol_key,
+                "--output-json",
+                str(score_path),
+                *common,
+            ]
+        )
+        == 0
+    )
     score = json.loads(score_path.read_text(encoding="utf-8"))
     assert score["zero_shot"]["metrics"]["accuracy"] == 1.0
     reconstructed_json = tmp_path / "reconstructed.json"
     reconstructed_markdown = tmp_path / "reconstructed.md"
-    assert main(
-        [
-            "zero-shot-from-artifacts",
-            "--score-key",
-            score["output_key"],
-            "--json-output",
-            str(reconstructed_json),
-            "--markdown-output",
-            str(reconstructed_markdown),
-            *common,
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "zero-shot-from-artifacts",
+                "--score-key",
+                score["output_key"],
+                "--json-output",
+                str(reconstructed_json),
+                "--markdown-output",
+                str(reconstructed_markdown),
+                *common,
+            ]
+        )
+        == 0
+    )
     assert json.loads(reconstructed_json.read_text(encoding="utf-8"))["extractor_results"]
     assert "semantic text alignment" in reconstructed_markdown.read_text(encoding="utf-8")
 
@@ -770,11 +782,14 @@ def test_zero_shot_planning_caps_endpoint_shards_and_cli_uses_plan(tmp_path):
     extractor = CallableRetrievalExtractor(
         "aligned", _cli_query, _cli_gallery, query_modality="image", gallery_modality="text"
     )
-    assert len(
-        plan_zero_shot_embedding_shard_jobs(
-            protocol, extractor, 4, side="samples", branch="query"
+    assert (
+        len(
+            plan_zero_shot_embedding_shard_jobs(
+                protocol, extractor, 4, side="samples", branch="query"
+            )
         )
-    ) == 4
+        == 4
+    )
     prompts = plan_zero_shot_embedding_shard_jobs(
         protocol, extractor, 4, side="prompts", branch="gallery"
     )
@@ -783,24 +798,50 @@ def test_zero_shot_planning_caps_endpoint_shards_and_cli_uses_plan(tmp_path):
     dataset_path.write_bytes(pickle.dumps(protocol))
     extractor_path.write_bytes(pickle.dumps(extractor))
     plan_path, cache_dir = tmp_path / "plan.json", tmp_path / "cache"
-    assert main(
-        [
-            "plan-zero-shot", "--dataset-pickle", str(dataset_path), "--extractor-pickle",
-            str(extractor_path), "--total-shards", "4", "--sample-branch", "query",
-            "--text-branch", "gallery", "--output-json", str(plan_path), "--cache-dir",
-            str(cache_dir),
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "plan-zero-shot",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--total-shards",
+                "4",
+                "--sample-branch",
+                "query",
+                "--text-branch",
+                "gallery",
+                "--output-json",
+                str(plan_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
     plan = json.loads(plan_path.read_text())
     for entry in plan["endpoints"]["prompts"]["shards"]:
-        assert main(
-            [
-                "embed-zero-shot-shard", "--dataset-pickle", str(dataset_path),
-                "--extractor-pickle",
-                str(extractor_path), "--side", "prompts", "--plan-json", str(plan_path),
-                "--shard-index", str(entry["shard"]["shard_index"]), "--cache-dir", str(cache_dir),
-            ]
-        ) == 0
+        assert (
+            main(
+                [
+                    "embed-zero-shot-shard",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--side",
+                    "prompts",
+                    "--plan-json",
+                    str(plan_path),
+                    "--shard-index",
+                    str(entry["shard"]["shard_index"]),
+                    "--cache-dir",
+                    str(cache_dir),
+                ]
+            )
+            == 0
+        )
 
 
 def test_zero_shot_callable_cache_identity_and_candidate_branches(tmp_path, fake_overlapindex):
@@ -826,11 +867,17 @@ def test_zero_shot_callable_cache_identity_and_candidate_branches(tmp_path, fake
     second_key = zero_shot_embedding_artifact_key(protocol, second, "samples", "query")
     assert first_key != second_key
     unsafe = CallableRetrievalExtractor(
-        "unsafe", lambda values: _cli_query(values), lambda values: _cli_gallery(values),
-        query_modality="image", gallery_modality="text",
+        "unsafe",
+        lambda values: _cli_query(values),
+        lambda values: _cli_gallery(values),
+        query_modality="image",
+        gallery_modality="text",
     )
     run = ZeroShotBenchmark(
-        protocol, [unsafe], sample_branch="query", text_branch="gallery",
+        protocol,
+        [unsafe],
+        sample_branch="query",
+        text_branch="gallery",
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
     assert not run.extractor_results[0].cache_metadata["samples"]["enabled"]
@@ -841,16 +888,26 @@ def test_zero_shot_callable_cache_identity_and_candidate_branches(tmp_path, fake
     with pytest.raises(ValueError, match="cache_identity"):
         zero_shot_embedding_artifact_key(protocol, unsafe, "samples", "query")
     restored = CallableRetrievalExtractor(
-        "restored", lambda values: _cli_query(values), lambda values: _cli_gallery(values),
-        query_modality="image", gallery_modality="text", cache_identity="restored-v1",
+        "restored",
+        lambda values: _cli_query(values),
+        lambda values: _cli_gallery(values),
+        query_modality="image",
+        gallery_modality="text",
+        cache_identity="restored-v1",
     )
     assert restored.recipe()["cache_safe"]
     first_run = ZeroShotBenchmark(
-        protocol, [restored], sample_branch="query", text_branch="gallery",
+        protocol,
+        [restored],
+        sample_branch="query",
+        text_branch="gallery",
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
     second_run = ZeroShotBenchmark(
-        protocol, [restored], sample_branch="query", text_branch="gallery",
+        protocol,
+        [restored],
+        sample_branch="query",
+        text_branch="gallery",
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
     assert not first_run.extractor_results[0].cache_metadata["samples"]["hit"]
@@ -903,9 +960,7 @@ def test_zero_shot_protocol_provenance_variants_and_sample_ids(tmp_path, fake_ov
     assert metadata_by_name["aligned[pca_3]"]["compressed_dim"] == 2
     assert not metadata_by_name["aligned[pca_2]"]["applied"]
     assert not metadata_by_name["aligned[pca_3]"]["applied"]
-    sample_id = result.extractor_results[0].zero_shot.diagnostics["worst_samples"][0][
-        "sample_id"
-    ]
+    sample_id = result.extractor_results[0].zero_shot.diagnostics["worst_samples"][0]["sample_id"]
     assert sample_id in {10, 11, 20, 21}
     json_path, markdown_path = tmp_path / "result.json", tmp_path / "result.md"
     result.save_json(str(json_path))
@@ -914,8 +969,11 @@ def test_zero_shot_protocol_provenance_variants_and_sample_ids(tmp_path, fake_ov
     assert "look at left" not in markdown_path.read_text()
     with pytest.raises(ValueError, match="one-dimensional"):
         ZeroShotScorer().score(
-            np.ones((2, 2)), np.ones((2, 2)), [["left"], ["right"]],
-            class_labels=["left", "right"], prompt_labels=["left", "right"],
+            np.ones((2, 2)),
+            np.ones((2, 2)),
+            [["left"], ["right"]],
+            class_labels=["left", "right"],
+            prompt_labels=["left", "right"],
         )
 
 

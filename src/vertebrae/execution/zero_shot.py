@@ -25,9 +25,7 @@ from vertebrae.utils.semantic_labels import LABEL_ENCODING, portable_json, valid
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
-def zero_shot_embedding_artifact_key(
-    dataset: Any, extractor: Any, side: str, branch: str
-) -> str:
+def zero_shot_embedding_artifact_key(dataset: Any, extractor: Any, side: str, branch: str) -> str:
     """Build a stable endpoint key while allowing sample artifacts to be prompt-reused."""
 
     if side not in {"samples", "prompts"}:
@@ -380,9 +378,7 @@ def score_zero_shot_artifacts(
 ) -> list[dict]:
     """Submit independent zero-shot scoring jobs through local, Ray, or Dask execution."""
 
-    return execution.map(
-        partial(_score_zero_shot_artifact_job, store_config=store.config()), jobs
-    )
+    return execution.map(partial(_score_zero_shot_artifact_job, store_config=store.config()), jobs)
 
 
 def _score_zero_shot_artifact_job(
@@ -656,9 +652,10 @@ def _validate_protocol_artifact(protocol: dict) -> None:
     computed_fingerprint = hash_json_exact(identity_recipe)
     if not declared_fingerprint or computed_fingerprint != declared_fingerprint:
         raise ValueError("Zero-shot protocol recipe fingerprint does not match its content.")
-    if protocol.get("protocol_fingerprint") != computed_fingerprint or protocol.get(
-        "dataset_fingerprint"
-    ) != computed_fingerprint:
+    if (
+        protocol.get("protocol_fingerprint") != computed_fingerprint
+        or protocol.get("dataset_fingerprint") != computed_fingerprint
+    ):
         raise ValueError("Zero-shot protocol manifest fingerprint does not match its recipe.")
     expected = {
         "label_encoding": recipe.get("label_encoding"),

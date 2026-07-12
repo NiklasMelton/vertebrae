@@ -106,10 +106,7 @@ def portable_json(value: Any) -> Any:
     if isinstance(value, (set, frozenset)):
         return exact_json_value(value)
     if isinstance(value, Mapping):
-        return {
-            _portable_mapping_key(key): portable_json(item)
-            for key, item in value.items()
-        }
+        return {_portable_mapping_key(key): portable_json(item) for key, item in value.items()}
     if hasattr(value, "tocoo"):
         coo = value.tocoo()
         return {

@@ -87,9 +87,9 @@ class ZeroShotBenchmarkResult:
                     **item.zero_shot.metrics,
                     "overlap_score": item.overlap.score,
                     "overlap_macro": item.overlap.macro_score,
-                    "correct_class_margin": item.zero_shot.diagnostics[
-                        "correct_class_margin"
-                    ]["mean"],
+                    "correct_class_margin": item.zero_shot.diagnostics["correct_class_margin"][
+                        "mean"
+                    ],
                     "compression_method": item.compression_metadata.get("method", "none"),
                     "compressed_dim": item.compression_metadata.get("compressed_dim"),
                 }
@@ -165,9 +165,7 @@ class ZeroShotBenchmark:
         if not self.extractors:
             raise ValueError("ZeroShotBenchmark requires at least one extractor.")
         store = (
-            create_artifact_store(
-                self.cache_config.cache_dir, **self.cache_config.storage_options
-            )
+            create_artifact_store(self.cache_config.cache_dir, **self.cache_config.storage_options)
             if self.cache_config.enabled
             else None
         )
