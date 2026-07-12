@@ -168,7 +168,13 @@ def test_diabetes_regression_real_continuous_overlap(tmp_path):
     data = load_diabetes()
     X = data.data.astype(np.float32)
     y = data.target.astype(np.float32)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular", target_type="regression")
+    dataset = BenchmarkDataset.from_arrays(
+        X,
+        y,
+        modality="tabular",
+        target_type="regression",
+        target_names=["target"],
+    )
 
     result = Benchmark(
         dataset,
@@ -199,8 +205,8 @@ def test_diabetes_regression_real_continuous_overlap(tmp_path):
     assert item.overlap.metadata["target_type"] == "regression"
     assert np.isfinite(item.overlap.score)
     assert 0.0 <= item.overlap.score <= 1.0
-    assert item.overlap.metadata["target_names"] == ["target"]
-    assert item.weakest_class is not None
+    assert item.overlap.metadata["target_names"] == ("target",)
+    assert item.weakest_class is None
     assert result.to_dataframe().loc[0, "target_type"] == "regression"
 
 
@@ -312,9 +318,11 @@ def test_cli_artifact_workflow_scores_real_overlapindex(tmp_path, capsys):
     score = json.loads(capsys.readouterr().out)
 
     assert score["artifact_type"] == "metric_evaluation"
-    assert np.isfinite(score["score"]["score"])
-    assert 0.0 <= score["score"]["score"] <= 1.0
-    assert score["score"]["k_per_class"]
+    assert score["primary_metric"] == "overlap"
+    overlap = score["metrics"]["overlap"]
+    assert np.isfinite(overlap["score"])
+    assert 0.0 <= overlap["score"] <= 1.0
+    assert overlap["diagnostics"]["k_per_class"]
 
 
 def test_hf_text_model_family_runs_full_benchmark(monkeypatch, tmp_path):
