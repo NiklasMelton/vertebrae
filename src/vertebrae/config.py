@@ -565,3 +565,24 @@ class MemoryConfig:
             raise ValueError("MemoryConfig.subsample_rate must be in (0, 1].")
         if self.min_subsample_samples_per_class < 1:
             raise ValueError("MemoryConfig.min_subsample_samples_per_class must be >= 1.")
+
+
+@dataclass
+class ResourceProfilingConfig:
+    """Opt-in measurement of extraction cost and representation footprint.
+
+    Resource profiles are descriptive measurements for the current benchmark
+    protocol. They do not participate in quality scoring or ranking.
+    """
+
+    enabled: bool = False
+    host_memory: bool = True
+    device_memory: bool = True
+    host_sample_interval_seconds: float = 0.01
+    quality_tolerance: float = 0.01
+
+    def __post_init__(self) -> None:
+        if self.host_sample_interval_seconds <= 0:
+            raise ValueError("ResourceProfilingConfig.host_sample_interval_seconds must be > 0.")
+        if self.quality_tolerance < 0:
+            raise ValueError("ResourceProfilingConfig.quality_tolerance must be >= 0.")

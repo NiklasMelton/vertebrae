@@ -32,6 +32,7 @@ class CallableExtractor:
         recipe_data: Optional[Dict[str, Any]] = None,
         allow_sparse: bool = True,
         streaming_safe: bool = False,
+        resource_profile_adapter: Optional[Any] = None,
     ) -> None:
         self.name = name
         self.transform_fn = transform_fn
@@ -41,6 +42,7 @@ class CallableExtractor:
         self.recipe_data = recipe_data or {}
         self.allow_sparse = allow_sparse
         self.streaming_safe = streaming_safe
+        self._resource_profile_adapter = resource_profile_adapter
 
     def fit(self, X: Any, y: Any = None) -> "CallableExtractor":
         """Fit the callable extractor when a fit function is supplied.
@@ -103,7 +105,19 @@ class CallableExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
+            "resource_profile_adapter": (
+                self._resource_profile_adapter.__class__.__module__
+                + "."
+                + self._resource_profile_adapter.__class__.__name__
+                if self._resource_profile_adapter is not None
+                else None
+            ),
         }
+
+    def get_resource_profile_adapter(self) -> Any:
+        """Return the optional user-supplied resource profiling adapter."""
+
+        return self._resource_profile_adapter
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:

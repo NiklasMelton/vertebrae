@@ -167,6 +167,35 @@ def render_markdown_report(result: Any) -> str:
             f"{separatix_confidence} |"
         )
 
+    profiled_cohort = [item for item in result.quality_cohort() if item.resource_profile]
+    if profiled_cohort:
+        lines.extend(["", "## Resource profile for quality-similar candidates", ""])
+        lines.append(
+            "| extractor | first call ms | warm median ms | warm p95 ms | samples/s | "
+            "peak host increase | peak device allocated | model bytes | checkpoint bytes | "
+            "embedding bytes | batch sizes | sync |"
+        )
+        lines.append(
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+        )
+        for item in profiled_cohort:
+            profile = item.resource_profile
+            assert profile is not None
+            inference = profile.inference
+            evaluated_bytes = profile.embedding.evaluated_bytes if profile.embedding else None
+            lines.append(
+                f"| {item.name} | {_format_milliseconds(inference.first_call_seconds)} | "
+                f"{_format_milliseconds(inference.warm_median_seconds)} | "
+                f"{_format_milliseconds(inference.warm_p95_seconds)} | "
+                f"{_format_float(inference.throughput_samples_per_second)} | "
+                f"{_format_bytes(profile.host_memory.peak_increase_bytes)} | "
+                f"{_format_bytes(profile.device_memory.peak_allocated_bytes)} | "
+                f"{_format_bytes(profile.model.in_memory_bytes)} | "
+                f"{_format_bytes(profile.model.checkpoint_bytes)} | "
+                f"{_format_bytes(evaluated_bytes)} | "
+                f"{inference.batch_sizes} | {profile.context.get('synchronization_status', '')} |"
+            )
+
     lines.extend(["", "## Per-extractor details", ""])
     for item in result.ranked_results():
         overlap = item.overlap
@@ -195,11 +224,48 @@ def render_markdown_report(result: Any) -> str:
                 f"- Primary score: {_format_float(item.primary_score)}",
                 f"- Weakest class: {item.weakest_class or ''}",
                 f"- Recommendation: {item.recommendation}",
-                "",
-                "#### Recipe summary",
-                "",
             ]
         )
+        if item.resource_profile:
+            profile = item.resource_profile
+            lines.extend(["", "#### Resource profile", ""])
+            lines.extend(
+                [
+                    f"- Status: {profile.status}",
+                    f"- Inference status: {profile.inference.status}",
+                    "- First call: "
+                    f"{_format_milliseconds(profile.inference.first_call_seconds)} ms",
+                    f"- First call includes fit: {profile.inference.first_call_includes_fit}",
+                    f"- Warm calls: {profile.inference.warm_call_count}",
+                    "- Warm median: "
+                    f"{_format_milliseconds(profile.inference.warm_median_seconds)} ms",
+                    f"- Warm p95: {_format_milliseconds(profile.inference.warm_p95_seconds)} ms",
+                    "- Throughput: "
+                    f"{_format_float(profile.inference.throughput_samples_per_second)} samples/s",
+                    f"- Peak host RSS: {_format_bytes(profile.host_memory.peak_rss_bytes)}",
+                    "- Peak host RSS increase: "
+                    f"{_format_bytes(profile.host_memory.peak_increase_bytes)}",
+                    "- Peak device allocated: "
+                    f"{_format_bytes(profile.device_memory.peak_allocated_bytes)}",
+                    f"- Parameters: {profile.model.parameter_count or ''}",
+                    f"- Parameter bytes: {_format_bytes(profile.model.parameter_bytes)}",
+                    f"- Checkpoint bytes: {_format_bytes(profile.model.checkpoint_bytes)}",
+                    f"- Synchronization: {profile.context.get('synchronization_status', '')}",
+                    f"- Batch sizes: {profile.inference.batch_sizes}",
+                ]
+            )
+            if profile.embedding:
+                lines.extend(
+                    [
+                        f"- Raw embedding bytes: {_format_bytes(profile.embedding.raw_bytes)}",
+                        "- Evaluated embedding bytes: "
+                        f"{_format_bytes(profile.embedding.evaluated_bytes)}",
+                        "- Bytes per embedding: "
+                        f"{_format_float(profile.embedding.bytes_per_embedding)}",
+                    ]
+                )
+            for warning in profile.warnings:
+                lines.append(f"- Warning: {warning}")
         if overlap:
             lines.extend(
                 [
@@ -233,6 +299,7 @@ def render_markdown_report(result: Any) -> str:
                     f"- Structured units: {structured.get('n_units', '')}",
                 ]
             )
+        lines.extend(["", "#### Recipe summary", ""])
         recipe = item.embedding_metadata.get("recipe") or item.embedding_metadata.get(
             "extractor_recipe",
             {},
@@ -418,6 +485,14 @@ def _format_interval(stability: Any) -> str:
         return ""
     summary = stability.get("summary", {})
     return f"{_format_float(summary.get('lower'))}-{_format_float(summary.get('upper'))}"
+
+
+def _format_milliseconds(value: Any) -> str:
+    return "" if value is None else f"{float(value) * 1000.0:.3f}"
+
+
+def _format_bytes(value: Any) -> str:
+    return "" if value is None else str(int(value))
 
 
 def _alignment_recipe_label(recipe: Any) -> str:

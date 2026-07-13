@@ -31,6 +31,7 @@ from vertebrae.config import (
     LabelViewConfig,
     MemoryConfig,
     OverlapScoringConfig,
+    ResourceProfilingConfig,
     RetrievalConfig,
     SegmentationConfig,
     SeparatixConfig,
@@ -122,6 +123,7 @@ from vertebrae.execution import (
 from vertebrae.extractors.base import (
     EmbeddingOutput,
     EmbeddingOutputSpec,
+    ResourceProfileAdapter,
     RetrievalCapableExtractor,
 )
 from vertebrae.extractors.huggingface_multimodal import HFMultimodalExtractor
@@ -138,6 +140,14 @@ from vertebrae.extractors.structured import (
     PrecomputedStructuredExtractor,
     StructuredEmbeddingOutput,
     StructuredOutputSpec,
+)
+from vertebrae.profiling import (
+    DeviceMemoryProfile,
+    EmbeddingFootprint,
+    HostMemoryProfile,
+    InferenceProfile,
+    ModelFootprint,
+    ResourceProfile,
 )
 from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.retrieval import (
@@ -264,6 +274,14 @@ __all__ = [
     "RayBackend",
     "RegionAnnotation",
     "ResourceSpec",
+    "ResourceProfilingConfig",
+    "ResourceProfileAdapter",
+    "ResourceProfile",
+    "InferenceProfile",
+    "HostMemoryProfile",
+    "DeviceMemoryProfile",
+    "ModelFootprint",
+    "EmbeddingFootprint",
     "S3ArtifactStore",
     "SampleBatch",
     "score_embedding_artifact",

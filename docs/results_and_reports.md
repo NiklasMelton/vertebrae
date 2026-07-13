@@ -27,6 +27,27 @@ Each extractor contributes an `ExtractorResult` with:
 - warnings,
 - recommendation label,
 - weakest-class diagnostics when available.
+- an optional measured `resource_profile` when local resource profiling is enabled.
+
+## Resource profiles and quality cohorts
+
+`ResourceProfilingConfig(enabled=True)` adds a serialized profile containing observed
+first-call/warm latency, throughput, host and supported device peaks, model/checkpoint
+footprint, measurement context, and logical raw/evaluated embedding bytes.
+`BenchmarkResult.quality_cohort()` returns candidates within the configured absolute
+primary-score tolerance of the best result while respecting metric direction. It does
+not reorder `ranked_results()` or create a composite score.
+
+Markdown reports keep the main ranking quality-focused and render a separate resource
+table for the quality cohort. DataFrames expose the same measurements as resource
+columns. Compare latency only when batch size, input workload, device, precision, and
+synchronization context are compatible.
+
+First-call latency is the first observed extractor call after fitting and can include
+lazy model loading or compilation. Warm statistics use subsequent real calls; a
+single-call run therefore has no warm distribution. Host RSS peaks are measured and
+remain distinct from `MemoryConfig` admission estimates. Cache hits do not invoke the
+extractor and report inference as `not_measured_cache_hit`.
 
 For multi-label datasets, `target_type` is `multi_label`, `class_counts` means
 per-label occurrence counts, and result metadata preserves `label_names` plus

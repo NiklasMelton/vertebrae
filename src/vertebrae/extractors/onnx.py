@@ -193,6 +193,13 @@ class ONNXExtractor:
             ]
         return recipe
 
+    def get_resource_profile_adapter(self) -> Any:
+        """Return ONNX Runtime model-artifact profiling hooks."""
+
+        from vertebrae.profiling import ONNXResourceProfileAdapter
+
+        return ONNXResourceProfileAdapter(self)
+
     def _load_session(self) -> Any:
         if self._session is None:
             try:

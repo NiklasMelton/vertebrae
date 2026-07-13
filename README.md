@@ -693,6 +693,32 @@ path or a cloud object-store URI such as `s3://team-bucket/vertebrae/run-001` or
 
 ## Reports and Results
 
+Resource profiling can be enabled when deployment cost is part of representation
+selection:
+
+```python
+from vertebrae import ResourceProfilingConfig
+
+result = Benchmark(
+    dataset,
+    extractors=[small_backbone, large_backbone],
+    resource_profiling_config=ResourceProfilingConfig(enabled=True),
+).run()
+
+print(result.to_dataframe())
+print([item.name for item in result.quality_cohort()])
+```
+
+The profile observes the benchmark's real local extraction calls. It reports
+first-call and warm latency, observed throughput, host memory, supported device/model
+footprints, and logical raw/compressed embedding storage. It does not change quality
+ranking. A cache hit remains a cache hit and reports inference as unmeasured; use
+`CacheConfig(force_recompute=True)` when a fresh inference measurement is required.
+
+Latency values are meaningful only with their recorded batch size, device, precision,
+and synchronization context. They are workload observations, not hardware-normalized
+scores or controlled load tests.
+
 Each benchmark run returns structured results that include:
 
 - dataset summary,

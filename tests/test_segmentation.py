@@ -5,6 +5,7 @@ from vertebrae import (
     BenchmarkDataset,
     CacheConfig,
     CallableSpatialExtractor,
+    ResourceProfilingConfig,
     SegmentationConfig,
     SegmentationDataset,
     SeparatixConfig,
@@ -105,6 +106,7 @@ def test_segmentation_benchmark_reuses_standard_scoring_pipeline(
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
         stability_config=StabilityConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
+        resource_profiling_config=ResourceProfilingConfig(enabled=True),
     ).run()
 
     item = result.extractor_results[0]
@@ -113,6 +115,9 @@ def test_segmentation_benchmark_reuses_standard_scoring_pipeline(
     assert item.overlap.metadata["exclude_classes"] == [0]
     assert fake_overlapindex.calls[-1]["exclude_classes"] == [0]
     assert result.dataset_summary["n_images"] == 2
+    assert item.resource_profile.inference.status == "measured"
+    assert item.resource_profile.context["call_types"] == ["transform_spatial"]
+    assert item.resource_profile.embedding.evaluated_bytes == 8 * 3 * 8
 
 
 def test_segmentation_artifacts_have_independent_output_boundaries(tmp_path):
