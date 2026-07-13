@@ -9,7 +9,12 @@ from vertebrae import (
     drop_special_rows,
 )
 from vertebrae.cache import LocalArtifactStore
-from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
+from vertebrae.config import (
+    CacheConfig,
+    ResourceProfilingConfig,
+    SeparatixConfig,
+    StabilityConfig,
+)
 from vertebrae.execution import materialize_structured_artifacts
 from vertebrae.extractors import StructuredOutputSpec
 from vertebrae.structured import materialize_structured_outputs
@@ -105,6 +110,7 @@ def test_structured_benchmark_reuses_standard_scoring_pipeline(tmp_path, fake_ov
         stability_config=StabilityConfig(enabled=False),
         separatix_config=SeparatixConfig(enabled=False),
         structured_aligners={"tokens": drop_special_rows()},
+        resource_profiling_config=ResourceProfilingConfig(enabled=True),
     ).run()
 
     item = result.extractor_results[0]
@@ -118,6 +124,9 @@ def test_structured_benchmark_reuses_standard_scoring_pipeline(tmp_path, fake_ov
     assert frame.loc[0, "task_family"] == "sequence"
     assert frame.loc[0, "alignment_mode"] == "explicit"
     assert frame.loc[0, "alignment_recipe"]["name"] == "drop_special_rows"
+    assert item.resource_profile.inference.status == "measured"
+    assert item.resource_profile.context["call_types"] == ["transform_structured"]
+    assert item.resource_profile.embedding.evaluated_bytes == 8 * 2 * 8
 
     markdown_path = tmp_path / "structured_report.md"
     result.save_markdown(str(markdown_path))

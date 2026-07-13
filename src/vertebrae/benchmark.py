@@ -23,6 +23,7 @@ from vertebrae.config import (
     LabelViewConfig,
     MemoryConfig,
     OverlapScoringConfig,
+    ResourceProfilingConfig,
     SegmentationConfig,
     SeparatixConfig,
     StabilityConfig,
@@ -31,6 +32,7 @@ from vertebrae.config import (
 from vertebrae.execution.jobs import SampleBatch
 from vertebrae.execution.local import LocalBackend
 from vertebrae.extractors.base import EmbeddingOutput
+from vertebrae.profiling import ResourceProfiler, with_embedding_footprint
 from vertebrae.reports.recommendations import (
     recommendation_for_extractor,
     recommendations_for_benchmark,
@@ -86,6 +88,7 @@ class Benchmark:
         structured_aligners: Optional[dict[str, Any]] = None,
         metrics: Optional[Iterable[Any]] = None,
         primary_metric: Optional[str] = None,
+        resource_profiling_config: Optional[ResourceProfilingConfig] = None,
     ) -> None:
         self.dataset = dataset
         self.extractors = list(extractors or [])
@@ -134,6 +137,10 @@ class Benchmark:
             self._explicit_scoring_config = self.overlap_metric.config
         available_metrics = [metric.name for metric in self.metrics]
         self.primary_metric = primary_metric or available_metrics[0]
+        self.resource_profiling_config = (
+            resource_profiling_config or ResourceProfilingConfig()
+        )
+        self._resource_profiler: Optional[ResourceProfiler] = None
         if self.primary_metric not in available_metrics:
             raise ValueError(
                 f"primary_metric {self.primary_metric!r} is not among configured metrics: "
@@ -196,7 +203,14 @@ class Benchmark:
                 extractor_results.extend(result)
             else:
                 extractor_results.append(result)
-        recommendations = recommendations_for_benchmark(extractor_results)
+        recommendations = recommendations_for_benchmark(
+            extractor_results,
+            quality_tolerance=(
+                self.resource_profiling_config.quality_tolerance
+                if self.resource_profiling_config.enabled
+                else None
+            ),
+        )
         return BenchmarkResult(
             dataset_summary=self.dataset.summary(),
             extractor_results=extractor_results,
@@ -215,6 +229,7 @@ class Benchmark:
                 "memory_config": asdict(self.memory_config),
                 "metrics": [metric.recipe() for metric in self.metrics],
                 "primary_metric": self.primary_metric,
+                "resource_profiling_config": asdict(self.resource_profiling_config),
                 "label_view_warnings": label_view_warnings,
                 "target_view_warnings": target_view_warnings,
             },
@@ -232,11 +247,20 @@ class Benchmark:
             **self.cache_config.storage_options,
         )
         for extractor in self.extractors:
+            profiler = ResourceProfiler(
+                self.resource_profiling_config,
+                extractor,
+                streaming=True,
+            )
             materializations = materialize_segmentation_outputs(
                 dataset=self.dataset,
                 extractor=extractor,
                 config=self.segmentation_config,
                 batch_size=self.embedding_config.batch_size,
+                resource_profiler=(profiler if self.resource_profiling_config.enabled else None),
+            )
+            source_profile = (
+                profiler.finish() if self.resource_profiling_config.enabled else None
             )
             for materialization in materializations:
                 scoring_config = _classification_scoring_config(self.scoring_config)
@@ -267,8 +291,14 @@ class Benchmark:
                     execution=self.execution,
                     metrics=[metric for metric in self.metrics if metric.name != "overlap"],
                     primary_metric=self.primary_metric,
+                    resource_profiling_config=self.resource_profiling_config,
                 ).run()
                 for item in result.extractor_results:
+                    if source_profile is not None and item.resource_profile is not None:
+                        item.resource_profile = replace(
+                            source_profile,
+                            embedding=item.resource_profile.embedding,
+                        )
                     item.extractor_type = getattr(extractor, "extractor_type", "spatial")
                     item.embedding_metadata["segmentation"] = materialization.metadata
                     item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
@@ -288,7 +318,14 @@ class Benchmark:
                     }
                 )
 
-        recommendations = recommendations_for_benchmark(extractor_results)
+        recommendations = recommendations_for_benchmark(
+            extractor_results,
+            quality_tolerance=(
+                self.resource_profiling_config.quality_tolerance
+                if self.resource_profiling_config.enabled
+                else None
+            ),
+        )
         return BenchmarkResult(
             dataset_summary={
                 **self.dataset.summary(),
@@ -307,6 +344,7 @@ class Benchmark:
                 "memory_config": asdict(self.memory_config),
                 "metrics": [metric.recipe() for metric in self.metrics],
                 "primary_metric": self.primary_metric,
+                "resource_profiling_config": asdict(self.resource_profiling_config),
             },
         )
 
@@ -325,11 +363,20 @@ class Benchmark:
                 raise ValueError(
                     f"Extractor '{extractor.name}' does not support structured outputs."
                 )
+            profiler = ResourceProfiler(
+                self.resource_profiling_config,
+                extractor,
+                streaming=True,
+            )
             materializations = materialize_structured_outputs(
                 dataset=self.dataset,
                 extractor=extractor,
                 batch_size=self.embedding_config.batch_size,
                 aligners=self.structured_aligners,
+                resource_profiler=(profiler if self.resource_profiling_config.enabled else None),
+            )
+            source_profile = (
+                profiler.finish() if self.resource_profiling_config.enabled else None
             )
             for materialization in materializations:
                 output_dataset: Any = materialization.dataset
@@ -364,8 +411,14 @@ class Benchmark:
                     execution=self.execution,
                     metrics=[metric for metric in self.metrics if metric.name != "overlap"],
                     primary_metric=self.primary_metric,
+                    resource_profiling_config=self.resource_profiling_config,
                 ).run()
                 for item in result.extractor_results:
+                    if source_profile is not None and item.resource_profile is not None:
+                        item.resource_profile = replace(
+                            source_profile,
+                            embedding=item.resource_profile.embedding,
+                        )
                     item.extractor_type = getattr(extractor, "extractor_type", "structured")
                     item.embedding_metadata["structured"] = materialization.metadata
                     item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
@@ -382,7 +435,14 @@ class Benchmark:
                     }
                 )
 
-        recommendations = recommendations_for_benchmark(extractor_results)
+        recommendations = recommendations_for_benchmark(
+            extractor_results,
+            quality_tolerance=(
+                self.resource_profiling_config.quality_tolerance
+                if self.resource_profiling_config.enabled
+                else None
+            ),
+        )
         return BenchmarkResult(
             dataset_summary={
                 **self.dataset.summary(),
@@ -400,6 +460,7 @@ class Benchmark:
                 "memory_config": asdict(self.memory_config),
                 "metrics": [metric.recipe() for metric in self.metrics],
                 "primary_metric": self.primary_metric,
+                "resource_profiling_config": asdict(self.resource_profiling_config),
             },
         )
 
@@ -434,6 +495,7 @@ class Benchmark:
         target_view_warnings: List[str],
     ) -> Union[ExtractorResult, List[ExtractorResult]]:
         warnings: List[str] = []
+        profiler = self._start_resource_profiler(extractor)
         runtime = {}
         start = perf_counter()
         dataset, subsampling_warnings, subsampling_metadata, probe_plan = (
@@ -451,6 +513,7 @@ class Benchmark:
             subsampling_metadata,
             probe_plan,
         )
+        self._attach_resource_profile(profiler, variants)
         runtime["embedding_seconds"] = perf_counter() - start
         results: List[ExtractorResult] = []
         mapped_outputs = 0
@@ -482,7 +545,9 @@ class Benchmark:
         if not results:
             raise ValueError("No valid mapped hierarchy label views were available for scoring.")
         if len(results) == 1:
+            self._resource_profiler = None
             return results[0]
+        self._resource_profiler = None
         return results
 
     def _run_extractor_on_dataset(
@@ -491,6 +556,7 @@ class Benchmark:
         evaluation_dataset: Any,
     ) -> Union[ExtractorResult, List[ExtractorResult]]:
         warnings: List[str] = []
+        profiler = self._start_resource_profiler(extractor)
         runtime = {}
         start = perf_counter()
         dataset, subsampling_warnings, subsampling_metadata, probe_plan = (
@@ -508,6 +574,7 @@ class Benchmark:
             subsampling_metadata,
             probe_plan,
         )
+        self._attach_resource_profile(profiler, variants)
         runtime["embedding_seconds"] = perf_counter() - start
         results: List[ExtractorResult] = []
         for variant in variants:
@@ -522,7 +589,9 @@ class Benchmark:
                 )
             )
         if len(results) == 1:
+            self._resource_profiler = None
             return results[0]
+        self._resource_profiler = None
         return results
 
     def _score_embedding_variant(
@@ -537,6 +606,7 @@ class Benchmark:
         embeddings = variant["embeddings"]
         scoring_config = self._resolved_scoring_config(dataset)
         embedding_metadata = dict(variant["metadata"])
+        base_resource_profile = embedding_metadata.pop("_resource_profile", None)
         embedding_metadata["label_view"] = dataset.active_label_view()
         embedding_metadata["target_view"] = dataset.active_target_view()
         results: List[ExtractorResult] = []
@@ -660,6 +730,11 @@ class Benchmark:
                     recommendation=recommendation,
                     metrics=metric_results,
                     primary_metric_name=self.primary_metric,
+                    resource_profile=with_embedding_footprint(
+                        base_resource_profile,
+                        embeddings,
+                        compressed_embeddings,
+                    ),
                 )
             )
         return results
@@ -974,6 +1049,8 @@ class Benchmark:
         extractor: Any,
         dataset: Any,
     ) -> Tuple[float, Optional[Tuple[SampleBatch, Any, Any]]]:
+        if self._embedding_cache_available(extractor, dataset):
+            return 1.0, None
         if not self.memory_config.auto_subsample_on_memory_exceeded:
             return 1.0, None
         extractor.fit(dataset.X, dataset.y)
@@ -984,7 +1061,9 @@ class Benchmark:
             )
         )
         if self._supports_transform_many(extractor):
-            first_outputs = self._embed_batch_many(extractor, first_batch)
+            first_outputs = self._embed_batch_many(
+                extractor, first_batch, materialized=False
+            )
             estimates, aggregate = self._estimate_multi_output_memory(
                 first_outputs,
                 n_samples=len(dataset.y),
@@ -1002,7 +1081,7 @@ class Benchmark:
                 return min(1.0, rate), None
             return 1.0, (first_batch, first_outputs, {"per_output": estimates, **aggregate})
 
-        first_embeddings = self._embed_batch(extractor, first_batch)
+        first_embeddings = self._embed_batch(extractor, first_batch, materialized=False)
         estimate = estimate_embedding_from_probe(
             first_embeddings,
             n_samples=len(dataset.y),
@@ -1020,6 +1099,24 @@ class Benchmark:
                 return 1.0, (first_batch, first_embeddings, estimate)
             return min(1.0, rate), None
         return 1.0, (first_batch, first_embeddings, estimate)
+
+    def _embedding_cache_available(self, extractor: Any, dataset: Any) -> bool:
+        if not self._cache_embeddings_enabled(extractor) or self.cache_config.force_recompute:
+            return False
+        store = create_artifact_store(
+            self.cache_config.cache_dir,
+            **self.cache_config.storage_options,
+        )
+        base_key = (
+            f"embeddings/{dataset.fingerprint()}/"
+            f"{fingerprint_extractor_recipe(extractor.recipe())}"
+        )
+        if self._supports_transform_many(extractor):
+            return all(
+                store.exists(self._output_cache_key(base_key, spec.name))
+                for spec in self._output_specs(extractor)
+            )
+        return store.exists(base_key)
 
     def _get_or_compute_embedding_variants(
         self,
@@ -1085,7 +1182,12 @@ class Benchmark:
                 store.put_json(cache_key, metadata)
             return embeddings, metadata
 
-        embeddings = extractor.fit_transform(dataset.X, dataset.y)
+        embeddings = self._measure_resource_call(
+            lambda: extractor.fit_transform(dataset.X, dataset.y),
+            samples=len(dataset.y),
+            call_type="fit_transform",
+            includes_fit=True,
+        )
         embeddings = ensure_numeric_matrix(
             embeddings,
             f"Extractor '{extractor.name}' embeddings",
@@ -1157,9 +1259,14 @@ class Benchmark:
             return variants
 
         extractor.fit(dataset.X, dataset.y)
+        raw_outputs = self._measure_resource_call(
+            lambda: extractor.transform_many(dataset.X),
+            samples=len(dataset.y),
+            call_type="transform_many",
+        )
         outputs = self._validate_multi_outputs(
             extractor=extractor,
-            outputs=extractor.transform_many(dataset.X),
+            outputs=raw_outputs,
             expected_rows=len(dataset.y),
             context="embeddings",
         )
@@ -1265,6 +1372,8 @@ class Benchmark:
             self._admit_embedding_plan(memory_estimate)
         else:
             first_batch, first_embeddings, memory_estimate = probe_plan
+            if self._resource_profiler is not None:
+                self._resource_profiler.mark_last_call_materialized()
             try:
                 skipped_batch = next(batch_iterator)
             except StopIteration as exc:
@@ -1343,6 +1452,8 @@ class Benchmark:
             self._admit_multi_embedding_plan(aggregate)
         else:
             first_batch, first_outputs, estimate_info = probe_plan
+            if self._resource_profiler is not None:
+                self._resource_profiler.mark_last_call_materialized()
             estimates = estimate_info["per_output"]
             aggregate = estimate_info
             try:
@@ -1403,8 +1514,19 @@ class Benchmark:
         for batch in batches:
             yield batch.indices, self._embed_batch(extractor, batch)
 
-    def _embed_batch(self, extractor: Any, batch: SampleBatch) -> Any:
-        embeddings = extractor.transform(batch.X)
+    def _embed_batch(
+        self,
+        extractor: Any,
+        batch: SampleBatch,
+        *,
+        materialized: bool = True,
+    ) -> Any:
+        embeddings = self._measure_resource_call(
+            lambda: extractor.transform(batch.X),
+            samples=len(batch.indices),
+            call_type="transform",
+            materialized=materialized,
+        )
         embeddings = ensure_numeric_matrix(
             embeddings,
             f"Extractor '{extractor.name}' batch embeddings",
@@ -1417,12 +1539,61 @@ class Benchmark:
             )
         return embeddings
 
-    def _embed_batch_many(self, extractor: Any, batch: SampleBatch) -> List[EmbeddingOutput]:
+    def _embed_batch_many(
+        self,
+        extractor: Any,
+        batch: SampleBatch,
+        *,
+        materialized: bool = True,
+    ) -> List[EmbeddingOutput]:
+        outputs = self._measure_resource_call(
+            lambda: extractor.transform_many(batch.X),
+            samples=len(batch.indices),
+            call_type="transform_many",
+            materialized=materialized,
+        )
         return self._validate_multi_outputs(
             extractor=extractor,
-            outputs=extractor.transform_many(batch.X),
+            outputs=outputs,
             expected_rows=len(batch.indices),
             context="batch embeddings",
+        )
+
+    def _start_resource_profiler(self, extractor: Any) -> ResourceProfiler:
+        profiler = ResourceProfiler(
+            self.resource_profiling_config,
+            extractor,
+            streaming=self._should_stream_embeddings(extractor),
+        )
+        self._resource_profiler = profiler
+        return profiler
+
+    def _attach_resource_profile(self, profiler: ResourceProfiler, variants: List[dict]) -> None:
+        profile = (
+            profiler.finish(cache_hit=all(item["metadata"].get("cache_hit") for item in variants))
+            if self.resource_profiling_config.enabled
+            else None
+        )
+        for variant in variants:
+            variant["metadata"]["_resource_profile"] = profile
+
+    def _measure_resource_call(
+        self,
+        fn: Any,
+        *,
+        samples: int,
+        call_type: str,
+        materialized: bool = True,
+        includes_fit: bool = False,
+    ) -> Any:
+        if self._resource_profiler is None:
+            return fn()
+        return self._resource_profiler.measure_call(
+            fn,
+            samples=samples,
+            call_type=call_type,
+            materialized=materialized,
+            includes_fit=includes_fit,
         )
 
     def _embedding_metadata(

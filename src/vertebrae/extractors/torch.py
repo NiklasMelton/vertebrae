@@ -53,6 +53,7 @@ class TorchExtractor:
         spatial_output_specs: Optional[Iterable[SpatialOutputSpec]] = None,
         structured_output_fn: Optional[Callable[[Any], Any]] = None,
         structured_output_specs: Optional[Iterable[StructuredOutputSpec]] = None,
+        checkpoint_paths: Optional[Iterable[str]] = None,
     ) -> None:
         self.name = name
         self.model = model
@@ -80,6 +81,14 @@ class TorchExtractor:
             )
         self._torch: Any = None
         self._model_moved = False
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
+
+    def get_resource_profile_adapter(self) -> Any:
+        """Return Torch-specific synchronization and footprint hooks."""
+
+        from vertebrae.profiling import TorchResourceProfileAdapter
+
+        return TorchResourceProfileAdapter(self, self.checkpoint_paths)
 
     def fit(self, X: Any, y: Any = None) -> "TorchExtractor":
         """No-op fit for local Torch models."""
@@ -179,6 +188,7 @@ class TorchExtractor:
             "streaming_safe": self.streaming_safe,
             "move_batch_to_device": self.move_batch_to_device,
             "move_model_to_device": self.move_model_to_device,
+            "checkpoint_paths": list(self.checkpoint_paths),
             "spatial_output_fn": (
                 _callable_name(self.spatial_output_fn)
                 if self.spatial_output_fn is not None

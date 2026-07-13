@@ -1,7 +1,7 @@
 """Feature extractor protocols and shared multi-output types."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 import numpy as np
 
@@ -106,5 +106,39 @@ class RetrievalCapableExtractor(Protocol):
 
     def encode_retrieval(self, X: Any, *, branch: str, modality: str) -> Any:
         """Encode one declared endpoint branch into a numeric embedding matrix."""
+
+        ...
+
+
+class ResourceProfileAdapter(Protocol):
+    """Optional extractor-owned hooks for framework-specific resource data."""
+
+    def metadata(self) -> Dict[str, Any]:
+        """Return backend, device, precision, and synchronization metadata."""
+
+        ...
+
+    def synchronize(self) -> bool:
+        """Synchronize asynchronous device work and return whether it succeeded."""
+
+        ...
+
+    def reset_peak_device_memory(self) -> bool:
+        """Reset allocator peak counters when supported."""
+
+        ...
+
+    def peak_device_memory(self) -> Dict[str, Any]:
+        """Return peak allocated/reserved device bytes and availability metadata."""
+
+        ...
+
+    def model_footprint(self) -> Dict[str, Any]:
+        """Return parameter and buffer counts/bytes when available."""
+
+        ...
+
+    def deployment_artifacts(self) -> Sequence[str]:
+        """Return explicit local model/checkpoint artifact paths."""
 
         ...

@@ -43,7 +43,10 @@ def recommendation_for_extractor(
     return recommendation
 
 
-def recommendations_for_benchmark(extractor_results: List[Any]) -> List[str]:
+def recommendations_for_benchmark(
+    extractor_results: List[Any],
+    quality_tolerance: Optional[float] = None,
+) -> List[str]:
     """Compute practitioner-facing recommendations for a benchmark.
 
     Args:
@@ -82,6 +85,18 @@ def recommendations_for_benchmark(extractor_results: List[Any]) -> List[str]:
         f"Top representation under this protocol: {top.name} "
         f"({top_score_label} {float(top.primary_score):.3f})."
     ]
+    if quality_tolerance is not None:
+        top_rankable = _rankable_primary_score(top)
+        cohort = [
+            item
+            for item in ranked
+            if top_rankable - _rankable_primary_score(item) <= quality_tolerance
+        ]
+        if len(cohort) > 1:
+            messages.append(
+                f"{len(cohort)} representations are within {quality_tolerance:.3f} of the "
+                "best primary score; compare their resource profiles before selection."
+            )
     weak = [
         result
         for result in ranked
@@ -103,6 +118,13 @@ def recommendations_for_benchmark(extractor_results: List[Any]) -> List[str]:
             "pipelines may have used the benchmark data during feature construction."
         )
     return messages
+
+
+def _rankable_primary_score(item: Any) -> float:
+    metric = item.metrics.get(item.primary_metric_name)
+    return float(item.primary_score) if metric is None or metric.higher_is_better else -float(
+        item.primary_score
+    )
 
 
 def _stability_width(stability: Optional[Dict[str, Any]]) -> float:

@@ -220,3 +220,22 @@ When output shape is not known ahead of time, streaming-safe extractors are prob
 small first batch. The inferred embedding dimension and dtype are used with
 `MemoryConfig` to estimate whether the full embedding artifact and dense scoring input
 fit in memory before the full job runs.
+
+## Resource profiling adapters
+
+`ResourceProfilingConfig(enabled=True)` observes the actual calls made by local
+`Benchmark` and `Evaluator` runs. Portable profiling covers call latency, throughput,
+process RSS, and logical embedding bytes. Optional extractor-owned
+`ResourceProfileAdapter` hooks add device synchronization, allocator peaks, model
+parameter bytes, and explicitly declared checkpoint artifacts.
+
+`TorchExtractor`, `KerasExtractor`, and `ONNXExtractor` provide built-in adapters.
+Torch and Keras wrappers accept `checkpoint_paths=` when deployment artifacts should
+be counted; ONNX uses its explicit `model_path`. `CallableExtractor` accepts a custom
+`resource_profile_adapter=`. Vertebrae does not infer checkpoint locations from
+`recipe_data`, model names, or external model caches.
+
+For unsupported backends, portable measurements remain available and framework-only
+fields are marked unavailable. Multi-output calls share one inference profile because
+the underlying forward pass is shared, while every output retains its own embedding
+storage footprint.

@@ -26,6 +26,7 @@ def materialize_segmentation_outputs(
     extractor: Any,
     config: Optional[SegmentationConfig] = None,
     batch_size: int = 16,
+    resource_profiler: Optional[Any] = None,
 ) -> List[SegmentationMaterialization]:
     """Extract, align, sample, and flatten all declared spatial outputs."""
 
@@ -34,7 +35,20 @@ def materialize_segmentation_outputs(
     extractor.fit(dataset.X, None)
     collected: Dict[str, Dict[str, Any]] = {}
     for batch in dataset.iter_batches(batch_size=batch_size):
-        outputs = list(extractor.transform_spatial(batch.X))
+        batch_x = batch.X
+
+        def call(values: Any = batch_x) -> List[Any]:
+            return list(extractor.transform_spatial(values))
+
+        outputs = (
+            resource_profiler.measure_call(
+                call,
+                samples=len(batch.indices),
+                call_type="transform_spatial",
+            )
+            if resource_profiler is not None
+            else call()
+        )
         for output in outputs:
             if len(output.embeddings) != len(batch.indices):
                 raise ValueError(

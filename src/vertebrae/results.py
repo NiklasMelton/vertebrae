@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from vertebrae.profiling import ResourceProfile
 from vertebrae.scoring.metrics import MetricResult
 from vertebrae.scoring.separatix import SeparatixResult, probe_summary_for_result
 from vertebrae.utils.serialization import make_json_safe
@@ -28,6 +29,7 @@ class ExtractorResult:
         target_view: Target-view metadata for the scoring target.
         weakest_class: Class with the lowest per-class score when available.
         weakest_class_score: Score for `weakest_class` when available.
+        resource_profile: Optional measured extraction and footprint profile.
     """
 
     name: str
@@ -45,6 +47,7 @@ class ExtractorResult:
     target_view: Optional[Dict[str, Any]] = None
     weakest_class: Optional[str] = None
     weakest_class_score: Optional[float] = None
+    resource_profile: Optional[ResourceProfile] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the extractor result to a JSON-safe dictionary.
@@ -110,6 +113,23 @@ class BenchmarkResult:
             reverse=True,
         )
 
+    def quality_cohort(self, tolerance: Optional[float] = None) -> List[ExtractorResult]:
+        """Return candidates within an absolute primary-score tolerance of the best."""
+
+        ranked = self.ranked_results()
+        if not ranked:
+            return []
+        if tolerance is None:
+            tolerance = float(
+                self.metadata.get("resource_profiling_config", {}).get(
+                    "quality_tolerance", 0.01
+                )
+            )
+        if tolerance < 0:
+            raise ValueError("quality cohort tolerance must be >= 0.")
+        best = _rankable_score(ranked[0])
+        return [item for item in ranked if best - _rankable_score(item) <= tolerance]
+
     def to_dataframe(self) -> Any:
         """Convert benchmark rankings into a pandas DataFrame.
 
@@ -121,6 +141,12 @@ class BenchmarkResult:
 
         rows = []
         for rank, item in enumerate(self.ranked_results(), start=1):
+            profile = item.resource_profile
+            inference = profile.inference if profile else None
+            host_memory = profile.host_memory if profile else None
+            device_memory = profile.device_memory if profile else None
+            model = profile.model if profile else None
+            embedding = profile.embedding if profile else None
             probe = probe_summary_for_result(item.separatix)
             primary_probe_metric = probe.get("primary_metric") or {}
             comparison = probe.get("comparison") or {}
@@ -183,6 +209,43 @@ class BenchmarkResult:
                     "separatix_confidence": (item.separatix.confidence if item.separatix else None),
                     "separatix_skip_reason": (
                         item.separatix.skipped_reason if item.separatix else None
+                    ),
+                    "resource_profile_status": profile.status if profile else "disabled",
+                    "first_call_seconds": (
+                        inference.first_call_seconds if inference else None
+                    ),
+                    "warm_median_seconds": (
+                        inference.warm_median_seconds if inference else None
+                    ),
+                    "warm_p95_seconds": inference.warm_p95_seconds if inference else None,
+                    "throughput_samples_per_second": (
+                        inference.throughput_samples_per_second if inference else None
+                    ),
+                    "resource_batch_sizes": inference.batch_sizes if inference else [],
+                    "synchronization_status": (
+                        profile.context.get("synchronization_status") if profile else None
+                    ),
+                    "peak_host_rss_bytes": (
+                        host_memory.peak_rss_bytes if host_memory else None
+                    ),
+                    "peak_host_rss_increase_bytes": (
+                        host_memory.peak_increase_bytes if host_memory else None
+                    ),
+                    "peak_device_allocated_bytes": (
+                        device_memory.peak_allocated_bytes if device_memory else None
+                    ),
+                    "peak_device_reserved_bytes": (
+                        device_memory.peak_reserved_bytes if device_memory else None
+                    ),
+                    "parameter_count": model.parameter_count if model else None,
+                    "parameter_bytes": model.parameter_bytes if model else None,
+                    "checkpoint_bytes": model.checkpoint_bytes if model else None,
+                    "raw_embedding_bytes": embedding.raw_bytes if embedding else None,
+                    "evaluated_embedding_bytes": (
+                        embedding.evaluated_bytes if embedding else None
+                    ),
+                    "embedding_bytes_per_sample": (
+                        embedding.bytes_per_embedding if embedding else None
                     ),
                 }
             )
