@@ -77,8 +77,7 @@ class DeviceMemoryMeasurement:
             raise ValueError("Measured DeviceMemoryMeasurement requires peak_allocated_bytes.")
         if self.status == "measured" and self.measurement_scope != "profile_window":
             raise ValueError(
-                "Measured DeviceMemoryMeasurement requires "
-                "measurement_scope='profile_window'."
+                "Measured DeviceMemoryMeasurement requires " "measurement_scope='profile_window'."
             )
         if self.status != "measured" and self.measurement_scope is not None:
             raise ValueError(
@@ -422,9 +421,7 @@ class ResourceProfiler:
                 "synchronization_method": metadata.synchronization_method,
                 "weight_dtypes": list(metadata.weight_dtypes),
                 "resource_adapter": (
-                    self.adapter.__class__.__module__
-                    + "."
-                    + self.adapter.__class__.__name__
+                    self.adapter.__class__.__module__ + "." + self.adapter.__class__.__name__
                     if self.adapter is not None
                     else None
                 ),
@@ -1030,9 +1027,7 @@ class TensorFlowResourceProfileAdapter(BaseResourceProfileAdapter):
     def _resolved_device(self, tf: Any = None) -> Tuple[Optional[str], str]:
         model_devices = _tensorflow_model_devices(self._model_getter())
         hint = (
-            _normalize_tensorflow_device(self.profiling_device)
-            if self.profiling_device
-            else None
+            _normalize_tensorflow_device(self.profiling_device) if self.profiling_device else None
         )
         if len(model_devices) == 1:
             device = model_devices[0]
@@ -1110,17 +1105,13 @@ class JAXResourceProfileAdapter(BaseResourceProfileAdapter):
         jax = self._load_jax()
         barrier = getattr(jax, "effects_barrier", None)
         if not callable(barrier):
-            return AdapterOperationResult(
-                "unavailable", "JAX effects_barrier is unavailable."
-            )
+            return AdapterOperationResult("unavailable", "JAX effects_barrier is unavailable.")
         barrier()
         return AdapterOperationResult("succeeded")
 
     def reset_peak_device_memory(self) -> AdapterOperationResult:
         metadata = self.metadata()
-        if metadata.device and all(
-            _is_cpu_device(item) for item in metadata.device.split(",")
-        ):
+        if metadata.device and all(_is_cpu_device(item) for item in metadata.device.split(",")):
             return AdapterOperationResult(
                 "not_applicable", "CPU memory is reported through process RSS."
             )
@@ -1135,9 +1126,7 @@ class JAXResourceProfileAdapter(BaseResourceProfileAdapter):
             status="unavailable",
             backend=self.backend,
             device=metadata.device,
-            unavailable_reason=(
-                "JAX does not expose a portable resettable allocator peak window."
-            ),
+            unavailable_reason=("JAX does not expose a portable resettable allocator peak window."),
         )
 
     def model_footprint(self) -> ModelFootprintMeasurement:
@@ -1462,8 +1451,10 @@ def _tensorflow_model_footprint(model: Any) -> ModelFootprintMeasurement:
     all_weights = _deduplicated_values(
         getattr(model, "weights", ()) or getattr(model, "variables", ())
     )
-    if not trainable and all_weights and not any(
-        hasattr(model, name) for name in ("trainable_weights", "trainable_variables")
+    if (
+        not trainable
+        and all_weights
+        and not any(hasattr(model, name) for name in ("trainable_weights", "trainable_variables"))
     ):
         trainable = list(all_weights)
     if not all_weights:
@@ -1527,10 +1518,7 @@ def _tensorflow_model_devices(model: Any) -> Tuple[str, ...]:
 def _keras_weight_dtypes(values: Any) -> Tuple[str, ...]:
     return tuple(
         sorted(
-            {
-                str(getattr(getattr(value, "value", value), "dtype", "unknown"))
-                for value in values
-            }
+            {str(getattr(getattr(value, "value", value), "dtype", "unknown")) for value in values}
         )
     )
 

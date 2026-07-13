@@ -430,9 +430,7 @@ def test_keras_footprint_counts_frozen_weights_as_parameters():
 
 def test_fully_frozen_keras_model_keeps_total_parameter_footprint():
     frozen = type("Weight", (), {"shape": (4, 5), "dtype": np.dtype("float32")})()
-    model = type(
-        "Model", (), {"trainable_weights": [], "weights": [frozen]}
-    )()
+    model = type("Model", (), {"trainable_weights": [], "weights": [frozen]})()
     extractor = type("KerasLike", (), {"model": model})()
 
     footprint = KerasResourceProfileAdapter(extractor).model_footprint()
@@ -522,9 +520,7 @@ def test_loaded_model_device_overrides_conflicting_profiling_hint():
     ).finish(cache_hit=True)
 
     assert profile.context["device"] == "GPU:1"
-    assert profile.context["device_resolution"] == (
-        "model_state_conflicts_with_profiling_hint"
-    )
+    assert profile.context["device_resolution"] == ("model_state_conflicts_with_profiling_hint")
     assert any("overrides" in warning for warning in profile.warnings)
 
 
@@ -570,9 +566,7 @@ def test_cache_hit_does_not_query_native_device_peak():
                 measurement_scope="profile_window",
             )
 
-    extractor = type(
-        "Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()}
-    )()
+    extractor = type("Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()})()
     profile = ResourceProfiler(
         ResourceProfilingConfig(enabled=True), extractor, streaming=False
     ).finish(cache_hit=True)
@@ -597,12 +591,8 @@ def test_failed_device_reset_prevents_peak_query():
             events.append("peak")
             raise AssertionError("peak must not be queried without a scoped reset")
 
-    extractor = type(
-        "Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()}
-    )()
-    profiler = ResourceProfiler(
-        ResourceProfilingConfig(enabled=True), extractor, streaming=False
-    )
+    extractor = type("Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()})()
+    profiler = ResourceProfiler(ResourceProfilingConfig(enabled=True), extractor, streaming=False)
     profiler.measure_call(lambda: np.ones((1, 1)), samples=1, call_type="transform")
     profile = profiler.finish()
 
@@ -625,12 +615,8 @@ def test_synchronization_failure_is_accumulated_across_calls():
         def reset_peak_device_memory(self):
             return AdapterOperationResult("unavailable", "no peak API")
 
-    extractor = type(
-        "Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()}
-    )()
-    profiler = ResourceProfiler(
-        ResourceProfilingConfig(enabled=True), extractor, streaming=True
-    )
+    extractor = type("Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()})()
+    profiler = ResourceProfiler(ResourceProfilingConfig(enabled=True), extractor, streaming=True)
     profiler.measure_call(lambda: np.ones((1, 1)), samples=1, call_type="transform")
     profiler.measure_call(lambda: np.ones((1, 1)), samples=1, call_type="transform")
 
@@ -646,12 +632,8 @@ def test_ordinary_adapter_exceptions_do_not_abort_scoring(error):
         def metadata(self):
             raise error
 
-    extractor = type(
-        "Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()}
-    )()
-    profiler = ResourceProfiler(
-        ResourceProfilingConfig(enabled=True), extractor, streaming=False
-    )
+    extractor = type("Extractor", (), {"get_resource_profile_adapter": lambda self: Adapter()})()
+    profiler = ResourceProfiler(ResourceProfilingConfig(enabled=True), extractor, streaming=False)
     profiler.measure_call(lambda: np.ones((1, 1)), samples=1, call_type="transform")
 
     profile = profiler.finish()
@@ -680,9 +662,7 @@ def test_torch_multi_device_model_synchronizes_all_devices_but_skips_peak():
         FakeParameter(1, 4, device="cuda:0", dtype="torch.float32"),
         FakeParameter(1, 4, device="cuda:1", dtype="torch.float32"),
     ]
-    model = type(
-        "Model", (), {"parameters": lambda self: parameters, "buffers": lambda self: []}
-    )()
+    model = type("Model", (), {"parameters": lambda self: parameters, "buffers": lambda self: []})()
     extractor = type("Extractor", (), {"model": model, "device": None})()
     adapter = TorchResourceProfileAdapter(extractor, torch_loader=lambda: torch)
 
@@ -765,6 +745,7 @@ def test_keras_adapter_routes_tensorflow_torch_and_jax_backends(monkeypatch):
     assert adapter.metadata().backend == "keras-tensorflow"
 
     Backend.active = "torch"
+
     class Device:
         def __init__(self, value):
             self.value = str(value)
