@@ -5,6 +5,14 @@ from typing import Any, Dict, List, Optional, Protocol, Sequence
 
 import numpy as np
 
+from vertebrae.profiling import (
+    AdapterOperationResult,
+    DeploymentArtifact,
+    DeviceMemoryMeasurement,
+    ModelFootprintMeasurement,
+    ResourceAdapterMetadata,
+)
+
 
 @dataclass(frozen=True)
 class EmbeddingOutputSpec:
@@ -113,32 +121,32 @@ class RetrievalCapableExtractor(Protocol):
 class ResourceProfileAdapter(Protocol):
     """Optional extractor-owned hooks for framework-specific resource data."""
 
-    def metadata(self) -> Dict[str, Any]:
-        """Return backend, device, precision, and synchronization metadata."""
+    def metadata(self) -> ResourceAdapterMetadata:
+        """Return backend, device, dtype, and synchronization metadata."""
 
         ...
 
-    def synchronize(self) -> bool:
-        """Synchronize asynchronous device work and return whether it succeeded."""
+    def synchronize(self) -> AdapterOperationResult:
+        """Synchronize asynchronous device work when supported."""
 
         ...
 
-    def reset_peak_device_memory(self) -> bool:
+    def reset_peak_device_memory(self) -> AdapterOperationResult:
         """Reset allocator peak counters when supported."""
 
         ...
 
-    def peak_device_memory(self) -> Dict[str, Any]:
-        """Return peak allocated/reserved device bytes and availability metadata."""
+    def peak_device_memory(self) -> DeviceMemoryMeasurement:
+        """Return allocator memory and availability metadata."""
 
         ...
 
-    def model_footprint(self) -> Dict[str, Any]:
+    def model_footprint(self) -> ModelFootprintMeasurement:
         """Return parameter and buffer counts/bytes when available."""
 
         ...
 
-    def deployment_artifacts(self) -> Sequence[str]:
+    def deployment_artifacts(self) -> Sequence[DeploymentArtifact]:
         """Return explicit local model/checkpoint artifact paths."""
 
         ...

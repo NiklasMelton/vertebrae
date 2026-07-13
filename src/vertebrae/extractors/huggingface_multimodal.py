@@ -49,6 +49,7 @@ class HFMultimodalExtractor:
         trust_remote_code: bool = False,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
+        checkpoint_paths: Optional[Iterable[str]] = None,
     ) -> None:
         if not input_modalities:
             raise ValueError("input_modalities must not be empty.")
@@ -69,6 +70,7 @@ class HFMultimodalExtractor:
         self.trust_remote_code = trust_remote_code
         self.processor_kwargs = processor_kwargs or {}
         self.model_kwargs = model_kwargs or {}
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "multimodal"
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
@@ -249,6 +251,7 @@ class HFMultimodalExtractor:
             "trust_remote_code": self.trust_remote_code,
             "processor_kwargs": self.processor_kwargs,
             "model_kwargs": self.model_kwargs,
+            "checkpoint_paths": list(self.checkpoint_paths),
             "streaming_safe": self.streaming_safe,
             "outputs": [_spec_to_recipe(spec) for spec in self._output_specs],
         }
@@ -257,6 +260,16 @@ class HFMultimodalExtractor:
                 _structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
         return recipe
+
+    def get_resource_profile_adapter(self) -> Any:
+        from vertebrae.profiling import TorchResourceProfileAdapter
+
+        return TorchResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            model_getter=lambda: self._model,
+            device_resolver=self._device,
+        )
 
     def _load_model(self) -> Any:
         if self._model is None:

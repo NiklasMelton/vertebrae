@@ -1,6 +1,6 @@
 """Optional sentence-transformers extractor."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 
@@ -31,6 +31,7 @@ class SentenceTransformerExtractor:
         show_progress_bar: bool = False,
         model_kwargs: Optional[Dict[str, Any]] = None,
         encode_kwargs: Optional[Dict[str, Any]] = None,
+        checkpoint_paths: Optional[Sequence[str]] = None,
     ) -> None:
         self.name = name
         self.model_id = model_id
@@ -40,6 +41,7 @@ class SentenceTransformerExtractor:
         self.show_progress_bar = show_progress_bar
         self.model_kwargs = model_kwargs or {}
         self.encode_kwargs = encode_kwargs or {}
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "text"
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
@@ -118,8 +120,26 @@ class SentenceTransformerExtractor:
             "show_progress_bar": self.show_progress_bar,
             "model_kwargs": self.model_kwargs,
             "encode_kwargs": self.encode_kwargs,
+            "checkpoint_paths": list(self.checkpoint_paths),
             "streaming_safe": self.streaming_safe,
         }
+
+    def get_resource_profile_adapter(self) -> Any:
+        from vertebrae.profiling import TorchResourceProfileAdapter
+
+        def resolve_device(torch: Any) -> Any:
+            if self.device is not None:
+                return self.device
+            if self._model is not None and getattr(self._model, "device", None) is not None:
+                return self._model.device
+            return "cuda" if torch.cuda.is_available() else "cpu"
+
+        return TorchResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            model_getter=lambda: self._model,
+            device_resolver=resolve_device,
+        )
 
     def _load_model(self) -> Any:
         if self._model is None:

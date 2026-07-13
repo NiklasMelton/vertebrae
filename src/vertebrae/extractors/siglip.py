@@ -25,6 +25,7 @@ class SigLIPExtractor:
         trust_remote_code: bool = False,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
+        checkpoint_paths: Optional[Sequence[str]] = None,
     ) -> None:
         resolved_outputs = list(
             outputs
@@ -47,6 +48,7 @@ class SigLIPExtractor:
             trust_remote_code=trust_remote_code,
             processor_kwargs=processor_kwargs,
             model_kwargs=model_kwargs,
+            checkpoint_paths=checkpoint_paths,
         )
         self.name = name
         self.model_id = model_id
@@ -81,3 +83,8 @@ class SigLIPExtractor:
         recipe["image_field"] = self.image_field
         recipe["text_field"] = self.text_field
         return recipe
+
+    def get_resource_profile_adapter(self) -> Any:
+        """Forward resource profiling to the Hugging Face delegate."""
+
+        return self._delegate.get_resource_profile_adapter()

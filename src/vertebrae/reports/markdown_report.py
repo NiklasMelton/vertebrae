@@ -247,9 +247,17 @@ def render_markdown_report(result: Any) -> str:
                     f"{_format_bytes(profile.host_memory.peak_increase_bytes)}",
                     "- Peak device allocated: "
                     f"{_format_bytes(profile.device_memory.peak_allocated_bytes)}",
+                    "- Peak device allocated increase: "
+                    f"{_format_bytes(profile.device_memory.peak_allocated_increase_bytes)}",
+                    f"- Device-memory status: {profile.device_memory.status}",
+                    f"- Model-footprint status: {profile.model.status}",
+                    f"- Parameter-footprint status: {profile.model.parameter_status}",
+                    f"- Checkpoint-footprint status: {profile.model.checkpoint_status}",
                     f"- Parameters: {profile.model.parameter_count or ''}",
                     f"- Parameter bytes: {_format_bytes(profile.model.parameter_bytes)}",
+                    f"- Buffer bytes: {_format_bytes(profile.model.buffer_bytes)}",
                     f"- Checkpoint bytes: {_format_bytes(profile.model.checkpoint_bytes)}",
+                    f"- Model weight dtypes: {profile.model.weight_dtypes}",
                     f"- Synchronization: {profile.context.get('synchronization_status', '')}",
                     f"- Batch sizes: {profile.inference.batch_sizes}",
                 ]
@@ -263,6 +271,11 @@ def render_markdown_report(result: Any) -> str:
                         "- Bytes per embedding: "
                         f"{_format_float(profile.embedding.bytes_per_embedding)}",
                     ]
+                )
+            for artifact in profile.model.artifacts:
+                lines.append(
+                    "- Deployment artifact: "
+                    f"{artifact.role} {artifact.path} ({artifact.status}, {artifact.bytes} bytes)"
                 )
             for warning in profile.warnings:
                 lines.append(f"- Warning: {warning}")

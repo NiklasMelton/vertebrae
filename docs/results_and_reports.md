@@ -49,6 +49,18 @@ single-call run therefore has no warm distribution. Host RSS peaks are measured 
 remain distinct from `MemoryConfig` admission estimates. Cache hits do not invoke the
 extractor and report inference as `not_measured_cache_hit`.
 
+Device profiles distinguish allocator baseline, absolute peak, and peak increase.
+CPU allocator memory is marked not applicable because process RSS is the relevant
+portable measurement. Model footprint reports parameter and checkpoint availability
+independently, so an ONNX file can have a measured checkpoint footprint while graph
+parameter inspection remains unavailable. `partial` means only part of the model or
+declared deployment bundle could be measured.
+
+Torch measurements use the extractor's resolved device and synchronize CUDA/MPS when
+supported. TensorFlow memory counters are used only for an unambiguous or explicitly
+hinted GPU; they never change model placement. Model weight dtypes describe stored
+weights and must not be interpreted as execution or autocast precision.
+
 For multi-label datasets, `target_type` is `multi_label`, `class_counts` means
 per-label occurrence counts, and result metadata preserves `label_names` plus
 labelset summary fields. For explicit regression datasets, `target_type` is

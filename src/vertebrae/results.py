@@ -226,11 +226,22 @@ class BenchmarkResult:
                     "peak_device_allocated_bytes": (
                         device_memory.peak_allocated_bytes if device_memory else None
                     ),
+                    "baseline_device_allocated_bytes": (
+                        device_memory.baseline_allocated_bytes if device_memory else None
+                    ),
+                    "peak_device_allocated_increase_bytes": (
+                        device_memory.peak_allocated_increase_bytes if device_memory else None
+                    ),
                     "peak_device_reserved_bytes": (
                         device_memory.peak_reserved_bytes if device_memory else None
                     ),
+                    "device_memory_status": device_memory.status if device_memory else None,
+                    "model_footprint_status": model.status if model else None,
+                    "parameter_footprint_status": model.parameter_status if model else None,
+                    "checkpoint_footprint_status": model.checkpoint_status if model else None,
                     "parameter_count": model.parameter_count if model else None,
                     "parameter_bytes": model.parameter_bytes if model else None,
+                    "model_weight_dtypes": model.weight_dtypes if model else [],
                     "checkpoint_bytes": model.checkpoint_bytes if model else None,
                     "raw_embedding_bytes": embedding.raw_bytes if embedding else None,
                     "evaluated_embedding_bytes": (embedding.evaluated_bytes if embedding else None),

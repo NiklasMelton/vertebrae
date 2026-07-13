@@ -38,6 +38,7 @@ class TorchvisionVisionExtractor:
         alpha_mode: str = "drop",
         device: Optional[str] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
+        checkpoint_paths: Optional[Sequence[str]] = None,
     ) -> None:
         self.name = name
         self.model_name = model_name
@@ -51,6 +52,7 @@ class TorchvisionVisionExtractor:
         self.alpha_mode = alpha_mode
         self.device = device
         self.model_kwargs = model_kwargs or {}
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "image"
         self.extractor_type = "torchvision"
         self.streaming_safe = True
@@ -198,6 +200,7 @@ class TorchvisionVisionExtractor:
             "alpha_mode": self.alpha_mode,
             "device": self.device,
             "model_kwargs": self.model_kwargs,
+            "checkpoint_paths": list(self.checkpoint_paths),
             "streaming_safe": self.streaming_safe,
         }
         if self._structured_output_specs:
@@ -205,6 +208,16 @@ class TorchvisionVisionExtractor:
                 structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
         return recipe
+
+    def get_resource_profile_adapter(self) -> Any:
+        from vertebrae.profiling import TorchResourceProfileAdapter
+
+        return TorchResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            model_getter=lambda: self._model,
+            device_resolver=self._device,
+        )
 
     def _device(self, torch_module: Any) -> str:
         if self.device is not None:
