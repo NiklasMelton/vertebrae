@@ -468,6 +468,37 @@ downloads a laptop-sized Caltech-101 subset with a few related category pairs,
 compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
 embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 
+### Retrieval and matching
+
+`RetrievalBenchmark` evaluates frozen query embeddings against an explicit gallery
+and graded relevance judgments. It is an exact, training-free ranking protocol and
+is separate from ordinary labeled OverlapIndex benchmarking.
+
+```python
+from vertebrae import RetrievalBenchmark, RetrievalConfig, RetrievalDataset
+from vertebrae.extractors import PrecomputedExtractor
+
+dataset = RetrievalDataset.from_embeddings(
+    query_embeddings,
+    gallery_embeddings,
+    relevance=[("query-1", "document-9", 2.0)],
+    query_ids=["query-1"],
+    gallery_ids=["document-9"],
+)
+
+result = RetrievalBenchmark(
+    dataset,
+    [PrecomputedExtractor("candidate")],
+    retrieval_config=RetrievalConfig(primary_metric="ndcg@10"),
+).run()
+```
+
+Relevance can be a dense query-by-gallery matrix or sparse
+`(query_id, gallery_id, grade)` records. Reports include NDCG, precision, recall,
+hit rate, MRR, mAP, and similarity diagnostics. See
+[the retrieval guide](docs/retrieval.md) for branch-aware extractors,
+bidirectional scoring, exclusions, compression, and artifact workflows.
+
 ### Fixed-prompt zero-shot alignment
 
 For contrastive extractors with independently encodable sample and text branches,
@@ -481,6 +512,12 @@ Use `ZeroShotCandidate(extractor, sample_branch, text_branch)` when compared mod
 use different branch names. OpenCLIP keeps its image-only ordinary default while its
 native `text_branch` remains available for zero-shot. Callable adapters cache only
 when their functions have portable paths or an explicit `cache_identity`.
+
+Retrieval and zero-shot compression keep both sides in one representation space.
+Learned retrieval transforms are fitted on the gallery and applied to queries;
+learned zero-shot transforms are fitted on samples and applied to prompt embeddings.
+The CLI exposes these paired workflows through `compress-retrieval` and
+`compress-zero-shot`.
 
 ### Custom embedding metrics
 
@@ -638,6 +675,9 @@ Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
 `vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae write-groups`,
 `vertebrae materialize-segmentation`, `vertebrae materialize-structured`,
 `vertebrae compress`, `vertebrae score`,
+`vertebrae plan-retrieval`, `vertebrae embed-retrieval-shard`,
+`vertebrae merge-retrieval-embeddings`, `vertebrae write-retrieval-relevance`,
+`vertebrae compress-retrieval`, `vertebrae score-retrieval`,
 `vertebrae plan-zero-shot`, `vertebrae embed-zero-shot-shard`,
 `vertebrae merge-zero-shot-embeddings`, `vertebrae write-zero-shot-protocol`,
 `vertebrae compress-zero-shot`, `vertebrae score-zero-shot`,
@@ -825,9 +865,11 @@ repeatable `vertebrae score --metric module:callable` options. Run
 ## Notes
 
 - The package targets Python `>=3.9,<3.15`.
-- The public API is centered on `BenchmarkDataset`, `SegmentationDataset`,
-  `Evaluator`, `Benchmark`, extractor wrappers, metric adapters, config
-  dataclasses, and structured result objects.
+- The public API is centered on `BenchmarkDataset`, `EmbeddingUnitDataset`,
+  `SegmentationDataset`, `RetrievalDataset`, `ZeroShotDataset`, `Evaluator`,
+  `Benchmark`, `RetrievalBenchmark`, `ZeroShotBenchmark`, structured and spatial
+  adapters, extractor wrappers, metric adapters, config dataclasses, and structured
+  result objects.
 
 ## License
 
