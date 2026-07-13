@@ -168,11 +168,7 @@ class ResourceProfiler:
         host = self._host_profile()
         device = self._device_profile()
         model = self._model_profile()
-        metadata = (
-            _safe_adapter_call(self.adapter.metadata, {})
-            if self.adapter is not None
-            else {}
-        )
+        metadata = _safe_adapter_call(self.adapter.metadata, {}) if self.adapter is not None else {}
         if self.records and self._synchronized is False and metadata.get("asynchronous", False):
             self._warnings.append(
                 "Device execution could not be synchronized; latency is host-observed."
@@ -200,9 +196,7 @@ class ResourceProfiler:
                 "planning_probe_calls": sum(
                     1 for record in self.records if not record.materialized
                 ),
-                "first_call_materialized": (
-                    self.records[0].materialized if self.records else None
-                ),
+                "first_call_materialized": (self.records[0].materialized if self.records else None),
                 "synchronization_status": (
                     "synchronized"
                     if self._synchronized
@@ -266,11 +260,7 @@ class ResourceProfiler:
         )
 
     def _device_profile(self) -> DeviceMemoryProfile:
-        metadata = (
-            _safe_adapter_call(self.adapter.metadata, {})
-            if self.adapter is not None
-            else {}
-        )
+        metadata = _safe_adapter_call(self.adapter.metadata, {}) if self.adapter is not None else {}
         if not self.config.device_memory:
             return DeviceMemoryProfile(status="disabled", **_device_identity(metadata))
         if self.adapter is None:
@@ -281,9 +271,7 @@ class ResourceProfiler:
         )
         status = str(payload.get("status", "unavailable"))
         if status == "unavailable":
-            self._warnings.append(
-                "Peak device memory is unavailable for this extractor backend."
-            )
+            self._warnings.append("Peak device memory is unavailable for this extractor backend.")
         return DeviceMemoryProfile(
             status=status,
             backend=payload.get("backend", metadata.get("backend")),
@@ -341,9 +329,7 @@ def with_embedding_footprint(
         raw_bytes=raw_bytes,
         evaluated_bytes=evaluated_bytes,
         bytes_per_embedding=(evaluated_bytes / n_samples if n_samples else 0.0),
-        compression_savings_ratio=(
-            1.0 - (evaluated_bytes / raw_bytes) if raw_bytes else 0.0
-        ),
+        compression_savings_ratio=(1.0 - (evaluated_bytes / raw_bytes) if raw_bytes else 0.0),
     )
     return replace(profile, embedding=footprint)
 
@@ -544,9 +530,7 @@ def _artifact_footprint(paths: Sequence[str]) -> List[Dict[str, Any]]:
         {"path": key, "bytes": int(path.stat().st_size), "status": "measured"}
         for key, path in sorted(files.items())
     ]
-    return measured + [
-        {"path": key, "bytes": 0, "status": "missing"} for key in sorted(missing)
-    ]
+    return measured + [{"path": key, "bytes": 0, "status": "missing"} for key in sorted(missing)]
 
 
 def _device_identity(metadata: Dict[str, Any]) -> Dict[str, Any]:

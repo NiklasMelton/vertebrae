@@ -137,9 +137,7 @@ class Benchmark:
             self._explicit_scoring_config = self.overlap_metric.config
         available_metrics = [metric.name for metric in self.metrics]
         self.primary_metric = primary_metric or available_metrics[0]
-        self.resource_profiling_config = (
-            resource_profiling_config or ResourceProfilingConfig()
-        )
+        self.resource_profiling_config = resource_profiling_config or ResourceProfilingConfig()
         self._resource_profiler: Optional[ResourceProfiler] = None
         if self.primary_metric not in available_metrics:
             raise ValueError(
@@ -259,9 +257,7 @@ class Benchmark:
                 batch_size=self.embedding_config.batch_size,
                 resource_profiler=(profiler if self.resource_profiling_config.enabled else None),
             )
-            source_profile = (
-                profiler.finish() if self.resource_profiling_config.enabled else None
-            )
+            source_profile = profiler.finish() if self.resource_profiling_config.enabled else None
             for materialization in materializations:
                 scoring_config = _classification_scoring_config(self.scoring_config)
                 if self.segmentation_config.background_mode == "include_excluded":
@@ -375,9 +371,7 @@ class Benchmark:
                 aligners=self.structured_aligners,
                 resource_profiler=(profiler if self.resource_profiling_config.enabled else None),
             )
-            source_profile = (
-                profiler.finish() if self.resource_profiling_config.enabled else None
-            )
+            source_profile = profiler.finish() if self.resource_profiling_config.enabled else None
             for materialization in materializations:
                 output_dataset: Any = materialization.dataset
                 if materialization.name in self.target_view_config.output_views:
@@ -1061,9 +1055,7 @@ class Benchmark:
             )
         )
         if self._supports_transform_many(extractor):
-            first_outputs = self._embed_batch_many(
-                extractor, first_batch, materialized=False
-            )
+            first_outputs = self._embed_batch_many(extractor, first_batch, materialized=False)
             estimates, aggregate = self._estimate_multi_output_memory(
                 first_outputs,
                 n_samples=len(dataset.y),

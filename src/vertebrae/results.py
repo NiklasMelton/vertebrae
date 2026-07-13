@@ -121,9 +121,7 @@ class BenchmarkResult:
             return []
         if tolerance is None:
             tolerance = float(
-                self.metadata.get("resource_profiling_config", {}).get(
-                    "quality_tolerance", 0.01
-                )
+                self.metadata.get("resource_profiling_config", {}).get("quality_tolerance", 0.01)
             )
         if tolerance < 0:
             raise ValueError("quality cohort tolerance must be >= 0.")
@@ -211,12 +209,8 @@ class BenchmarkResult:
                         item.separatix.skipped_reason if item.separatix else None
                     ),
                     "resource_profile_status": profile.status if profile else "disabled",
-                    "first_call_seconds": (
-                        inference.first_call_seconds if inference else None
-                    ),
-                    "warm_median_seconds": (
-                        inference.warm_median_seconds if inference else None
-                    ),
+                    "first_call_seconds": (inference.first_call_seconds if inference else None),
+                    "warm_median_seconds": (inference.warm_median_seconds if inference else None),
                     "warm_p95_seconds": inference.warm_p95_seconds if inference else None,
                     "throughput_samples_per_second": (
                         inference.throughput_samples_per_second if inference else None
@@ -225,9 +219,7 @@ class BenchmarkResult:
                     "synchronization_status": (
                         profile.context.get("synchronization_status") if profile else None
                     ),
-                    "peak_host_rss_bytes": (
-                        host_memory.peak_rss_bytes if host_memory else None
-                    ),
+                    "peak_host_rss_bytes": (host_memory.peak_rss_bytes if host_memory else None),
                     "peak_host_rss_increase_bytes": (
                         host_memory.peak_increase_bytes if host_memory else None
                     ),
@@ -241,9 +233,7 @@ class BenchmarkResult:
                     "parameter_bytes": model.parameter_bytes if model else None,
                     "checkpoint_bytes": model.checkpoint_bytes if model else None,
                     "raw_embedding_bytes": embedding.raw_bytes if embedding else None,
-                    "evaluated_embedding_bytes": (
-                        embedding.evaluated_bytes if embedding else None
-                    ),
+                    "evaluated_embedding_bytes": (embedding.evaluated_bytes if embedding else None),
                     "embedding_bytes_per_sample": (
                         embedding.bytes_per_embedding if embedding else None
                     ),

@@ -115,9 +115,7 @@ def test_streaming_profile_records_calls_memory_model_and_embedding(tmp_path, fa
         resource_profile_adapter=adapter,
     )
 
-    result = _benchmark(
-        _dataset(), extractor, cache_config=CacheConfig(enabled=False)
-    ).run()
+    result = _benchmark(_dataset(), extractor, cache_config=CacheConfig(enabled=False)).run()
     item = result.extractor_results[0]
     profile = item.resource_profile
 

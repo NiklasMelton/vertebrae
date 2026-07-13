@@ -182,9 +182,7 @@ def render_markdown_report(result: Any) -> str:
             profile = item.resource_profile
             assert profile is not None
             inference = profile.inference
-            evaluated_bytes = (
-                profile.embedding.evaluated_bytes if profile.embedding else None
-            )
+            evaluated_bytes = profile.embedding.evaluated_bytes if profile.embedding else None
             lines.append(
                 f"| {item.name} | {_format_milliseconds(inference.first_call_seconds)} | "
                 f"{_format_milliseconds(inference.warm_median_seconds)} | "

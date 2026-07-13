@@ -122,8 +122,10 @@ def recommendations_for_benchmark(
 
 def _rankable_primary_score(item: Any) -> float:
     metric = item.metrics.get(item.primary_metric_name)
-    return float(item.primary_score) if metric is None or metric.higher_is_better else -float(
-        item.primary_score
+    return (
+        float(item.primary_score)
+        if metric is None or metric.higher_is_better
+        else -float(item.primary_score)
     )
 
 

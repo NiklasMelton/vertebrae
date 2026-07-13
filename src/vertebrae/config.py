@@ -583,8 +583,6 @@ class ResourceProfilingConfig:
 
     def __post_init__(self) -> None:
         if self.host_sample_interval_seconds <= 0:
-            raise ValueError(
-                "ResourceProfilingConfig.host_sample_interval_seconds must be > 0."
-            )
+            raise ValueError("ResourceProfilingConfig.host_sample_interval_seconds must be > 0.")
         if self.quality_tolerance < 0:
             raise ValueError("ResourceProfilingConfig.quality_tolerance must be >= 0.")
