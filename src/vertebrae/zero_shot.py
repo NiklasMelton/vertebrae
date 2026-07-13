@@ -12,19 +12,28 @@ from vertebrae.compression.paired import compress_embedding_pair
 from vertebrae.config import (
     CacheConfig,
     EmbeddingCompressionConfig,
+    EmbeddingConfig,
     OverlapScoringConfig,
+    ResourceProfilingConfig,
     ZeroShotConfig,
 )
 from vertebrae.datasets.zero_shot import ZeroShotDataset
+from vertebrae.profiling import (
+    ResourceProfile,
+    ResourceProfileLike,
+    ResourceProfiler,
+    resource_profile_columns,
+    with_embedding_footprint,
+)
 from vertebrae.scoring.metrics import MetricResult, OverlapMetric
 from vertebrae.scoring.zero_shot import ZeroShotScorer, ZeroShotScoreResult
+from vertebrae.utils.embedding_batches import encode_endpoint_batches, endpoint_n_rows
 from vertebrae.utils.semantic_labels import (
     label_display,
     portable_json,
     semantic_label_catalog,
     semantic_label_keys,
 )
-from vertebrae.utils.validation import ensure_numeric_matrix
 
 
 @dataclass
@@ -42,6 +51,7 @@ class ZeroShotExtractorResult:
     cache_metadata: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     recipe: Dict[str, Any] = field(default_factory=dict)
+    resource_profiles: Dict[str, ResourceProfileLike] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return portable_json(
@@ -57,6 +67,7 @@ class ZeroShotExtractorResult:
                 "cache_metadata": self.cache_metadata,
                 "warnings": self.warnings,
                 "recipe": self.recipe,
+                "resource_profiles": self.resource_profiles,
             }
         )
 
@@ -72,28 +83,41 @@ class ZeroShotBenchmarkResult:
     def ranked_results(self) -> List[ZeroShotExtractorResult]:
         return sorted(self.extractor_results, key=lambda item: item.primary_score, reverse=True)
 
+    def quality_cohort(self, tolerance: Optional[float] = None) -> List[ZeroShotExtractorResult]:
+        ranked = self.ranked_results()
+        if not ranked:
+            return []
+        if tolerance is None:
+            tolerance = float(
+                self.metadata.get("resource_profiling_config", {}).get("quality_tolerance", 0.01)
+            )
+        if tolerance < 0:
+            raise ValueError("quality cohort tolerance must be >= 0.")
+        return [
+            item for item in ranked if ranked[0].primary_score - item.primary_score <= tolerance
+        ]
+
     def to_dataframe(self) -> Any:
         import pandas as pd
 
         rows = []
         for rank, item in enumerate(self.ranked_results(), start=1):
-            rows.append(
-                {
-                    "rank": rank,
-                    "extractor": item.name,
-                    "extractor_type": item.extractor_type,
-                    "primary_metric": item.zero_shot.primary_metric,
-                    "primary_score": item.primary_score,
-                    **item.zero_shot.metrics,
-                    "overlap_score": item.overlap.score,
-                    "overlap_macro": item.overlap.macro_score,
-                    "correct_class_margin": item.zero_shot.diagnostics["correct_class_margin"][
-                        "mean"
-                    ],
-                    "compression_method": item.compression_metadata.get("method", "none"),
-                    "compressed_dim": item.compression_metadata.get("compressed_dim"),
-                }
-            )
+            row = {
+                "rank": rank,
+                "extractor": item.name,
+                "extractor_type": item.extractor_type,
+                "primary_metric": item.zero_shot.primary_metric,
+                "primary_score": item.primary_score,
+                **item.zero_shot.metrics,
+                "overlap_score": item.overlap.score,
+                "overlap_macro": item.overlap.macro_score,
+                "correct_class_margin": item.zero_shot.diagnostics["correct_class_margin"]["mean"],
+                "compression_method": item.compression_metadata.get("method", "none"),
+                "compressed_dim": item.compression_metadata.get("compressed_dim"),
+            }
+            for endpoint, profile in item.resource_profiles.items():
+                row.update(resource_profile_columns(profile, prefix=f"{endpoint}_"))
+            rows.append(row)
         return pd.DataFrame(rows)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -144,6 +168,8 @@ class ZeroShotBenchmark:
         cache_config: Optional[CacheConfig] = None,
         compression_config: Optional[EmbeddingCompressionConfig] = None,
         compression_configs: Optional[Iterable[EmbeddingCompressionConfig]] = None,
+        embedding_config: Optional[EmbeddingConfig] = None,
+        resource_profiling_config: Optional[ResourceProfilingConfig] = None,
     ) -> None:
         if compression_config is not None and compression_configs is not None:
             raise ValueError("Provide compression_config or compression_configs, not both.")
@@ -156,6 +182,8 @@ class ZeroShotBenchmark:
         self.config = zero_shot_config or ZeroShotConfig()
         self.scoring_config = scoring_config or OverlapScoringConfig()
         self.cache_config = cache_config or CacheConfig()
+        self.embedding_config = embedding_config or EmbeddingConfig()
+        self.resource_profiling_config = resource_profiling_config or ResourceProfilingConfig()
         self.compression_configs = list(
             compression_configs or [compression_config or EmbeddingCompressionConfig()]
         )
@@ -178,6 +206,13 @@ class ZeroShotBenchmark:
             extractor = candidate.extractor
             recipe: Dict[str, Any] = getattr(extractor, "recipe", lambda: {})()
             sample_start = perf_counter()
+            sample_profiler = self._endpoint_profiler(
+                extractor,
+                side="samples",
+                branch=candidate.sample_branch,
+                modality=self.dataset.modality,
+                process_first_inference=True,
+            )
             sample_embeddings, sample_cache = self._cached_encode(
                 store,
                 extractor,
@@ -187,9 +222,24 @@ class ZeroShotBenchmark:
                 modality=self.dataset.modality,
                 identity=self.dataset.dataset.fingerprint(),
                 recipe=recipe,
+                profiler=sample_profiler,
+            )
+            sample_profile = (
+                sample_profiler.finish(cache_hit=bool(sample_cache["hit"]))
+                if self.resource_profiling_config.enabled
+                else None
             )
             sample_seconds = perf_counter() - sample_start
             prompt_start = perf_counter()
+            prompt_profiler = self._endpoint_profiler(
+                extractor,
+                side="prompts",
+                branch=candidate.text_branch,
+                modality="text",
+                process_first_inference=not bool(
+                    sample_profile is not None and sample_profile.status == "measured"
+                ),
+            )
             prompt_embeddings, prompt_cache = self._cached_encode(
                 store,
                 extractor,
@@ -199,6 +249,12 @@ class ZeroShotBenchmark:
                 modality="text",
                 identity=self.dataset.fingerprint(),
                 recipe=recipe,
+                profiler=prompt_profiler,
+            )
+            prompt_profile = (
+                prompt_profiler.finish(cache_hit=bool(prompt_cache["hit"]))
+                if self.resource_profiling_config.enabled
+                else None
             )
             prompt_seconds = perf_counter() - prompt_start
             for compression_config in self.compression_configs:
@@ -262,6 +318,42 @@ class ZeroShotBenchmark:
                             "zero_shot_sample_branch": candidate.sample_branch,
                             "zero_shot_text_branch": candidate.text_branch,
                         },
+                        resource_profiles=(
+                            _endpoint_profiles(
+                                samples=with_embedding_footprint(
+                                    sample_profile,
+                                    sample_embeddings,
+                                    compressed_samples,
+                                    store=store,
+                                    raw_key=sample_cache.get("key"),
+                                    evaluated_key=(
+                                        sample_cache.get("key")
+                                        if not compression_metadata.get("applied")
+                                        else None
+                                    ),
+                                    persisted_storage=(
+                                        self.resource_profiling_config.persisted_storage
+                                    ),
+                                ),
+                                prompts=with_embedding_footprint(
+                                    prompt_profile,
+                                    prompt_embeddings,
+                                    compressed_prompts,
+                                    store=store,
+                                    raw_key=prompt_cache.get("key"),
+                                    evaluated_key=(
+                                        prompt_cache.get("key")
+                                        if not compression_metadata.get("applied")
+                                        else None
+                                    ),
+                                    persisted_storage=(
+                                        self.resource_profiling_config.persisted_storage
+                                    ),
+                                ),
+                            )
+                            if self.resource_profiling_config.enabled
+                            else {}
+                        ),
                     )
                 )
         return ZeroShotBenchmarkResult(
@@ -272,6 +364,8 @@ class ZeroShotBenchmark:
                 "overlap_scoring_config": asdict(self.scoring_config),
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "cache_config": asdict(self.cache_config),
+                "embedding_config": asdict(self.embedding_config),
+                "resource_profiling_config": asdict(self.resource_profiling_config),
                 "protocol": self.dataset.protocol_recipe(),
                 "interpretation": (
                     "Zero-shot scores measure frozen semantic text alignment. Overlap is "
@@ -292,6 +386,7 @@ class ZeroShotBenchmark:
         modality: str,
         identity: str,
         recipe: Dict[str, Any],
+        profiler: ResourceProfiler,
     ) -> Tuple[Any, Dict[str, Any]]:
         cache_safe = recipe.get("cache_safe") is not False
         cache_metadata: Dict[str, Any] = {
@@ -321,10 +416,17 @@ class ZeroShotBenchmark:
                 "ZeroShotBenchmark requires text-aligned extractors implementing "
                 "encode_retrieval()."
             )
-        embeddings = ensure_numeric_matrix(
-            encoder(values, branch=branch, modality=modality),
-            f"Zero-shot {side} embeddings",
-            allow_sparse=True,
+        embeddings = encode_endpoint_batches(
+            values,
+            batch_size=(
+                self.embedding_config.batch_size
+                if self.embedding_config.streaming_enabled
+                else endpoint_n_rows(values)
+            ),
+            encode=lambda batch: encoder(batch, branch=branch, modality=modality),
+            owner=f"Zero-shot {side} embeddings",
+            profiler=profiler if self.resource_profiling_config.enabled else None,
+            call_type=f"encode_zero_shot_{side}",
         )
         if cache_safe and store is not None:
             store.put_array(key, embeddings)
@@ -343,6 +445,29 @@ class ZeroShotBenchmark:
             )
         return embeddings, cache_metadata
 
+    def _endpoint_profiler(
+        self,
+        extractor: Any,
+        *,
+        side: str,
+        branch: str,
+        modality: str,
+        process_first_inference: bool,
+    ) -> ResourceProfiler:
+        return ResourceProfiler(
+            self.resource_profiling_config,
+            extractor,
+            streaming=self.embedding_config.streaming_enabled,
+            context={
+                "endpoint": side,
+                "modality": modality,
+                "branch": branch,
+                "process_first_inference": process_first_inference,
+                "configured_batch_size": self.embedding_config.batch_size,
+                "measurement_scope": "local_endpoint",
+            },
+        )
+
 
 def _embedding_key(identity: str, recipe: Dict[str, Any], side: str, branch: str) -> str:
     recipe_hash = fingerprint_extractor_recipe(recipe)
@@ -360,6 +485,10 @@ def _compress_pair(
 
 def _variant_name(name: str, compression: Dict[str, Any]) -> str:
     return compression_variant_name(name, compression)
+
+
+def _endpoint_profiles(**profiles: Optional[ResourceProfile]) -> Dict[str, ResourceProfileLike]:
+    return {name: profile for name, profile in profiles.items() if profile is not None}
 
 
 def _resolve_candidates(
@@ -421,6 +550,26 @@ def render_zero_shot_markdown_report(result: ZeroShotBenchmarkResult) -> str:
             f"{item.overlap.macro_score:.4f} | "
             f"{item.compression_metadata.get('method', 'none')} |"
         )
+    cohort = [item for item in result.quality_cohort() if item.resource_profiles]
+    if cohort:
+        from vertebrae.retrieval import _endpoint_resource_markdown
+
+        lines.extend(
+            [
+                "",
+                "## Resources for quality-similar candidates",
+                "",
+                "These candidates fall within the configured quality tolerance. Distributed "
+                "throughput is aggregate compute throughput, not cluster wall-clock throughput.",
+                "",
+            ]
+        )
+        for item in cohort:
+            lines.extend([f"### {item.name}", ""])
+            for endpoint in ("samples", "prompts"):
+                profile = item.resource_profiles.get(endpoint)
+                if profile is not None:
+                    lines.extend(_endpoint_resource_markdown(endpoint, profile))
     lines.extend(["", "## Per-extractor details", ""])
     for item in result.ranked_results():
         lines.extend(

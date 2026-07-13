@@ -39,6 +39,20 @@ one or more persisted score artifacts. Compressed endpoint pairs carry a shared 
 compression identity and score artifacts are configuration-specific, so mixed pairs or
 different evaluation settings are rejected before ranking.
 
+Profiling config pickles can be passed to planning and extraction/materialization commands
+with `--resource-profiling-config-pickle`; plans serialize the config and plan-driven workers
+restore it. Each shard manifest stores its complete worker-local profile. Merge validates
+model footprint agreement while allowing worker paths and device identities to differ, then
+produces a `DistributedResourceProfile` with worker-first latency distribution, summed
+compute seconds, aggregate compute throughput, maximum worker RSS/device peaks and their
+shard keys, shard persisted bytes, and the merged array's logical and persisted bytes.
+Aggregate compute throughput is not cluster wall-clock throughput.
+
+Compression updates the evaluated logical/persisted footprint while retaining the raw
+footprint and shared inference/model evidence. Labeled, zero-shot, and retrieval artifact
+result builders reconstruct typed profiles; use `retrieval-from-artifacts` or
+`zero-shot-from-artifacts` to carry endpoint evidence into ordinary reports.
+
 Protocol artifacts use a versioned semantic-label catalog. Workers score stable label
 keys, so non-string labels neither require user class imports nor collapse into
 identically rendered strings. Protocol contents are fingerprinted and revalidated

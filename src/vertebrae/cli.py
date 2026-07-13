@@ -13,6 +13,7 @@ from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.config import (
     EmbeddingCompressionConfig,
     OverlapScoringConfig,
+    ResourceProfilingConfig,
     RetrievalConfig,
     ZeroShotConfig,
 )
@@ -56,6 +57,7 @@ from vertebrae.execution import (
     plan_retrieval_embedding_shard_jobs,
     plan_scoring_jobs,
     plan_zero_shot_embedding_shard_jobs,
+    retrieval_benchmark_result_from_artifacts,
     retrieval_compression_artifact_key,
     retrieval_embedding_artifact_key,
     retrieval_embedding_shard_key,
@@ -114,6 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(plan)
     plan.add_argument("--total-shards", type=int, required=True)
     plan.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(plan)
     _add_backend_args(plan, include_local_parallel=True)
     plan.add_argument("--output-json")
     plan.set_defaults(func=_cmd_plan)
@@ -124,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     embed.add_argument("--total-shards", type=int, required=True)
     embed.add_argument("--shard-index", type=int, required=True)
     embed.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(embed)
     embed.add_argument("--output-key")
     embed.add_argument("--output-json")
     embed.set_defaults(func=_cmd_embed_shard)
@@ -146,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval_plan.add_argument("--query-branch")
     retrieval_plan.add_argument("--gallery-branch")
     retrieval_plan.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(retrieval_plan)
     retrieval_plan.add_argument("--output-json")
     retrieval_plan.set_defaults(func=_cmd_plan_retrieval)
 
@@ -159,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval_embed.add_argument("--total-shards", type=int, required=True)
     retrieval_embed.add_argument("--shard-index", type=int, required=True)
     retrieval_embed.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(retrieval_embed)
     retrieval_embed.add_argument("--output-key")
     retrieval_embed.add_argument("--output-json")
     retrieval_embed.set_defaults(func=_cmd_embed_retrieval_shard)
@@ -183,6 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
     zero_plan.add_argument("--total-shards", type=int, required=True)
     zero_plan.add_argument("--sample-branch", required=True)
     zero_plan.add_argument("--text-branch", required=True)
+    zero_plan.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(zero_plan)
     zero_plan.add_argument("--output-json")
     zero_plan.set_defaults(func=_cmd_plan_zero_shot)
 
@@ -196,6 +204,8 @@ def build_parser() -> argparse.ArgumentParser:
     zero_embed.add_argument("--branch")
     zero_embed.add_argument("--total-shards", type=int)
     zero_embed.add_argument("--shard-index", type=int, required=True)
+    zero_embed.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(zero_embed)
     zero_embed.add_argument("--output-key")
     zero_embed.add_argument("--output-json")
     zero_embed.set_defaults(func=_cmd_embed_zero_shot_shard)
@@ -243,6 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(segmentation)
     segmentation.add_argument("--segmentation-config-pickle")
     segmentation.add_argument("--batch-size", type=int, default=16)
+    _add_resource_profiling_arg(segmentation)
     segmentation.add_argument("--output-json")
     segmentation.set_defaults(func=_cmd_materialize_segmentation)
 
@@ -253,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_object_args(structured)
     _add_cache_arg(structured)
     structured.add_argument("--batch-size", type=int, default=16)
+    _add_resource_profiling_arg(structured)
     structured.add_argument(
         "--aligner",
         action="append",
@@ -367,6 +379,18 @@ def build_parser() -> argparse.ArgumentParser:
     zero_collect.add_argument("--output-json")
     zero_collect.set_defaults(func=_cmd_zero_shot_from_artifacts)
 
+    retrieval_collect = subparsers.add_parser(
+        "retrieval-from-artifacts",
+        help="Reconstruct ranked retrieval JSON and Markdown reports from score artifacts.",
+    )
+    _add_cache_arg(retrieval_collect)
+    retrieval_collect.add_argument("--score-key", action="append", required=True)
+    retrieval_collect.add_argument("--output-key")
+    retrieval_collect.add_argument("--json-output")
+    retrieval_collect.add_argument("--markdown-output")
+    retrieval_collect.add_argument("--output-json")
+    retrieval_collect.set_defaults(func=_cmd_retrieval_from_artifacts)
+
     diagnose = subparsers.add_parser(
         "diagnose-complexity",
         help="Run Separatix on persisted embeddings and labels.",
@@ -457,6 +481,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(slurm)
     slurm.add_argument("--total-shards", type=int, required=True)
     slurm.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(slurm)
     slurm.add_argument("--script-output", required=True)
     slurm.add_argument("--job-name", default="vertebrae-embed")
     slurm.add_argument("--time", default="04:00:00")
@@ -495,6 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(run_embed)
     run_embed.add_argument("--total-shards", type=int, required=True)
     run_embed.add_argument("--batch-size", type=int, default=128)
+    _add_resource_profiling_arg(run_embed)
     _add_backend_args(run_embed, include_local_parallel=True)
     run_embed.add_argument("--output-json")
     run_embed.set_defaults(func=_cmd_run_embedding_shards)
@@ -505,11 +531,13 @@ def build_parser() -> argparse.ArgumentParser:
 def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
+    resource_config = _resource_profiling_config_from_args(args)
     jobs = plan_embedding_shard_jobs(
         dataset=dataset,
         extractor=extractor,
         total_shards=args.total_shards,
         batch_size=args.batch_size,
+        resource_profiling_config=resource_config,
     )
     base_key = embedding_artifact_key(dataset, extractor)
     plan = {
@@ -530,6 +558,7 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         "total_shards": args.total_shards,
         "batch_size": args.batch_size,
         "backend": args.backend,
+        "resource_profiling_config": asdict(resource_config),
         "shard_jobs": [
             {
                 "total_shards": job.shard.total_shards,
@@ -570,6 +599,7 @@ def _cmd_embed_shard(args: argparse.Namespace) -> dict[str, Any]:
         shard=shard,
         output_key=output_key,
         batch_size=args.batch_size,
+        resource_profiling_config=_resource_profiling_config_from_args(args),
     )
     return materialize_embedding_shard(job, _store_from_args(args))
 
@@ -598,6 +628,7 @@ def _cmd_merge_embeddings(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
+    resource_config = _resource_profiling_config_from_args(args)
     query_jobs = plan_retrieval_embedding_shard_jobs(
         dataset,
         extractor,
@@ -605,6 +636,7 @@ def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
         side="query",
         branch=args.query_branch,
         batch_size=args.batch_size,
+        resource_profiling_config=resource_config,
     )
     gallery_jobs = plan_retrieval_embedding_shard_jobs(
         dataset,
@@ -613,11 +645,13 @@ def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
         side="gallery",
         branch=args.gallery_branch,
         batch_size=args.batch_size,
+        resource_profiling_config=resource_config,
     )
     return {
         "artifact_type": "retrieval_embedding_plan",
         "dataset_fingerprint": dataset.fingerprint(),
         "extractor_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+        "resource_profiling_config": asdict(resource_config),
         "endpoints": {
             "query": _retrieval_endpoint_plan(query_jobs),
             "gallery": _retrieval_endpoint_plan(gallery_jobs),
@@ -666,6 +700,7 @@ def _cmd_embed_retrieval_shard(args: argparse.Namespace) -> dict[str, Any]:
             shard=shard,
             output_key=args.output_key or retrieval_embedding_shard_key(base_key, shard),
             batch_size=args.batch_size,
+            resource_profiling_config=_resource_profiling_config_from_args(args),
         ),
         _store_from_args(args),
     )
@@ -697,12 +732,15 @@ def _cmd_merge_retrieval_embeddings(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_plan_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
+    resource_config = _resource_profiling_config_from_args(args)
     sample_jobs = plan_zero_shot_embedding_shard_jobs(
         dataset,
         extractor,
         args.total_shards,
         side="samples",
         branch=args.sample_branch,
+        batch_size=args.batch_size,
+        resource_profiling_config=resource_config,
     )
     prompt_jobs = plan_zero_shot_embedding_shard_jobs(
         dataset,
@@ -710,12 +748,15 @@ def _cmd_plan_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
         args.total_shards,
         side="prompts",
         branch=args.text_branch,
+        batch_size=args.batch_size,
+        resource_profiling_config=resource_config,
     )
     return {
         "artifact_type": "zero_shot_embedding_plan",
         "dataset_fingerprint": dataset.fingerprint(),
         "extractor_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
         "protocol_key": zero_shot_protocol_artifact_key(dataset),
+        "resource_profiling_config": asdict(resource_config),
         "endpoints": {
             "samples": _zero_shot_endpoint_plan(sample_jobs),
             "prompts": _zero_shot_endpoint_plan(prompt_jobs),
@@ -742,6 +783,7 @@ def _zero_shot_endpoint_plan(jobs: Sequence[ZeroShotEmbeddingShardJob]) -> dict[
                 "branch": job.branch,
                 "shard": asdict(job.shard),
                 "output_key": job.output_key,
+                "batch_size": job.batch_size,
             }
             for job in jobs
         ],
@@ -774,6 +816,7 @@ def _cmd_embed_zero_shot_shard(args: argparse.Namespace) -> dict[str, Any]:
         branch = planned["branch"]
         shard = ShardSpec(**planned["shard"])
         output_key = args.output_key or planned["output_key"]
+        batch_size = int(planned.get("batch_size", args.batch_size))
     else:
         if not args.branch or args.total_shards is None:
             raise ValueError(
@@ -785,6 +828,7 @@ def _cmd_embed_zero_shot_shard(args: argparse.Namespace) -> dict[str, Any]:
         output_key = args.output_key or (
             f"{base_key}/shards/{args.shard_index:05d}-of-{args.total_shards:05d}"
         )
+        batch_size = args.batch_size
     return materialize_zero_shot_embedding_shard(
         ZeroShotEmbeddingShardJob(
             dataset=dataset,
@@ -793,6 +837,8 @@ def _cmd_embed_zero_shot_shard(args: argparse.Namespace) -> dict[str, Any]:
             branch=branch,
             shard=shard,
             output_key=output_key,
+            batch_size=batch_size,
+            resource_profiling_config=_resource_profiling_config_from_args(args, plan),
         ),
         _store_from_args(args),
     )
@@ -858,6 +904,7 @@ def _cmd_materialize_segmentation(args: argparse.Namespace) -> dict[str, Any]:
         _store_from_args(args),
         segmentation_config=config,
         batch_size=args.batch_size,
+        resource_profiling_config=_resource_profiling_config_from_args(args),
     )
 
 
@@ -870,6 +917,7 @@ def _cmd_materialize_structured(args: argparse.Namespace) -> dict[str, Any]:
         _store_from_args(args),
         batch_size=args.batch_size,
         aligners=_structured_aligners_from_specs(args.aligner),
+        resource_profiling_config=_resource_profiling_config_from_args(args),
     )
 
 
@@ -1027,6 +1075,19 @@ def _cmd_compress_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_zero_shot_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
     result = zero_shot_benchmark_result_from_artifacts(
+        args.score_key,
+        _store_from_args(args),
+        output_key=args.output_key,
+    )
+    if args.json_output:
+        result.save_json(args.json_output)
+    if args.markdown_output:
+        result.save_markdown(args.markdown_output)
+    return result.to_dict()
+
+
+def _cmd_retrieval_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
+    result = retrieval_benchmark_result_from_artifacts(
         args.score_key,
         _store_from_args(args),
         output_key=args.output_key,
@@ -1221,6 +1282,7 @@ def _cmd_run_embedding_shards(args: argparse.Namespace) -> dict[str, Any]:
         extractor=extractor,
         total_shards=args.total_shards,
         batch_size=args.batch_size,
+        resource_profiling_config=_resource_profiling_config_from_args(args),
     )
     backend = _create_backend_from_args(args)
     from vertebrae.execution import materialize_embedding_shards
@@ -1281,6 +1343,14 @@ def _render_slurm_array_script(
             *_cache_flag_lines(args),
             f"  --total-shards {args.total_shards} \\",
             "  --shard-index ${SLURM_ARRAY_TASK_ID} \\",
+            *(
+                [
+                    "  --resource-profiling-config-pickle "
+                    f"{args.resource_profiling_config_pickle} \\",
+                ]
+                if args.resource_profiling_config_pickle
+                else []
+            ),
             f"  --batch-size {args.batch_size}",
             "",
             "# After the array completes, merge the shards with:",
@@ -1368,6 +1438,13 @@ def _add_object_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--extractor-pickle", required=True)
 
 
+def _add_resource_profiling_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--resource-profiling-config-pickle",
+        help="Pickled ResourceProfilingConfig propagated to extraction workers.",
+    )
+
+
 def _add_cache_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cache-dir", default=".vertebrae_cache")
     parser.add_argument("--s3-endpoint-url")
@@ -1391,6 +1468,26 @@ def _add_backend_args(
 def _load_pickle(path: str) -> Any:
     with Path(path).open("rb") as f:
         return pickle.load(f)
+
+
+def _resource_profiling_config_from_args(
+    args: argparse.Namespace,
+    plan: Optional[dict[str, Any]] = None,
+) -> ResourceProfilingConfig:
+    path = getattr(args, "resource_profiling_config_pickle", None)
+    if path:
+        config = _load_pickle(path)
+        if not isinstance(config, ResourceProfilingConfig):
+            raise TypeError(
+                "--resource-profiling-config-pickle must contain a " "ResourceProfilingConfig."
+            )
+        return config
+    serialized = (plan or {}).get("resource_profiling_config")
+    if serialized is not None:
+        if not isinstance(serialized, dict):
+            raise TypeError("Plan resource_profiling_config must be a JSON object.")
+        return ResourceProfilingConfig(**serialized)
+    return ResourceProfilingConfig()
 
 
 def _load_json(path: str) -> dict[str, Any]:
@@ -1563,6 +1660,8 @@ def _benchmark_result_from_dict(
     separatix_cls: Any,
     metric_cls: Any,
 ) -> Any:
+    from vertebrae.profiling import resource_profile_like_from_dict
+
     extractor_results = []
     for item in data.get("extractor_results", []):
         separatix = None
@@ -1587,6 +1686,7 @@ def _benchmark_result_from_dict(
                 target_view=item.get("target_view"),
                 weakest_class=item.get("weakest_class"),
                 weakest_class_score=item.get("weakest_class_score"),
+                resource_profile=resource_profile_like_from_dict(item.get("resource_profile")),
             )
         )
     return benchmark_cls(

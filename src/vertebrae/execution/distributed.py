@@ -19,6 +19,7 @@ from vertebrae.compression import (
     compression_variant_name,
 )
 from vertebrae.compression.base import _compression_metadata, create_embedding_compressor
+from vertebrae.config import ResourceProfilingConfig
 from vertebrae.execution.jobs import (
     CompressionJob,
     EmbeddingMergeJob,
@@ -31,7 +32,16 @@ from vertebrae.execution.jobs import (
     ShardSpec,
 )
 from vertebrae.extractors.base import EmbeddingOutput
+from vertebrae.profiling import (
+    ResourceProfiler,
+    aggregate_distributed_resource_profiles,
+    distributed_resource_profile_from_dict,
+    resource_profile_from_dict,
+    with_distributed_embedding_footprint,
+    with_embedding_footprint,
+)
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
+from vertebrae.utils.embedding_batches import encode_endpoint_batches, take_endpoint_rows
 from vertebrae.utils.labels import (
     REGRESSION_TARGET,
     label_view_suffix,
@@ -172,20 +182,33 @@ def materialize_segmentation_artifacts(
     store: ArtifactStore,
     segmentation_config: Any = None,
     batch_size: int = 16,
+    resource_profiling_config: Optional[ResourceProfilingConfig] = None,
 ) -> dict[str, Any]:
     """Materialize spatial segmentation outputs into standard artifact boundaries."""
 
     from vertebrae.segmentation import materialize_segmentation_outputs
 
     recipe = extractor.recipe()
+    resource_config = resource_profiling_config or ResourceProfilingConfig()
+    profiler = ResourceProfiler(
+        resource_config,
+        extractor,
+        streaming=True,
+        context={"measurement_scope": "artifact_materialization", "modality": "segmentation"},
+    )
     base_key = f"segmentation/{dataset.fingerprint()}/" f"{fingerprint_extractor_recipe(recipe)}"
     outputs = []
-    for materialization in materialize_segmentation_outputs(
-        dataset,
-        extractor,
-        config=segmentation_config,
-        batch_size=batch_size,
-    ):
+    materializations = list(
+        materialize_segmentation_outputs(
+            dataset,
+            extractor,
+            config=segmentation_config,
+            batch_size=batch_size,
+            resource_profiler=profiler if resource_config.enabled else None,
+        )
+    )
+    shared_profile = profiler.finish() if resource_config.enabled else None
+    for materialization in materializations:
         safe_name = materialization.name.replace("/", "_")
         output_key = f"{base_key}/outputs/{safe_name}"
         labels_key = f"{output_key}/labels"
@@ -218,7 +241,19 @@ def materialize_segmentation_artifacts(
             "labels_key": labels_key,
             "groups_key": groups_key,
             "provenance_key": provenance_key,
+            "resource_profiling_config": asdict(resource_config),
         }
+        profile = with_embedding_footprint(
+            shared_profile,
+            embeddings,
+            embeddings,
+            store=store,
+            raw_key=output_key,
+            evaluated_key=output_key,
+            persisted_storage=resource_config.persisted_storage,
+        )
+        if profile is not None:
+            embedding_manifest["resource_profile"] = make_json_safe(profile)
         store.put_json(output_key, embedding_manifest)
         label_path = store.put_labels(labels_key, labels)
         label_summary = target_summary(
@@ -264,6 +299,10 @@ def materialize_segmentation_artifacts(
         "output_key": base_key,
         "dataset_fingerprint": dataset.fingerprint(),
         "extractor_recipe": recipe,
+        "resource_profiling_config": asdict(resource_config),
+        "resource_profile": (
+            make_json_safe(shared_profile) if shared_profile is not None else None
+        ),
         "outputs": outputs,
     }
     store.put_json(base_key, bundle)
@@ -276,20 +315,33 @@ def materialize_structured_artifacts(
     store: ArtifactStore,
     batch_size: int = 16,
     aligners: Optional[dict[str, Any]] = None,
+    resource_profiling_config: Optional[ResourceProfilingConfig] = None,
 ) -> dict[str, Any]:
     """Materialize structured unit outputs into standard artifact boundaries."""
 
     from vertebrae.structured import materialize_structured_outputs
 
     recipe = extractor.recipe()
+    resource_config = resource_profiling_config or ResourceProfilingConfig()
+    profiler = ResourceProfiler(
+        resource_config,
+        extractor,
+        streaming=True,
+        context={"measurement_scope": "artifact_materialization", "modality": "structured"},
+    )
     base_key = f"structured/{dataset.fingerprint()}/{fingerprint_extractor_recipe(recipe)}"
     outputs = []
-    for materialization in materialize_structured_outputs(
-        dataset,
-        extractor,
-        batch_size=batch_size,
-        aligners=aligners,
-    ):
+    materializations = list(
+        materialize_structured_outputs(
+            dataset,
+            extractor,
+            batch_size=batch_size,
+            aligners=aligners,
+            resource_profiler=profiler if resource_config.enabled else None,
+        )
+    )
+    shared_profile = profiler.finish() if resource_config.enabled else None
+    for materialization in materializations:
         safe_name = materialization.name.replace("/", "_")
         output_key = f"{base_key}/outputs/{safe_name}"
         labels_key = f"{output_key}/labels"
@@ -326,7 +378,19 @@ def materialize_structured_artifacts(
             "labels_key": labels_key,
             "groups_key": groups_key,
             "provenance_key": provenance_key,
+            "resource_profiling_config": asdict(resource_config),
         }
+        profile = with_embedding_footprint(
+            shared_profile,
+            embeddings,
+            embeddings,
+            store=store,
+            raw_key=output_key,
+            evaluated_key=output_key,
+            persisted_storage=resource_config.persisted_storage,
+        )
+        if profile is not None:
+            embedding_manifest["resource_profile"] = make_json_safe(profile)
         store.put_json(output_key, embedding_manifest)
         label_path = store.put_labels(labels_key, labels)
         label_summary = target_summary(
@@ -372,6 +436,10 @@ def materialize_structured_artifacts(
         "output_key": base_key,
         "dataset_fingerprint": dataset.fingerprint(),
         "extractor_recipe": recipe,
+        "resource_profiling_config": asdict(resource_config),
+        "resource_profile": (
+            make_json_safe(shared_profile) if shared_profile is not None else None
+        ),
         "outputs": outputs,
     }
     store.put_json(base_key, bundle)
@@ -383,6 +451,7 @@ def plan_embedding_shard_jobs(
     extractor: Any,
     total_shards: int,
     batch_size: int = 128,
+    resource_profiling_config: Optional[ResourceProfilingConfig] = None,
 ) -> list[EmbeddingShardJob]:
     """Create deterministic embedding shard jobs.
 
@@ -404,6 +473,7 @@ def plan_embedding_shard_jobs(
             shard=shard,
             output_key=embedding_shard_key(base_key, shard),
             batch_size=batch_size,
+            resource_profiling_config=(resource_profiling_config or ResourceProfilingConfig()),
         )
         for shard in (
             ShardSpec(total_shards=total_shards, shard_index=i) for i in range(total_shards)
@@ -674,6 +744,9 @@ def score_retrieval_artifact(job: RetrievalScoringJob, store: ArtifactStore) -> 
         "relevance_key": job.relevance_key,
         "exclusions_key": job.exclusions_key,
         "result": result.to_dict(),
+        "query_endpoint": query_metadata,
+        "gallery_endpoint": gallery_metadata,
+        "retrieval_config": asdict(job.retrieval_config or RetrievalConfig()),
         "resources": asdict(job.resources),
     }
     store.put_json(job.output_key, artifact)
@@ -824,6 +897,37 @@ def compress_embedding_artifact(
         else "dense"
     )
     compressed_metadata["compression"] = compression_result.metadata
+    serialized_profile = embedding_metadata.get("distributed_resource_profile")
+    if serialized_profile is not None:
+        distributed_profile = with_distributed_embedding_footprint(
+            distributed_resource_profile_from_dict(dict(serialized_profile)),
+            embeddings,
+            compression_result.embeddings,
+            store=store,
+            raw_key=job.embedding_key,
+            evaluated_key=job.output_key,
+            persisted_storage=bool(
+                embedding_metadata.get("resource_profiling_config", {}).get(
+                    "persisted_storage", True
+                )
+            ),
+        )
+        compressed_metadata["distributed_resource_profile"] = make_json_safe(distributed_profile)
+    elif embedding_metadata.get("resource_profile") is not None:
+        local_profile = with_embedding_footprint(
+            resource_profile_from_dict(dict(embedding_metadata["resource_profile"])),
+            embeddings,
+            compression_result.embeddings,
+            store=store,
+            raw_key=job.embedding_key,
+            evaluated_key=job.output_key,
+            persisted_storage=bool(
+                embedding_metadata.get("resource_profiling_config", {}).get(
+                    "persisted_storage", True
+                )
+            ),
+        )
+        compressed_metadata["resource_profile"] = make_json_safe(local_profile)
     store.put_json(job.output_key, compressed_metadata)
     return {
         "artifact_type": "compressed_embedding",
@@ -1014,6 +1118,7 @@ def benchmark_result_from_artifacts(
         JSON-compatible benchmark result.
     """
 
+    from vertebrae.profiling import resource_profile_like_from_dict
     from vertebrae.reports.recommendations import (
         recommendation_for_extractor,
         recommendations_for_benchmark,
@@ -1079,6 +1184,19 @@ def benchmark_result_from_artifacts(
         recommendation=recommendation,
         metrics=metrics,
         primary_metric_name=primary_metric_name,
+        resource_profile=(
+            resource_profile_like_from_dict(
+                dict(
+                    embedding_metadata.get("distributed_resource_profile")
+                    or embedding_metadata["resource_profile"]
+                )
+            )
+            if (
+                embedding_metadata.get("distributed_resource_profile") is not None
+                or embedding_metadata.get("resource_profile") is not None
+            )
+            else None
+        ),
     )
     result = BenchmarkResult(
         dataset_summary={
@@ -1111,12 +1229,102 @@ def benchmark_result_from_artifacts(
             "source_stability_key": stability_key,
             "source_separatix_key": separatix_key,
             "distributed_artifacts": True,
+            "resource_profiling_config": embedding_metadata.get("resource_profiling_config", {}),
         },
     )
     payload = result.to_dict()
     if output_key:
         store.put_json(output_key, payload)
     return payload
+
+
+def retrieval_benchmark_result_from_artifacts(
+    score_keys: Iterable[str],
+    store: ArtifactStore,
+    output_key: Optional[str] = None,
+) -> Any:
+    """Reconstruct a rankable retrieval result from persisted score artifacts."""
+
+    from vertebrae.retrieval import RetrievalBenchmarkResult, RetrievalExtractorResult
+    from vertebrae.scoring.retrieval import RetrievalScoreResult
+
+    keys = list(score_keys)
+    artifacts = [store.get_json(key) for key in keys]
+    if not artifacts:
+        raise ValueError("At least one retrieval score artifact is required.")
+    if any(item.get("artifact_type") != "retrieval_evaluation" for item in artifacts):
+        raise ValueError("All score keys must reference retrieval evaluation artifacts.")
+    relevance_keys = {item.get("relevance_key") for item in artifacts}
+    if len(relevance_keys) != 1:
+        raise ValueError("Retrieval score artifacts must share one relevance protocol.")
+
+    results = []
+    for artifact in artifacts:
+        query_endpoint = dict(artifact["query_endpoint"])
+        gallery_endpoint = dict(artifact["gallery_endpoint"])
+        query_recipe = dict(query_endpoint.get("extractor_recipe") or {})
+        gallery_recipe = dict(gallery_endpoint.get("extractor_recipe") or {})
+        if query_recipe != gallery_recipe:
+            raise ValueError("Retrieval endpoint artifacts must share an extractor recipe.")
+        compression = dict(
+            query_endpoint.get("compression")
+            or gallery_endpoint.get("compression")
+            or {"method": "none"}
+        )
+        score = RetrievalScoreResult(**dict(artifact["result"]))
+        resource_profiles = {}
+        for side, endpoint in (("query", query_endpoint), ("gallery", gallery_endpoint)):
+            serialized = endpoint.get("distributed_resource_profile") or endpoint.get(
+                "resource_profile"
+            )
+            if serialized is not None:
+                from vertebrae.profiling import resource_profile_like_from_dict
+
+                profile = resource_profile_like_from_dict(dict(serialized))
+                if profile is not None:
+                    resource_profiles[side] = profile
+        base_name = str(
+            query_recipe.get("name") or query_endpoint.get("extractor_name") or "artifact"
+        )
+        results.append(
+            RetrievalExtractorResult(
+                name=compression_variant_name(base_name, compression),
+                extractor_type=query_recipe.get("extractor_type", "artifact"),
+                forward=score,
+                reverse=None,
+                primary_score=score.score,
+                compression_metadata=compression,
+                runtime={},
+                warnings=sorted(set(score.warnings + list(compression.get("warnings", [])))),
+                recipe=query_recipe,
+                resource_profiles=resource_profiles,
+            )
+        )
+
+    relevance = store.get_json(str(next(iter(relevance_keys))))
+    first = artifacts[0]
+    result = RetrievalBenchmarkResult(
+        dataset_summary={
+            "modality": "retrieval",
+            "n_queries": relevance.get("n_queries", first["query_endpoint"].get("n_samples")),
+            "n_gallery": relevance.get("n_gallery", first["gallery_endpoint"].get("n_samples")),
+            "query_modality": first["query_endpoint"].get("modality"),
+            "gallery_modality": first["gallery_endpoint"].get("modality"),
+        },
+        extractor_results=results,
+        metadata={
+            "artifact_backed": True,
+            "score_keys": keys,
+            "relevance_key": next(iter(relevance_keys)),
+            "retrieval_config": first.get("retrieval_config", {}),
+            "resource_profiling_config": first["query_endpoint"].get(
+                "resource_profiling_config", {}
+            ),
+        },
+    )
+    if output_key:
+        store.put_json(output_key, result.to_dict())
+    return result
 
 
 def _score_summary(scores: list[float], interval_level: float) -> dict[str, float]:
@@ -1213,6 +1421,16 @@ def materialize_embedding_shard(
     if len(sample_indices) == 0:
         raise ValueError("Embedding shard contains no samples.")
     extractor.fit(dataset.X, dataset.y)
+    profiler = ResourceProfiler(
+        job.resource_profiling_config,
+        extractor,
+        streaming=True,
+        context={
+            "measurement_scope": "worker_shard",
+            "shard": asdict(job.shard),
+            "configured_batch_size": job.batch_size,
+        },
+    )
     local_positions = {
         int(sample_index): position for position, sample_index in enumerate(sample_indices)
     }
@@ -1222,8 +1440,9 @@ def materialize_embedding_shard(
             store=store,
             sample_indices=sample_indices,
             local_positions=local_positions,
+            profiler=profiler,
         )
-    batches = _local_embedding_batches(dataset, extractor, job, local_positions)
+    batches = _local_embedding_batches(dataset, extractor, job, local_positions, profiler)
     artifact_path = store.put_array_batches(
         job.output_key,
         batches,
@@ -1231,6 +1450,16 @@ def materialize_embedding_shard(
         require_complete=True,
     )
     embeddings = store.get_array(job.output_key)
+    profile = profiler.finish() if job.resource_profiling_config.enabled else None
+    profile = with_embedding_footprint(
+        profile,
+        embeddings,
+        embeddings,
+        store=store,
+        raw_key=job.output_key,
+        evaluated_key=job.output_key,
+        persisted_storage=job.resource_profiling_config.persisted_storage,
+    )
     sparse_embeddings = is_sparse_matrix(embeddings)
     manifest = {
         "artifact_type": "embedding_shard",
@@ -1251,6 +1480,8 @@ def materialize_embedding_shard(
         "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
         "batch_size": job.batch_size,
         "resources": asdict(job.resources),
+        "resource_profiling_config": asdict(job.resource_profiling_config),
+        "resource_profile": make_json_safe(profile) if profile is not None else None,
     }
     store.put_json(job.output_key, manifest)
     return manifest
@@ -1268,6 +1499,20 @@ def materialize_retrieval_embedding_shard(
     indices = job.shard.indices(len(values))
     if not len(indices):
         raise ValueError("Retrieval embedding shard contains no samples.")
+    profiler = ResourceProfiler(
+        job.resource_profiling_config,
+        job.extractor,
+        streaming=True,
+        context={
+            "measurement_scope": "worker_shard",
+            "endpoint": job.side,
+            "branch": job.branch,
+            "modality": modality,
+            "shard": asdict(job.shard),
+            "configured_batch_size": job.batch_size,
+        },
+    )
+    selected = take_endpoint_rows(values, indices)
     if job.branch is None:
         extractor = job.extractor
         if getattr(extractor, "already_fitted", True) is False:
@@ -1275,23 +1520,41 @@ def materialize_retrieval_embedding_shard(
                 "Distributed retrieval shards require a frozen or already-fitted extractor; "
                 "fit it before serializing the extractor pickle."
             )
-        embeddings = ensure_numeric_matrix(
-            extractor.transform(_take_retrieval_rows(values, indices)),
-            f"Retriever '{extractor.name}' {job.side} shard embeddings",
-            allow_sparse=True,
-        )
+
+        def encode_standard(batch: Any) -> Any:
+            return extractor.transform(batch)
+
+        encode = encode_standard
     else:
         encoder = getattr(job.extractor, "encode_retrieval", None)
         if not callable(encoder):
             raise TypeError("Retrieval branch materialization requires encode_retrieval().")
-        embeddings = ensure_numeric_matrix(
-            encoder(_take_retrieval_rows(values, indices), branch=job.branch, modality=modality),
-            f"Retriever '{job.extractor.name}' {job.side} shard embeddings",
-            allow_sparse=True,
-        )
+
+        def encode_retrieval(batch: Any) -> Any:
+            return encoder(batch, branch=job.branch, modality=modality)
+
+        encode = encode_retrieval
+    embeddings = encode_endpoint_batches(
+        selected,
+        batch_size=job.batch_size,
+        encode=encode,
+        owner=f"Retriever '{job.extractor.name}' {job.side} shard embeddings",
+        profiler=profiler if job.resource_profiling_config.enabled else None,
+        call_type=f"encode_retrieval_{job.side}",
+    )
     if embeddings.shape[0] != len(indices):
         raise ValueError("Retrieval extractor output does not align with its endpoint shard.")
     path = store.put_array(job.output_key, embeddings)
+    profile = profiler.finish() if job.resource_profiling_config.enabled else None
+    profile = with_embedding_footprint(
+        profile,
+        embeddings,
+        embeddings,
+        store=store,
+        raw_key=job.output_key,
+        evaluated_key=job.output_key,
+        persisted_storage=job.resource_profiling_config.persisted_storage,
+    )
     sparse = is_sparse_matrix(embeddings)
     manifest = {
         "artifact_type": "retrieval_embedding_shard",
@@ -1303,6 +1566,7 @@ def materialize_retrieval_embedding_shard(
         "recipe_hash": fingerprint_extractor_recipe(job.extractor.recipe()),
         "side": job.side,
         "branch": job.branch,
+        "modality": modality,
         "shard": asdict(job.shard),
         "sample_indices": indices.tolist(),
         "n_samples": int(embeddings.shape[0]),
@@ -1311,6 +1575,9 @@ def materialize_retrieval_embedding_shard(
         "dtype": str(embeddings.dtype),
         "sparse": sparse,
         "storage_format": embeddings.getformat() if sparse else "dense",
+        "batch_size": job.batch_size,
+        "resource_profiling_config": asdict(job.resource_profiling_config),
+        "resource_profile": make_json_safe(profile) if profile is not None else None,
     }
     store.put_json(job.output_key, manifest)
     return manifest
@@ -1359,6 +1626,23 @@ def compress_retrieval_embedding_artifacts(
                 "compression": metadata,
             }
         )
+        serialized_profile = source_metadata.get("distributed_resource_profile")
+        if serialized_profile is not None:
+            source_values = query if side == "query" else gallery
+            distributed_profile = with_distributed_embedding_footprint(
+                distributed_resource_profile_from_dict(dict(serialized_profile)),
+                source_values,
+                values,
+                store=store,
+                raw_key=(job.query_embedding_key if side == "query" else job.gallery_embedding_key),
+                evaluated_key=key,
+                persisted_storage=bool(
+                    source_metadata.get("resource_profiling_config", {}).get(
+                        "persisted_storage", True
+                    )
+                ),
+            )
+            manifest["distributed_resource_profile"] = make_json_safe(distributed_profile)
         manifests.append(manifest)
     for manifest in manifests:
         store.put_json(manifest["output_key"], manifest)
@@ -1428,6 +1712,26 @@ def merge_embedding_shards(
     first = manifests[0]
     for key in ("dataset_fingerprint", "extractor_recipe", "recipe_hash"):
         manifest[key] = first.get(key)
+    serialized_profiles = [
+        (item["output_key"], item.get("resource_profile"))
+        for item in manifests
+        if item.get("resource_profile") is not None
+    ]
+    if serialized_profiles:
+        config = dict(first.get("resource_profiling_config") or {})
+        distributed_profile = aggregate_distributed_resource_profiles(
+            [
+                (key, resource_profile_from_dict(dict(profile or {})))
+                for key, profile in serialized_profiles
+            ],
+            merged_embeddings=embeddings,
+            all_shard_keys=[item["output_key"] for item in manifests],
+            store=store,
+            merged_key=job.output_key,
+            persisted_storage=bool(config.get("persisted_storage", True)),
+        )
+        manifest["distributed_resource_profile"] = make_json_safe(distributed_profile)
+        manifest["resource_profiling_config"] = config
     store.put_json(job.output_key, manifest)
     return manifest
 
@@ -1442,13 +1746,15 @@ def merge_retrieval_embedding_shards(
     manifest = merge_embedding_shards(job, store)
     sides = {shard.get("side") for shard in shards}
     branches = {shard.get("branch") for shard in shards}
-    if len(sides) != 1 or len(branches) != 1:
-        raise ValueError("Retrieval endpoint shards must share one side and branch.")
+    modalities = {shard.get("modality") for shard in shards}
+    if len(sides) != 1 or len(branches) != 1 or len(modalities) != 1:
+        raise ValueError("Retrieval endpoint shards must share one side, branch, and modality.")
     manifest.update(
         {
             "artifact_type": "retrieval_embedding",
             "side": sides.pop(),
             "branch": branches.pop(),
+            "modality": modalities.pop(),
         }
     )
     store.put_json(job.output_key, manifest)
@@ -1463,6 +1769,7 @@ def plan_retrieval_embedding_shard_jobs(
     side: str,
     branch: Optional[str] = None,
     batch_size: int = 128,
+    resource_profiling_config: Optional[ResourceProfilingConfig] = None,
 ) -> list[RetrievalEmbeddingShardJob]:
     """Plan deterministic embedding jobs for one retrieval endpoint."""
     base_key = retrieval_embedding_artifact_key(dataset, extractor, side, branch)
@@ -1477,6 +1784,7 @@ def plan_retrieval_embedding_shard_jobs(
                 base_key, ShardSpec(total_shards=total_shards, shard_index=index)
             ),
             batch_size=batch_size,
+            resource_profiling_config=(resource_profiling_config or ResourceProfilingConfig()),
         )
         for index in range(total_shards)
     ]
@@ -1487,10 +1795,24 @@ def _local_embedding_batches(
     extractor: Any,
     job: EmbeddingShardJob,
     local_positions: dict[int, int],
+    profiler: ResourceProfiler,
 ) -> Iterator[Tuple[np.ndarray, Any]]:
     for batch in dataset.iter_batches(batch_size=job.batch_size, shard=job.shard):
+
+        def call(batch: Any = batch) -> Any:
+            return extractor.transform(batch.X)
+
+        raw_embeddings = (
+            profiler.measure_call(
+                call,
+                samples=len(batch.indices),
+                call_type="transform",
+            )
+            if job.resource_profiling_config.enabled
+            else call()
+        )
         embeddings = ensure_numeric_matrix(
-            extractor.transform(batch.X),
+            raw_embeddings,
             f"Extractor '{extractor.name}' shard embeddings",
             allow_sparse=True,
         )
@@ -1503,25 +1825,12 @@ def _local_embedding_batches(
         yield indices, embeddings
 
 
-def _take_retrieval_rows(values: Any, indices: np.ndarray) -> Any:
-    """Select endpoint rows while preserving common raw input containers."""
-    if isinstance(values, dict):
-        return {key: _take_retrieval_rows(value, indices) for key, value in values.items()}
-    if hasattr(values, "iloc"):
-        return values.iloc[indices]
-    if is_sparse_matrix(values):
-        return values[indices]
-    if isinstance(values, np.ndarray):
-        return values[indices]
-    sequence = list(values)
-    return [sequence[int(index)] for index in indices]
-
-
 def _materialize_multi_output_embedding_shard(
     job: EmbeddingShardJob,
     store: ArtifactStore,
     sample_indices: np.ndarray,
     local_positions: dict[int, int],
+    profiler: ResourceProfiler,
 ) -> dict[str, Any]:
     dataset = job.dataset
     extractor = job.extractor
@@ -1532,7 +1841,23 @@ def _materialize_multi_output_embedding_shard(
     output_recipes: Dict[str, dict[str, Any]] = {}
     output_metadata: Dict[str, dict[str, Any]] = {}
     for batch in dataset.iter_batches(batch_size=job.batch_size, shard=job.shard):
-        outputs = _validated_multi_outputs(extractor, batch.X, len(batch.indices))
+
+        def call(batch: Any = batch) -> Any:
+            return _validated_multi_outputs(
+                extractor,
+                batch.X,
+                len(batch.indices),
+            )
+
+        outputs = (
+            profiler.measure_call(
+                call,
+                samples=len(batch.indices),
+                call_type="transform_many",
+            )
+            if job.resource_profiling_config.enabled
+            else call()
+        )
         indices = np.asarray([local_positions[int(index)] for index in batch.indices], dtype=int)
         for output in outputs:
             output_batches[output.name].append((indices, output.embeddings))
@@ -1540,6 +1865,7 @@ def _materialize_multi_output_embedding_shard(
             output_metadata[output.name] = dict(output.metadata)
 
     manifests = []
+    base_profile = profiler.finish() if job.resource_profiling_config.enabled else None
     for spec in output_specs:
         output_name = spec["name"]
         output_key = embedding_output_shard_key(job.output_key, output_name)
@@ -1550,6 +1876,15 @@ def _materialize_multi_output_embedding_shard(
             require_complete=True,
         )
         embeddings = store.get_array(output_key)
+        output_profile = with_embedding_footprint(
+            base_profile,
+            embeddings,
+            embeddings,
+            store=store,
+            raw_key=output_key,
+            evaluated_key=output_key,
+            persisted_storage=job.resource_profiling_config.persisted_storage,
+        )
         sparse_embeddings = is_sparse_matrix(embeddings)
         output_manifest = {
             "artifact_type": "embedding_shard",
@@ -1573,6 +1908,10 @@ def _materialize_multi_output_embedding_shard(
             "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
             "batch_size": job.batch_size,
             "resources": asdict(job.resources),
+            "resource_profiling_config": asdict(job.resource_profiling_config),
+            "resource_profile": (
+                make_json_safe(output_profile) if output_profile is not None else None
+            ),
         }
         store.put_json(output_key, output_manifest)
         manifests.append(output_manifest)
@@ -1589,6 +1928,8 @@ def _materialize_multi_output_embedding_shard(
         "n_samples": int(len(sample_indices)),
         "batch_size": job.batch_size,
         "resources": asdict(job.resources),
+        "resource_profiling_config": asdict(job.resource_profiling_config),
+        "resource_profile": (make_json_safe(base_profile) if base_profile is not None else None),
         "outputs": [
             {
                 "output_name": manifest["output_name"],
@@ -1643,6 +1984,7 @@ def _merge_multi_output_embedding_shards(
                 "sparse": merged["sparse"],
                 "nnz": merged["nnz"],
                 "storage_format": merged["storage_format"],
+                "distributed_resource_profile": merged.get("distributed_resource_profile"),
             }
         )
     first = manifests[0]
@@ -1657,6 +1999,7 @@ def _merge_multi_output_embedding_shards(
         "extractor_recipe": first.get("extractor_recipe"),
         "recipe_hash": first.get("recipe_hash"),
         "resources": asdict(job.resources),
+        "resource_profiling_config": first.get("resource_profiling_config", {}),
         "outputs": output_manifests,
     }
     store.put_json(job.output_key, bundle_manifest)
@@ -1789,10 +2132,13 @@ def _validate_retrieval_shard_manifests(
     _validate_shard_manifests(manifest_list, expected_n_samples)
     sides = {manifest.get("side") for manifest in manifest_list}
     branches = {manifest.get("branch") for manifest in manifest_list}
+    modalities = {manifest.get("modality") for manifest in manifest_list}
     if len(sides) != 1 or sides == {None}:
         raise ValueError("Retrieval endpoint shards must share one valid side.")
     if len(branches) != 1:
         raise ValueError("Retrieval endpoint shards must share one branch.")
+    if len(modalities) != 1 or modalities == {None}:
+        raise ValueError("Retrieval endpoint shards must share one valid modality.")
 
 
 def _validate_retrieval_pair_metadata(

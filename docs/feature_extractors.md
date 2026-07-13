@@ -229,6 +229,13 @@ process RSS, and logical embedding bytes. Optional extractor-owned
 `ResourceProfileAdapter` hooks add device synchronization, allocator peaks, model
 parameter bytes, and explicitly declared checkpoint artifacts.
 
+`RetrievalBenchmark` and `ZeroShotBenchmark` use the same `EmbeddingConfig` and
+`ResourceProfilingConfig` contracts. Frozen branch encoders are called in deterministic
+batches (128 by default), preserve endpoint row order, and combine sparse batches without
+densifying. Standard retrieval extractors use whole-endpoint calls unless they declare
+streaming safety. Each endpoint has its own profiler, so latency, memory, cache status, and
+storage evidence are never blended.
+
 Native adapters cover local Torch/Keras/ONNX models plus the owned Torch, TensorFlow,
 and JAX families: Hugging Face text, vision, audio, time-series, video, and multimodal
 models; sentence-transformers; timm; torchvision; OpenCLIP/SigLIP; graph models;

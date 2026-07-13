@@ -19,6 +19,21 @@ class ArtifactStoreConfig:
     options: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ArtifactStat:
+    """Physical storage information for one persisted array artifact."""
+
+    uri: str
+    size_bytes: int
+    storage_format: str
+
+    def __post_init__(self) -> None:
+        if self.size_bytes < 0:
+            raise ValueError("ArtifactStat.size_bytes must be >= 0.")
+        if not self.storage_format:
+            raise ValueError("ArtifactStat.storage_format must be non-empty.")
+
+
 class ArtifactStore(Protocol):
     """Protocol for embedding and metadata artifact stores."""
 
@@ -39,6 +54,11 @@ class ArtifactStore(Protocol):
 
     def get_array(self, key: str) -> Any:
         """Load a dense or sparse array artifact by key."""
+
+        ...
+
+    def stat_array(self, key: str) -> ArtifactStat:
+        """Return physical storage metadata without loading the array."""
 
         ...
 

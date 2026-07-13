@@ -723,6 +723,12 @@ limits remain explicitly unavailable. Checkpoint sizes come only from explicit p
 model identifiers and external caches are never scanned implicitly. Reports
 distinguish complete, partial, unavailable, and CPU-not-applicable evidence.
 
+Retrieval and zero-shot benchmarks accept the same embedding and profiling configs and
+report independent endpoint profiles. Artifact-backed workers persist local observations;
+merged results use a distinct distributed profile with worker-first latency and aggregate
+compute throughput rather than presenting worker data as one local run. Embedding storage
+reports both logical bytes and the actual persisted array-object size when available.
+
 Latency values are meaningful only with their recorded batch size, device, precision,
 and synchronization context. They are workload observations, not hardware-normalized
 scores or controlled load tests.
