@@ -251,7 +251,6 @@ class HFMultimodalExtractor:
             "trust_remote_code": self.trust_remote_code,
             "processor_kwargs": self.processor_kwargs,
             "model_kwargs": self.model_kwargs,
-            "checkpoint_paths": list(self.checkpoint_paths),
             "streaming_safe": self.streaming_safe,
             "outputs": [_spec_to_recipe(spec) for spec in self._output_specs],
         }

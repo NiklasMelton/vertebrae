@@ -188,7 +188,6 @@ class TorchExtractor:
             "streaming_safe": self.streaming_safe,
             "move_batch_to_device": self.move_batch_to_device,
             "move_model_to_device": self.move_model_to_device,
-            "checkpoint_paths": list(self.checkpoint_paths),
             "spatial_output_fn": (
                 _callable_name(self.spatial_output_fn)
                 if self.spatial_output_fn is not None

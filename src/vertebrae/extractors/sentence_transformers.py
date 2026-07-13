@@ -120,7 +120,6 @@ class SentenceTransformerExtractor:
             "show_progress_bar": self.show_progress_bar,
             "model_kwargs": self.model_kwargs,
             "encode_kwargs": self.encode_kwargs,
-            "checkpoint_paths": list(self.checkpoint_paths),
             "streaming_safe": self.streaming_safe,
         }
 

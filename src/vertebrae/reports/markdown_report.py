@@ -250,12 +250,24 @@ def render_markdown_report(result: Any) -> str:
                     "- Peak device allocated increase: "
                     f"{_format_bytes(profile.device_memory.peak_allocated_increase_bytes)}",
                     f"- Device-memory status: {profile.device_memory.status}",
+                    f"- Device-memory scope: {profile.device_memory.measurement_scope or ''}",
+                    "- Device-memory unavailable reason: "
+                    f"{profile.device_memory.unavailable_reason or ''}",
                     f"- Model-footprint status: {profile.model.status}",
                     f"- Parameter-footprint status: {profile.model.parameter_status}",
                     f"- Checkpoint-footprint status: {profile.model.checkpoint_status}",
                     f"- Parameters: {profile.model.parameter_count or ''}",
                     f"- Parameter bytes: {_format_bytes(profile.model.parameter_bytes)}",
+                    "- Trainable parameters: "
+                    + (
+                        str(profile.model.trainable_parameter_count)
+                        if profile.model.trainable_parameter_count is not None
+                        else ""
+                    ),
+                    "- Trainable parameter bytes: "
+                    f"{_format_bytes(profile.model.trainable_parameter_bytes)}",
                     f"- Buffer bytes: {_format_bytes(profile.model.buffer_bytes)}",
+                    f"- Model in-memory bytes: {_format_bytes(profile.model.in_memory_bytes)}",
                     f"- Checkpoint bytes: {_format_bytes(profile.model.checkpoint_bytes)}",
                     f"- Model weight dtypes: {profile.model.weight_dtypes}",
                     f"- Synchronization: {profile.context.get('synchronization_status', '')}",

@@ -200,7 +200,6 @@ class TorchvisionVisionExtractor:
             "alpha_mode": self.alpha_mode,
             "device": self.device,
             "model_kwargs": self.model_kwargs,
-            "checkpoint_paths": list(self.checkpoint_paths),
             "streaming_safe": self.streaming_safe,
         }
         if self._structured_output_specs:

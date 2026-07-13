@@ -188,8 +188,6 @@ class KerasExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
-            "checkpoint_paths": list(self.checkpoint_paths),
-            "profiling_device": self.profiling_device,
             "spatial_output_fn": (
                 _callable_name(self.spatial_output_fn)
                 if self.spatial_output_fn is not None

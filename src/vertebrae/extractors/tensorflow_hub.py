@@ -140,8 +140,6 @@ class TFHubExtractor:
             "batch_size": self.batch_size,
             "model_kwargs": self.model_kwargs,
             "call_kwargs": self.call_kwargs,
-            "checkpoint_paths": list(self.checkpoint_paths),
-            "profiling_device": self.profiling_device,
             "streaming_safe": self.streaming_safe,
         }
         if self._structured_output_specs:

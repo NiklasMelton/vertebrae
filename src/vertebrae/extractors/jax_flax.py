@@ -145,6 +145,17 @@ class JAXFlaxExtractor:
             ]
         return recipe
 
+    def get_resource_profile_adapter(self) -> Any:
+        """Return JAX synchronization, device, and parameter-footprint hooks."""
+
+        from vertebrae.profiling import JAXResourceProfileAdapter
+
+        return JAXResourceProfileAdapter(
+            self,
+            values_getter=lambda: self.params,
+            jax_loader=self._load_jax,
+        )
+
     def _apply(self, inputs: Any) -> Any:
         self._load_jax()
         compiled = self._compiled_apply

@@ -61,6 +61,19 @@ supported. TensorFlow memory counters are used only for an unambiguous or explic
 hinted GPU; they never change model placement. Model weight dtypes describe stored
 weights and must not be interpreted as execution or autocast precision.
 
+`measurement_scope="profile_window"` is present only when Vertebrae synchronized the
+device, successfully reset allocator peak counters, observed at least one extractor
+call, and read the same device afterward. Cache hits, failed resets, device placement
+changes, JAX accelerators, and multi-device Torch models retain null peaks with an
+explicit status and reason. Synchronization status is accumulated across the run: one
+failed boundary makes latency host-observed.
+
+`parameter_count` and `parameter_bytes` include frozen parameters. Optional
+`trainable_parameter_count` and `trainable_parameter_bytes` describe the trainable
+subset, while `in_memory_bytes` covers all reported persistent model state. For Keras
+and generic TensorFlow variable containers, `buffer_bytes` remains unavailable when
+the framework cannot reliably distinguish frozen parameters from non-parameter state.
+
 For multi-label datasets, `target_type` is `multi_label`, `class_counts` means
 per-label occurrence counts, and result metadata preserves `label_names` plus
 labelset summary fields. For explicit regression datasets, `target_type` is

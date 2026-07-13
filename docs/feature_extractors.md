@@ -229,11 +229,11 @@ process RSS, and logical embedding bytes. Optional extractor-owned
 `ResourceProfileAdapter` hooks add device synchronization, allocator peaks, model
 parameter bytes, and explicitly declared checkpoint artifacts.
 
-Native adapters cover local Torch/Keras/ONNX models plus the owned Torch and
-TensorFlow families: Hugging Face text, vision, audio, time-series, video, and
-multimodal models; sentence-transformers; timm; torchvision; OpenCLIP/SigLIP; graph
-models; and TensorFlow Hub. These adapters reuse each extractor's existing device
-selection and do not load a model merely to inspect it.
+Native adapters cover local Torch/Keras/ONNX models plus the owned Torch, TensorFlow,
+and JAX families: Hugging Face text, vision, audio, time-series, video, and multimodal
+models; sentence-transformers; timm; torchvision; OpenCLIP/SigLIP; graph models;
+TensorFlow Hub; and JAX/Flax. Loaded model placement takes precedence over profiling
+hints, and adapters do not load a model merely to inspect it.
 
 Torch, Keras, and high-level model wrappers accept `checkpoint_paths=` for explicit
 files. ONNX always counts `model_path` and accepts `external_data_paths=`. A directory
@@ -241,6 +241,10 @@ is counted only when a custom adapter returns
 `DeploymentArtifact(path, recursive=True)`; this prevents accidental measurement of
 an unrelated model cache. Vertebrae never infers checkpoint locations from
 `recipe_data`, model names, Hub handles, or external caches.
+
+Checkpoint declarations, profiling-device hints, and adapter identity are profiling
+evidence rather than extraction semantics. They are serialized in `resource_profile`
+and intentionally do not change reusable embedding cache keys.
 
 Custom adapters implement the typed `ResourceProfileAdapter` contract. Subclass
 `BaseResourceProfileAdapter` and override only supported hooks, returning typed
@@ -269,9 +273,17 @@ class MyModelResources(BaseResourceProfileAdapter):
 ```
 
 Keras and TensorFlow Hub accept `profiling_device=` when allocator measurement would
-otherwise be ambiguous; this hint does not move the model. TensorFlow variable
-devices take precedence when they uniquely identify the active device. Stored weight
-dtypes are reported separately from execution/autocast precision.
+otherwise be ambiguous; this hint does not move the model. Keras 3 selects hooks for
+its active TensorFlow, Torch, or JAX backend. TensorFlow and single-device CUDA Torch
+runs expose resettable allocator peaks. JAX supplies native execution barriers and
+device/parameter metadata, but its benchmark-scoped peak is unavailable because no
+portable resettable allocator window exists. Stored weight dtypes are reported
+separately from execution/autocast precision.
+
+Torch models spanning multiple devices synchronize every active accelerator for
+latency correctness, but allocator memory is marked unavailable rather than collapsing
+per-device peaks into a misleading total. Model parameter totals include frozen
+parameters; trainable parameter counts and bytes are reported separately.
 
 For unsupported backends, portable measurements remain available and framework-only
 fields are marked unavailable. Multi-output calls share one inference profile because

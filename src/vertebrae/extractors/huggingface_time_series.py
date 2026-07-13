@@ -188,7 +188,6 @@ class HFTimeSeriesExtractor:
             "trust_remote_code": self.trust_remote_code,
             "input_kwargs": self.input_kwargs,
             "model_kwargs": self.model_kwargs,
-            "checkpoint_paths": list(self.checkpoint_paths),
             "streaming_safe": self.streaming_safe,
         }
         if len(self._output_specs) > 1:

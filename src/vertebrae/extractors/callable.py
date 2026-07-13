@@ -105,13 +105,6 @@ class CallableExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
-            "resource_profile_adapter": (
-                self._resource_profile_adapter.__class__.__module__
-                + "."
-                + self._resource_profile_adapter.__class__.__name__
-                if self._resource_profile_adapter is not None
-                else None
-            ),
         }
 
     def get_resource_profile_adapter(self) -> Any:

@@ -92,7 +92,6 @@ class GraphModelExtractor:
             "output_level": self.output_level,
             "move_batch_to_device": self.move_batch_to_device,
             "move_model_to_device": self.move_model_to_device,
-            "checkpoint_paths": list(self.checkpoint_paths),
         }
 
     def get_resource_profile_adapter(self) -> Any:
