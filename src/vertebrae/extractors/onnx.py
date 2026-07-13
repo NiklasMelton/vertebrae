@@ -1,7 +1,7 @@
 """Optional ONNX runtime feature extractor."""
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 import numpy as np
 
@@ -56,6 +56,7 @@ class ONNXExtractor:
         recipe_data: Optional[Dict[str, Any]] = None,
         allow_sparse: bool = False,
         streaming_safe: bool = True,
+        external_data_paths: Optional[Iterable[str]] = None,
     ) -> None:
         self.name = name
         self.model_path = Path(model_path)
@@ -72,6 +73,7 @@ class ONNXExtractor:
         self.recipe_data = recipe_data or {}
         self.allow_sparse = allow_sparse
         self.streaming_safe = streaming_safe
+        self.external_data_paths = tuple(external_data_paths or ())
         self._session: Any = None
         self._ort: Any = None
 
@@ -186,6 +188,7 @@ class ONNXExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
+            "external_data_paths": list(self.external_data_paths),
         }
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
@@ -198,7 +201,7 @@ class ONNXExtractor:
 
         from vertebrae.profiling import ONNXResourceProfileAdapter
 
-        return ONNXResourceProfileAdapter(self)
+        return ONNXResourceProfileAdapter(self, self.external_data_paths)
 
     def _load_session(self) -> Any:
         if self._session is None:

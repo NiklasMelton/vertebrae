@@ -54,6 +54,7 @@ class KerasExtractor:
         structured_output_fn: Optional[Callable[[Any], Any]] = None,
         structured_output_specs: Optional[Iterable[StructuredOutputSpec]] = None,
         checkpoint_paths: Optional[Iterable[str]] = None,
+        profiling_device: Optional[str] = None,
     ) -> None:
         if call_method not in {"call", "predict"}:
             raise ValueError("call_method must be either 'call' or 'predict'.")
@@ -87,13 +88,18 @@ class KerasExtractor:
             )
         self._keras: Any = None
         self.checkpoint_paths = tuple(checkpoint_paths or ())
+        self.profiling_device = profiling_device
 
     def get_resource_profile_adapter(self) -> Any:
         """Return Keras-specific model-footprint hooks."""
 
         from vertebrae.profiling import KerasResourceProfileAdapter
 
-        return KerasResourceProfileAdapter(self, self.checkpoint_paths)
+        return KerasResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            profiling_device=self.profiling_device,
+        )
 
     def fit(self, X: Any, y: Any = None) -> "KerasExtractor":
         """No-op fit for local Keras models."""
@@ -182,7 +188,6 @@ class KerasExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
-            "checkpoint_paths": list(self.checkpoint_paths),
             "spatial_output_fn": (
                 _callable_name(self.spatial_output_fn)
                 if self.spatial_output_fn is not None

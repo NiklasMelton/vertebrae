@@ -55,6 +55,7 @@ class HFVisionExtractor:
         model_kwargs: Optional[Dict[str, Any]] = None,
         spatial_outputs: Optional[List[Dict[str, Any]]] = None,
         structured_outputs: Optional[List[Dict[str, Any]]] = None,
+        checkpoint_paths: Optional[List[str]] = None,
     ) -> None:
         if pooling not in {"cls", "mean", "pooler"}:
             raise ValueError("pooling must be one of: cls, mean, pooler.")
@@ -82,6 +83,7 @@ class HFVisionExtractor:
         self.model_kwargs = model_kwargs or {}
         self._spatial_output_specs = _resolve_spatial_output_specs(spatial_outputs)
         self._structured_output_specs = _resolve_structured_output_specs(structured_outputs)
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "image"
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
@@ -320,6 +322,18 @@ class HFVisionExtractor:
                 _structured_spec_to_dict(spec) for spec in self._structured_output_specs
             ]
         return recipe
+
+    def get_resource_profile_adapter(self) -> Any:
+        """Return Torch profiling hooks without forcing model loading."""
+
+        from vertebrae.profiling import TorchResourceProfileAdapter
+
+        return TorchResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            model_getter=lambda: self._model,
+            device_resolver=self._device,
+        )
 
     def _load_model(self) -> Any:
         if self._model is None:

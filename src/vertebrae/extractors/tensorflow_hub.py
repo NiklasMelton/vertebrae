@@ -33,6 +33,8 @@ class TFHubExtractor:
         modality: str = "unknown",
         model_kwargs: Optional[Dict[str, Any]] = None,
         call_kwargs: Optional[Dict[str, Any]] = None,
+        checkpoint_paths: Optional[Sequence[str]] = None,
+        profiling_device: Optional[str] = None,
     ) -> None:
         self.name = name
         self.handle = handle
@@ -44,6 +46,8 @@ class TFHubExtractor:
         self.modality = modality
         self.model_kwargs = model_kwargs or {}
         self.call_kwargs = call_kwargs or {}
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
+        self.profiling_device = profiling_device
         self.extractor_type = "tensorflow_hub"
         self.streaming_safe = True
         self._hub: Any = None
@@ -143,6 +147,17 @@ class TFHubExtractor:
                 structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
         return recipe
+
+    def get_resource_profile_adapter(self) -> Any:
+        from vertebrae.profiling import TensorFlowResourceProfileAdapter
+
+        return TensorFlowResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            model_getter=lambda: self._model,
+            backend="tensorflow_hub",
+            profiling_device=self.profiling_device,
+        )
 
     def _load_model(self) -> Any:
         if self._model is None:

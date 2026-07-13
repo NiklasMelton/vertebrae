@@ -715,6 +715,14 @@ footprints, and logical raw/compressed embedding storage. It does not change qua
 ranking. A cache hit remains a cache hit and reports inference as unmeasured; use
 `CacheConfig(force_recompute=True)` when a fresh inference measurement is required.
 
+Native model/device adapters cover local Torch, Keras, ONNX, Hugging Face,
+sentence-transformers, timm, torchvision, OpenCLIP/SigLIP, graph-model, and TensorFlow
+Hub and JAX/Flax extractors. Device peaks are reported only for a successfully reset
+single-device profiling window; cache hits, multi-device Torch, and JAX allocator
+limits remain explicitly unavailable. Checkpoint sizes come only from explicit paths;
+model identifiers and external caches are never scanned implicitly. Reports
+distinguish complete, partial, unavailable, and CPU-not-applicable evidence.
+
 Latency values are meaningful only with their recorded batch size, device, precision,
 and synchronization context. They are workload observations, not hardware-normalized
 scores or controlled load tests.

@@ -1,6 +1,6 @@
 """Optional graph-model extractor for PyG and DGL workflows."""
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from vertebrae.extractors._utils import (
     call_model,
@@ -28,6 +28,7 @@ class GraphModelExtractor:
         output_level: str = "graph",
         move_batch_to_device: bool = True,
         move_model_to_device: bool = True,
+        checkpoint_paths: Optional[Sequence[str]] = None,
     ) -> None:
         if framework not in {None, "dgl", "pyg"}:
             raise ValueError("framework must be one of: None, 'pyg', 'dgl'.")
@@ -45,6 +46,7 @@ class GraphModelExtractor:
         self.output_level = output_level
         self.move_batch_to_device = move_batch_to_device
         self.move_model_to_device = move_model_to_device
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "graph"
         self.extractor_type = "graph_model"
         self._torch: Any = None
@@ -91,6 +93,16 @@ class GraphModelExtractor:
             "move_batch_to_device": self.move_batch_to_device,
             "move_model_to_device": self.move_model_to_device,
         }
+
+    def get_resource_profile_adapter(self) -> Any:
+        from vertebrae.profiling import TorchResourceProfileAdapter
+
+        return TorchResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            model_getter=lambda: self.model,
+            torch_loader=self._load_dependencies,
+        )
 
     def _load_dependencies(self) -> Any:
         if self._torch is None:
