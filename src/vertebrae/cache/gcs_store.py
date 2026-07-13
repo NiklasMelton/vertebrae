@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-from vertebrae.cache.artifact_store import ArtifactStoreConfig
+from vertebrae.cache.artifact_store import ArtifactStat, ArtifactStoreConfig
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
@@ -127,6 +127,22 @@ class GCSArtifactStore:
 
                 return sparse.load_npz(local_path)
             return np.load(local_path, allow_pickle=False)
+
+    def stat_array(self, key: str) -> ArtifactStat:
+        """Return blob size using GCS metadata without downloading it."""
+
+        for filename, storage_format in (("embeddings.npz", "npz"), ("embeddings.npy", "npy")):
+            blob_name = self._artifact_blob_name(key, filename)
+            blob = self._bucket_or_raise().blob(blob_name)
+            if not blob.exists():
+                continue
+            blob.reload()
+            return ArtifactStat(
+                uri=self._uri_for(blob_name),
+                size_bytes=int(blob.size or 0),
+                storage_format=storage_format,
+            )
+        raise FileNotFoundError(f"No array artifact found for key {key}.")
 
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as JSON."""

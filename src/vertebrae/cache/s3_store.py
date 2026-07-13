@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import numpy as np
 
-from vertebrae.cache.artifact_store import ArtifactStoreConfig
+from vertebrae.cache.artifact_store import ArtifactStat, ArtifactStoreConfig
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
@@ -132,6 +132,29 @@ class S3ArtifactStore:
 
                 return sparse.load_npz(local_path)
             return np.load(local_path, allow_pickle=False)
+
+    def stat_array(self, key: str) -> ArtifactStat:
+        """Return object size using S3 metadata without downloading it."""
+
+        for filename, storage_format in (("embeddings.npz", "npz"), ("embeddings.npy", "npy")):
+            object_key = self._artifact_object_key(key, filename)
+            try:
+                response = self._client_or_raise().head_object(
+                    Bucket=self.bucket,
+                    Key=object_key,
+                )
+            except Exception as exc:
+                error = getattr(exc, "response", {})
+                code = error.get("Error", {}).get("Code") if isinstance(error, dict) else None
+                if code in {"404", "NoSuchKey", "NotFound"}:
+                    continue
+                raise
+            return ArtifactStat(
+                uri=self._uri_for(object_key),
+                size_bytes=int(response["ContentLength"]),
+                storage_format=storage_format,
+            )
+        raise FileNotFoundError(f"No array artifact found for key {key}.")
 
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as JSON."""

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, UnitAnnotation
+from vertebrae import BenchmarkDataset, ResourceProfilingConfig, UnitAnnotation
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.cli import main
 from vertebrae.extractors import (
@@ -651,6 +651,9 @@ def test_cli_materialize_structured_rejects_invalid_aligner_specs(tmp_path):
 def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     script_path = tmp_path / "vertebrae_embed.sbatch"
+    profiling_path = tmp_path / "resource-profile.pkl"
+    with profiling_path.open("wb") as file:
+        pickle.dump(ResourceProfilingConfig(enabled=True), file)
 
     assert (
         main(
@@ -666,6 +669,8 @@ def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
                 "3",
                 "--batch-size",
                 "4",
+                "--resource-profiling-config-pickle",
+                str(profiling_path),
                 "--script-output",
                 str(script_path),
                 "--job-name",
@@ -688,6 +693,7 @@ def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
     script = script_path.read_text(encoding="utf-8")
     assert "#SBATCH --job-name=vt-test" in script
     assert "#SBATCH --array=0-2" in script
+    assert f"--resource-profiling-config-pickle {profiling_path}" in script
     assert "#SBATCH --partition=gpu" in script
     assert "python -m vertebrae.cli embed-shard" in script
     assert "--shard-index ${SLURM_ARRAY_TASK_ID}" in script

@@ -1,9 +1,11 @@
 """Distributed-ready job and shard helpers."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import numpy as np
+
+from vertebrae.config import ResourceProfilingConfig
 
 
 @dataclass(frozen=True)
@@ -151,6 +153,9 @@ class EmbeddingShardJob:
     output_key: str
     batch_size: int = 128
     resources: ResourceSpec = ResourceSpec()
+    resource_profiling_config: ResourceProfilingConfig = field(
+        default_factory=ResourceProfilingConfig
+    )
 
     def __post_init__(self) -> None:
         """Validate job settings.
@@ -253,6 +258,9 @@ class RetrievalEmbeddingShardJob:
     branch: Optional[str] = None
     batch_size: int = 128
     resources: ResourceSpec = ResourceSpec()
+    resource_profiling_config: ResourceProfilingConfig = field(
+        default_factory=ResourceProfilingConfig
+    )
 
     def __post_init__(self) -> None:
         if self.side not in {"query", "gallery"}:
@@ -283,13 +291,19 @@ class ZeroShotEmbeddingShardJob:
     branch: str
     shard: ShardSpec
     output_key: str
+    batch_size: int = 128
     resources: ResourceSpec = ResourceSpec()
+    resource_profiling_config: ResourceProfilingConfig = field(
+        default_factory=ResourceProfilingConfig
+    )
 
     def __post_init__(self) -> None:
         if self.side not in {"samples", "prompts"}:
             raise ValueError("ZeroShotEmbeddingShardJob.side must be 'samples' or 'prompts'.")
         if not self.branch:
             raise ValueError("ZeroShotEmbeddingShardJob.branch must be non-empty.")
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be >= 1.")
 
 
 @dataclass(frozen=True)

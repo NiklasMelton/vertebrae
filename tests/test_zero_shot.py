@@ -16,7 +16,9 @@ from vertebrae import (
     BenchmarkDataset,
     CacheConfig,
     EmbeddingCompressionConfig,
+    EmbeddingConfig,
     OverlapScoringConfig,
+    ResourceProfilingConfig,
     ZeroShotBenchmark,
     ZeroShotCandidate,
     ZeroShotCompressionJob,
@@ -510,6 +512,8 @@ def test_zero_shot_benchmark_caches_compresses_and_reports_overlap(tmp_path, fak
         "sample_branch": "query",
         "text_branch": "gallery",
         "cache_config": CacheConfig(cache_dir=str(tmp_path)),
+        "embedding_config": EmbeddingConfig(batch_size=2),
+        "resource_profiling_config": ResourceProfilingConfig(enabled=True),
         "compression_configs": [
             EmbeddingCompressionConfig(),
             EmbeddingCompressionConfig(
@@ -526,6 +530,11 @@ def test_zero_shot_benchmark_caches_compresses_and_reports_overlap(tmp_path, fak
     assert first.ranked_results()[0].zero_shot.metrics["accuracy"] == pytest.approx(1.0)
     assert first.extractor_results[0].overlap.kind == "overlap_index"
     assert all(item.cache_metadata["samples"]["hit"] for item in second.extractor_results)
+    cached_profiles = second.extractor_results[0].resource_profiles
+    assert cached_profiles["samples"].status == "not_measured_cache_hit"
+    assert cached_profiles["prompts"].status == "not_measured_cache_hit"
+    assert cached_profiles["samples"].embedding.raw_persisted.status == "measured"
+    assert "samples_resource_profile_scope" in second.to_dataframe().columns
     assert "sample_cache_hit" not in second.extractor_results[0].recipe
     report = tmp_path / "zero-shot.md"
     payload = tmp_path / "zero-shot.json"

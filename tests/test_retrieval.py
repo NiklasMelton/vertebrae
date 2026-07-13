@@ -1,9 +1,12 @@
 import numpy as np
 import pytest
+from scipy import sparse
 
 from vertebrae import (
     EmbeddingCompressionConfig,
+    EmbeddingConfig,
     LabelRetrievalMetric,
+    ResourceProfilingConfig,
     RetrievalBenchmark,
     RetrievalConfig,
     RetrievalDataset,
@@ -18,11 +21,14 @@ from vertebrae.execution import (
     compress_retrieval_embedding_artifacts,
     materialize_retrieval_embedding_shard,
     merge_retrieval_embedding_shards,
+    retrieval_benchmark_result_from_artifacts,
     retrieval_embedding_artifact_key,
     score_retrieval_artifact,
 )
 from vertebrae.extractors import CallableRetrievalExtractor, PrecomputedExtractor
+from vertebrae.retrieval import render_retrieval_markdown_report
 from vertebrae.scoring import RetrievalScorer
+from vertebrae.utils.embedding_batches import encode_endpoint_batches
 
 
 def test_retrieval_dataset_accepts_sparse_grades_and_preserves_equal_ids():
@@ -128,6 +134,66 @@ def test_raw_cross_modal_retrieval_uses_explicit_callable_branches():
     assert result.ranked_results()[0].primary_score == pytest.approx(1.0)
 
 
+def test_retrieval_profiles_endpoints_with_deterministic_batches():
+    calls = {"query": [], "gallery": []}
+
+    def encode_query(values):
+        calls["query"].append(list(values))
+        return np.asarray([[float(value), 1.0] for value in values])
+
+    def encode_gallery(values):
+        calls["gallery"].append(list(values))
+        return np.asarray([[float(value), 1.0] for value in values])
+
+    dataset = RetrievalDataset.from_arrays(
+        [0, 1, 2],
+        [0, 1, 2],
+        [(index, index, 1.0) for index in range(3)],
+        query_modality="text",
+        gallery_modality="image",
+    )
+    result = RetrievalBenchmark(
+        dataset,
+        [
+            CallableRetrievalExtractor(
+                "batched",
+                encode_query,
+                encode_gallery,
+                query_modality="text",
+                gallery_modality="image",
+            )
+        ],
+        retrieval_config=RetrievalConfig(ks=(1,), primary_metric="ndcg@1"),
+        query_branch="query",
+        gallery_branch="gallery",
+        embedding_config=EmbeddingConfig(batch_size=2),
+        resource_profiling_config=ResourceProfilingConfig(enabled=True),
+    ).run()
+
+    item = result.extractor_results[0]
+    assert calls == {"query": [[0, 1], [2]], "gallery": [[0, 1], [2]]}
+    assert item.resource_profiles["query"].inference.batch_sizes == [2, 1]
+    assert item.resource_profiles["gallery"].context["modality"] == "image"
+    assert item.resource_profiles["query"].context["process_first_inference"] is True
+    assert item.resource_profiles["gallery"].context["process_first_inference"] is False
+    assert "query_warm_median_seconds" in result.to_dataframe().columns
+    assert "Resources for quality-similar candidates" in render_retrieval_markdown_report(result)
+
+
+def test_endpoint_batch_combination_preserves_sparse_output_and_order():
+    combined = encode_endpoint_batches(
+        [3, 1, 2],
+        batch_size=2,
+        encode=lambda values: sparse.csr_matrix(
+            np.asarray([[value, value + 1] for value in values])
+        ),
+        owner="sparse endpoint",
+    )
+
+    assert sparse.issparse(combined)
+    assert combined.toarray().tolist() == [[3, 4], [1, 2], [2, 3]]
+
+
 def test_dataset_validates_direct_construction_and_fingerprints_endpoints():
     with pytest.raises(ValueError, match="Every query"):
         RetrievalDataset(
@@ -190,6 +256,9 @@ def test_retrieval_artifact_scoring_round_trip(tmp_path):
     )
     assert artifact["artifact_type"] == "retrieval_evaluation"
     assert artifact["result"]["score"] == pytest.approx(1.0)
+    result = retrieval_benchmark_result_from_artifacts(["out"], store)
+    assert result.ranked_results()[0].primary_score == pytest.approx(1.0)
+    assert result.dataset_summary["n_queries"] == 2
 
 
 def test_retrieval_artifact_rejects_misaligned_ids(tmp_path):
@@ -235,11 +304,13 @@ def test_retrieval_endpoint_shards_merge_and_paired_compression(tmp_path):
                     side=side,
                     shard=ShardSpec(total_shards=2, shard_index=index),
                     output_key=key,
+                    batch_size=1,
+                    resource_profiling_config=ResourceProfilingConfig(enabled=True),
                 ),
                 store,
             )
             keys.append(key)
-    merge_retrieval_embedding_shards(
+    query_manifest = merge_retrieval_embedding_shards(
         EmbeddingMergeJob(tuple(query_shards), "query", n_samples=4), store
     )
     merge_retrieval_embedding_shards(
@@ -263,6 +334,11 @@ def test_retrieval_endpoint_shards_merge_and_paired_compression(tmp_path):
     assert store.get_array("compressed/query").shape == (4, 2)
     assert store.get_array("compressed/gallery").shape == (4, 2)
     assert artifact["compression_metadata"]["fit_side"] == "gallery"
+    distributed = query_manifest["distributed_resource_profile"]
+    assert distributed["scope"] == "distributed_shards"
+    assert distributed["shard_count"] == 2
+    assert distributed["worker_first_calls"]["count"] == 2
+    assert distributed["embedding"]["evaluated_persisted"]["status"] == "measured"
 
 
 def test_retrieval_branch_keys_are_distinct_and_wrong_provenance_is_rejected(tmp_path):

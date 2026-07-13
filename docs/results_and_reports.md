@@ -43,6 +43,22 @@ table for the quality cohort. DataFrames expose the same measurements as resourc
 columns. Compare latency only when batch size, input workload, device, precision, and
 synchronization context are compatible.
 
+Retrieval and zero-shot results keep endpoint profiles separate (`query`/`gallery`
+and `samples`/`prompts`). Their DataFrames and Markdown reports show endpoint-prefixed
+measurements for the quality cohort, including batch, cache, synchronization, modality,
+branch, and measurement-scope context.
+
+Embedding footprints distinguish logical resident bytes from persisted array-object
+bytes. Persisted size is the actual `.npy`/`.npz`, S3 object, or GCS blob size and excludes
+metadata, labels, relevance, provenance, and reports. Raw and evaluated footprints remain
+separate through compression. Missing or failed object stats produce an unavailable status
+and warning rather than failing the benchmark.
+
+Artifact-backed results reconstruct typed local or distributed profiles. Distributed
+profiles report worker-first latency, maximum worker memory, and aggregate compute
+throughput (materialized samples divided by summed worker compute seconds). This is not
+cluster wall-clock throughput.
+
 First-call latency is the first observed extractor call after fitting and can include
 lazy model loading or compilation. Warm statistics use subsequent real calls; a
 single-call run therefore has no warm distribution. Host RSS peaks are measured and

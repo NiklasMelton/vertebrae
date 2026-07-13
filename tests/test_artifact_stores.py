@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -44,6 +45,11 @@ def test_s3_artifact_store_roundtrip_with_fake_boto3(monkeypatch):
     assert np.array_equal(recreated.get_labels("labels/demo"), np.array(["a", "b"]))
     assert np.array_equal(recreated.get_array("arrays/dense"), np.arange(6).reshape(2, 3))
     assert np.array_equal(recreated.get_array("arrays/sparse").toarray(), np.eye(3))
+    dense_stat = recreated.stat_array("arrays/dense")
+    sparse_stat = recreated.stat_array("arrays/sparse")
+    assert dense_stat.size_bytes > 0
+    assert dense_stat.storage_format == "npy"
+    assert sparse_stat.storage_format == "npz"
 
 
 def test_gcs_artifact_store_roundtrip_with_fake_client(monkeypatch):
@@ -66,6 +72,22 @@ def test_gcs_artifact_store_roundtrip_with_fake_client(monkeypatch):
     recreated = create_artifact_store_from_config(store.config())
     assert recreated.get_json("runs/demo")["ok"] is True
     assert np.array_equal(recreated.get_array("arrays/dense"), np.arange(6).reshape(2, 3))
+    stat = recreated.stat_array("arrays/dense")
+    assert stat.size_bytes > 0
+    assert stat.storage_format == "npy"
+
+
+def test_local_array_stat_uses_actual_file_size(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    path = store.put_array("arrays/dense", np.arange(6).reshape(2, 3))
+
+    stat = store.stat_array("arrays/dense")
+
+    assert stat.size_bytes == Path(path).stat().st_size
+    assert stat.uri == path
+    assert stat.storage_format == "npy"
+    with pytest.raises(FileNotFoundError):
+        store.stat_array("missing")
 
 
 def test_s3_artifact_store_missing_dependency_raises_clear_error():
@@ -120,7 +142,10 @@ def _fake_boto3_module(objects):
         def head_object(self, Bucket, Key):
             if (Bucket, Key) not in objects:
                 raise FakeClientError("404")
-            return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+            return {
+                "ResponseMetadata": {"HTTPStatusCode": 200},
+                "ContentLength": len(objects[(Bucket, Key)]),
+            }
 
     class FakeSession:
         def __init__(self, profile_name=None, region_name=None):
@@ -158,6 +183,14 @@ def _fake_gcs_storage_module(objects):
 
         def exists(self):
             return (self.bucket_name, self.blob_name) in objects
+
+        def reload(self):
+            return None
+
+        @property
+        def size(self):
+            payload = objects.get((self.bucket_name, self.blob_name))
+            return len(payload) if payload is not None else None
 
     class FakeBucket:
         def __init__(self, name):

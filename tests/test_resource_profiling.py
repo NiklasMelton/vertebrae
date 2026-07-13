@@ -1,4 +1,5 @@
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ from vertebrae import (
     EmbeddingOutputSpec,
     ResourceProfilingConfig,
 )
+from vertebrae.cache import LocalArtifactStore
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.config import CacheConfig, EmbeddingConfig, SeparatixConfig, StabilityConfig
 from vertebrae.extractors import (
@@ -46,6 +48,9 @@ from vertebrae.profiling import (
     ResourceProfiler,
     TensorFlowResourceProfileAdapter,
     TorchResourceProfileAdapter,
+    aggregate_distributed_resource_profiles,
+    distributed_resource_profile_from_dict,
+    resource_profile_from_dict,
 )
 from vertebrae.reports.markdown_report import render_markdown_report
 
@@ -880,3 +885,38 @@ def test_owned_framework_extractors_expose_lazy_resource_adapters(factory, adapt
     assert isinstance(adapter, adapter_type)
     if hasattr(extractor, "_model"):
         assert extractor._model is None
+
+
+def test_local_and_distributed_resource_profiles_round_trip(tmp_path):
+    extractor = CallableExtractor(
+        "profiled",
+        lambda values: np.asarray(values, dtype=np.float32),
+        modality="tabular",
+        streaming_safe=True,
+    )
+    profiler = ResourceProfiler(ResourceProfilingConfig(enabled=True), extractor, streaming=True)
+    profiler.measure_call(
+        lambda: np.ones((2, 3), dtype=np.float32),
+        samples=2,
+        call_type="transform",
+    )
+    local = resource_profile_from_dict(asdict(profiler.finish()))
+    assert local.inference.materialized_samples == 2
+
+    store = LocalArtifactStore(str(tmp_path / "artifacts"))
+    merged = np.ones((4, 3), dtype=np.float32)
+    store.put_array("merged", merged)
+    distributed = aggregate_distributed_resource_profiles(
+        [("shard-a", local), ("shard-b", local)],
+        merged_embeddings=merged,
+        all_shard_keys=["shard-a", "shard-b"],
+        store=store,
+        merged_key="merged",
+    )
+    restored = distributed_resource_profile_from_dict(asdict(distributed))
+
+    assert restored.scope == "distributed_shards"
+    assert restored.worker_first_calls.count == 2
+    assert restored.materialized_samples == 4
+    assert restored.aggregate_compute_throughput_samples_per_second is not None
+    assert restored.embedding.evaluated_persisted.status == "measured"

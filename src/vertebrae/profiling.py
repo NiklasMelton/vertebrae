@@ -229,11 +229,22 @@ class ModelFootprint:
 
 
 @dataclass
+class PersistedArtifactFootprint:
+    status: str
+    bytes: Optional[int] = None
+    uri: Optional[str] = None
+    storage_format: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@dataclass
 class EmbeddingFootprint:
     raw_bytes: int
     evaluated_bytes: int
     bytes_per_embedding: float
     compression_savings_ratio: float
+    raw_persisted: Optional[PersistedArtifactFootprint] = None
+    evaluated_persisted: Optional[PersistedArtifactFootprint] = None
 
 
 @dataclass
@@ -246,6 +257,103 @@ class ResourceProfile:
     embedding: Optional[EmbeddingFootprint]
     context: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class LatencyDistribution:
+    count: int = 0
+    median_seconds: Optional[float] = None
+    p95_seconds: Optional[float] = None
+    max_seconds: Optional[float] = None
+
+
+@dataclass
+class DistributedResourceProfile:
+    """Aggregation of independent worker-local profiling windows."""
+
+    status: str
+    shard_count: int
+    profiled_shard_count: int
+    worker_first_calls: LatencyDistribution
+    total_compute_seconds: Optional[float] = None
+    materialized_samples: int = 0
+    aggregate_compute_throughput_samples_per_second: Optional[float] = None
+    warm_call_count: int = 0
+    warm_mean_seconds: Optional[float] = None
+    max_worker_peak_rss_bytes: Optional[int] = None
+    max_worker_peak_rss_shard_key: Optional[str] = None
+    max_worker_peak_device_allocated_bytes: Optional[int] = None
+    max_worker_peak_device_shard_key: Optional[str] = None
+    model: Optional[ModelFootprint] = None
+    embedding: Optional[EmbeddingFootprint] = None
+    shard_persisted_bytes: Optional[int] = None
+    shard_keys: List[str] = field(default_factory=list)
+    context: Dict[str, Any] = field(default_factory=dict)
+    warnings: List[str] = field(default_factory=list)
+    scope: str = "distributed_shards"
+
+
+ResourceProfileLike = Union[ResourceProfile, DistributedResourceProfile]
+
+
+def resource_profile_columns(
+    profile: ResourceProfileLike,
+    *,
+    prefix: str = "",
+) -> Dict[str, Any]:
+    """Flatten stable local or worker-aggregate fields for result tables."""
+
+    embedding = profile.embedding
+    common = {
+        f"{prefix}resource_profile_scope": (
+            "distributed_shards" if isinstance(profile, DistributedResourceProfile) else "local"
+        ),
+        f"{prefix}embedding_logical_bytes": (
+            embedding.evaluated_bytes if embedding is not None else None
+        ),
+        f"{prefix}embedding_persisted_bytes": (
+            embedding.evaluated_persisted.bytes
+            if embedding is not None and embedding.evaluated_persisted is not None
+            else None
+        ),
+        f"{prefix}embedding_persisted_status": (
+            embedding.evaluated_persisted.status
+            if embedding is not None and embedding.evaluated_persisted is not None
+            else None
+        ),
+    }
+    if isinstance(profile, DistributedResourceProfile):
+        return {
+            **common,
+            f"{prefix}worker_first_call_median_seconds": (
+                profile.worker_first_calls.median_seconds
+            ),
+            f"{prefix}worker_first_call_p95_seconds": profile.worker_first_calls.p95_seconds,
+            f"{prefix}worker_first_call_max_seconds": profile.worker_first_calls.max_seconds,
+            f"{prefix}aggregate_compute_throughput_samples_per_second": (
+                profile.aggregate_compute_throughput_samples_per_second
+            ),
+            f"{prefix}max_worker_peak_rss_bytes": profile.max_worker_peak_rss_bytes,
+            f"{prefix}max_worker_peak_device_allocated_bytes": (
+                profile.max_worker_peak_device_allocated_bytes
+            ),
+        }
+    return {
+        **common,
+        f"{prefix}first_call_seconds": profile.inference.first_call_seconds,
+        f"{prefix}warm_median_seconds": profile.inference.warm_median_seconds,
+        f"{prefix}warm_p95_seconds": profile.inference.warm_p95_seconds,
+        f"{prefix}throughput_samples_per_second": (profile.inference.throughput_samples_per_second),
+        f"{prefix}peak_host_rss_bytes": profile.host_memory.peak_rss_bytes,
+        f"{prefix}peak_device_allocated_bytes": profile.device_memory.peak_allocated_bytes,
+        f"{prefix}batch_sizes": profile.inference.batch_sizes,
+        f"{prefix}cache_status": profile.context.get("cache_status"),
+        f"{prefix}synchronization_status": profile.context.get("synchronization_status"),
+        f"{prefix}modality": profile.context.get("modality"),
+        f"{prefix}branch": profile.context.get("branch"),
+        f"{prefix}measurement_scope": profile.context.get("measurement_scope"),
+        f"{prefix}process_first_inference": profile.context.get("process_first_inference"),
+    }
 
 
 class BaseResourceProfileAdapter:
@@ -294,6 +402,7 @@ class ResourceProfiler:
         extractor: Any,
         *,
         streaming: bool,
+        context: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.config = config
         self.extractor = extractor
@@ -306,6 +415,7 @@ class ResourceProfiler:
         self._synchronized: Optional[bool] = None
         self._warnings: List[str] = []
         self._adapter_metadata: Optional[ResourceAdapterMetadata] = None
+        self._context = dict(context or {})
         self.adapter = self._resolve_adapter(extractor)
 
     def measure_call(
@@ -401,6 +511,15 @@ class ResourceProfiler:
             context={
                 "streaming": self.streaming,
                 "call_types": [record.call_type for record in self.records],
+                "call_order": [
+                    {
+                        "index": index,
+                        "call_type": record.call_type,
+                        "samples": record.samples,
+                        "materialized": record.materialized,
+                    }
+                    for index, record in enumerate(self.records)
+                ],
                 "planning_probe_calls": sum(
                     1 for record in self.records if not record.materialized
                 ),
@@ -414,6 +533,7 @@ class ResourceProfiler:
                 ),
                 "preprocessing_included": True,
                 "output_conversion_included": True,
+                "cache_status": "hit" if cache_hit else "miss" if self.records else "not_used",
                 "backend": metadata.backend,
                 "device": metadata.device,
                 "device_resolution": metadata.device_resolution,
@@ -430,6 +550,7 @@ class ResourceProfiler:
                     if self.adapter is not None
                     else None
                 ),
+                **self._context,
             },
             warnings=sorted(set(self._warnings)),
         )
@@ -706,19 +827,340 @@ def with_embedding_footprint(
     profile: Optional[ResourceProfile],
     raw_embeddings: Any,
     evaluated_embeddings: Any,
+    *,
+    store: Any = None,
+    raw_key: Optional[str] = None,
+    evaluated_key: Optional[str] = None,
+    persisted_storage: bool = True,
 ) -> Optional[ResourceProfile]:
     if profile is None:
         return None
     raw_bytes = estimate_matrix_resident_bytes(raw_embeddings)
     evaluated_bytes = estimate_matrix_resident_bytes(evaluated_embeddings)
     n_samples = int(getattr(evaluated_embeddings, "shape", (0,))[0])
+    raw_persisted, raw_warning = _persisted_array_footprint(
+        store,
+        raw_key,
+        enabled=persisted_storage,
+    )
+    evaluated_persisted, evaluated_warning = _persisted_array_footprint(
+        store,
+        evaluated_key,
+        enabled=persisted_storage,
+    )
     footprint = EmbeddingFootprint(
         raw_bytes=raw_bytes,
         evaluated_bytes=evaluated_bytes,
         bytes_per_embedding=(evaluated_bytes / n_samples if n_samples else 0.0),
         compression_savings_ratio=(1.0 - (evaluated_bytes / raw_bytes) if raw_bytes else 0.0),
+        raw_persisted=raw_persisted,
+        evaluated_persisted=evaluated_persisted,
     )
-    return replace(profile, embedding=footprint)
+    warnings = list(profile.warnings)
+    warnings.extend(item for item in (raw_warning, evaluated_warning) if item)
+    return replace(profile, embedding=footprint, warnings=sorted(set(warnings)))
+
+
+def with_distributed_embedding_footprint(
+    profile: Optional[DistributedResourceProfile],
+    raw_embeddings: Any,
+    evaluated_embeddings: Any,
+    *,
+    store: Any = None,
+    raw_key: Optional[str] = None,
+    evaluated_key: Optional[str] = None,
+    persisted_storage: bool = True,
+) -> Optional[DistributedResourceProfile]:
+    """Update variant storage while retaining distributed inference evidence."""
+
+    if profile is None:
+        return None
+    raw_bytes = estimate_matrix_resident_bytes(raw_embeddings)
+    evaluated_bytes = estimate_matrix_resident_bytes(evaluated_embeddings)
+    n_samples = int(getattr(evaluated_embeddings, "shape", (0,))[0])
+    raw_persisted, raw_warning = _persisted_array_footprint(
+        store,
+        raw_key,
+        enabled=persisted_storage,
+    )
+    evaluated_persisted, evaluated_warning = _persisted_array_footprint(
+        store,
+        evaluated_key,
+        enabled=persisted_storage,
+    )
+    warnings = list(profile.warnings)
+    warnings.extend(item for item in (raw_warning, evaluated_warning) if item)
+    return replace(
+        profile,
+        embedding=EmbeddingFootprint(
+            raw_bytes=raw_bytes,
+            evaluated_bytes=evaluated_bytes,
+            bytes_per_embedding=(evaluated_bytes / n_samples if n_samples else 0.0),
+            compression_savings_ratio=(1.0 - evaluated_bytes / raw_bytes if raw_bytes else 0.0),
+            raw_persisted=raw_persisted,
+            evaluated_persisted=evaluated_persisted,
+        ),
+        warnings=sorted(set(warnings)),
+    )
+
+
+def resource_profile_from_dict(value: Dict[str, Any]) -> ResourceProfile:
+    """Reconstruct a typed local resource profile from serialized data."""
+
+    return ResourceProfile(
+        status=str(value.get("status", "not_measured")),
+        inference=InferenceProfile(**dict(value.get("inference", {}))),
+        host_memory=HostMemoryProfile(**dict(value.get("host_memory", {}))),
+        device_memory=DeviceMemoryProfile(**dict(value.get("device_memory", {}))),
+        model=_model_footprint_from_dict(dict(value.get("model", {}))),
+        embedding=_embedding_footprint_from_dict(value.get("embedding")),
+        context=dict(value.get("context", {})),
+        warnings=list(value.get("warnings", [])),
+    )
+
+
+def distributed_resource_profile_from_dict(value: Dict[str, Any]) -> DistributedResourceProfile:
+    """Reconstruct a typed distributed resource summary from serialized data."""
+
+    model = value.get("model")
+    return DistributedResourceProfile(
+        status=str(value.get("status", "not_measured")),
+        shard_count=int(value.get("shard_count", 0)),
+        profiled_shard_count=int(value.get("profiled_shard_count", 0)),
+        worker_first_calls=LatencyDistribution(**dict(value.get("worker_first_calls", {}))),
+        total_compute_seconds=value.get("total_compute_seconds"),
+        materialized_samples=int(value.get("materialized_samples", 0)),
+        aggregate_compute_throughput_samples_per_second=value.get(
+            "aggregate_compute_throughput_samples_per_second"
+        ),
+        warm_call_count=int(value.get("warm_call_count", 0)),
+        warm_mean_seconds=value.get("warm_mean_seconds"),
+        max_worker_peak_rss_bytes=value.get("max_worker_peak_rss_bytes"),
+        max_worker_peak_rss_shard_key=value.get("max_worker_peak_rss_shard_key"),
+        max_worker_peak_device_allocated_bytes=value.get("max_worker_peak_device_allocated_bytes"),
+        max_worker_peak_device_shard_key=value.get("max_worker_peak_device_shard_key"),
+        model=_model_footprint_from_dict(dict(model)) if model is not None else None,
+        embedding=_embedding_footprint_from_dict(value.get("embedding")),
+        shard_persisted_bytes=value.get("shard_persisted_bytes"),
+        shard_keys=list(value.get("shard_keys", [])),
+        context=dict(value.get("context", {})),
+        warnings=list(value.get("warnings", [])),
+    )
+
+
+def resource_profile_like_from_dict(
+    value: Optional[Dict[str, Any]],
+) -> Optional[ResourceProfileLike]:
+    """Reconstruct either supported profiling scope from a serialized payload."""
+
+    if value is None:
+        return None
+    if value.get("scope") == "distributed_shards" or "shard_count" in value:
+        return distributed_resource_profile_from_dict(value)
+    return resource_profile_from_dict(value)
+
+
+def aggregate_distributed_resource_profiles(
+    profiles: Sequence[Tuple[str, ResourceProfile]],
+    *,
+    merged_embeddings: Any,
+    all_shard_keys: Optional[Sequence[str]] = None,
+    store: Any = None,
+    merged_key: Optional[str] = None,
+    persisted_storage: bool = True,
+) -> DistributedResourceProfile:
+    """Aggregate worker observations without presenting them as one local run."""
+
+    shard_keys = list(all_shard_keys or [key for key, _profile in profiles])
+    measured = [(key, profile) for key, profile in profiles if profile.status == "measured"]
+    first_calls = np.asarray(
+        [
+            profile.inference.first_call_seconds
+            for _key, profile in measured
+            if profile.inference.first_call_seconds is not None
+        ],
+        dtype=float,
+    )
+    total_compute = float(
+        sum(
+            float(profile.inference.total_materialized_seconds or 0.0) for _key, profile in measured
+        )
+    )
+    samples = int(sum(profile.inference.materialized_samples for _key, profile in measured))
+    warm_count = int(sum(profile.inference.warm_call_count for _key, profile in measured))
+    warm_total = sum(
+        float(profile.inference.warm_mean_seconds or 0.0) * profile.inference.warm_call_count
+        for _key, profile in measured
+    )
+    host_key, host_peak = _max_profile_value(
+        measured,
+        lambda profile: profile.host_memory.peak_rss_bytes,
+    )
+    device_key, device_peak = _max_profile_value(
+        measured,
+        lambda profile: profile.device_memory.peak_allocated_bytes,
+    )
+    model = _consistent_model_footprint(measured)
+    merged_bytes = estimate_matrix_resident_bytes(merged_embeddings)
+    n_samples = int(getattr(merged_embeddings, "shape", (0,))[0])
+    merged_persisted, persisted_warning = _persisted_array_footprint(
+        store,
+        merged_key,
+        enabled=persisted_storage,
+    )
+    shard_persisted_values = [
+        profile.embedding.evaluated_persisted.bytes
+        for _key, profile in profiles
+        if profile.embedding is not None
+        and profile.embedding.evaluated_persisted is not None
+        and profile.embedding.evaluated_persisted.status == "measured"
+        and profile.embedding.evaluated_persisted.bytes is not None
+    ]
+    warnings = sorted(
+        {warning for _key, profile in profiles for warning in profile.warnings}
+        | ({persisted_warning} if persisted_warning else set())
+    )
+    return DistributedResourceProfile(
+        status=(
+            "measured"
+            if measured and len(measured) == len(shard_keys)
+            else "partial"
+            if measured
+            else "not_measured"
+        ),
+        shard_count=len(shard_keys),
+        profiled_shard_count=len(measured),
+        worker_first_calls=LatencyDistribution(
+            count=len(first_calls),
+            median_seconds=float(np.median(first_calls)) if len(first_calls) else None,
+            p95_seconds=float(np.percentile(first_calls, 95)) if len(first_calls) else None,
+            max_seconds=float(first_calls.max()) if len(first_calls) else None,
+        ),
+        total_compute_seconds=total_compute if measured else None,
+        materialized_samples=samples,
+        aggregate_compute_throughput_samples_per_second=(
+            samples / total_compute if total_compute > 0 else None
+        ),
+        warm_call_count=warm_count,
+        warm_mean_seconds=(warm_total / warm_count if warm_count else None),
+        max_worker_peak_rss_bytes=host_peak,
+        max_worker_peak_rss_shard_key=host_key,
+        max_worker_peak_device_allocated_bytes=device_peak,
+        max_worker_peak_device_shard_key=device_key,
+        model=model,
+        embedding=EmbeddingFootprint(
+            raw_bytes=merged_bytes,
+            evaluated_bytes=merged_bytes,
+            bytes_per_embedding=(merged_bytes / n_samples if n_samples else 0.0),
+            compression_savings_ratio=0.0,
+            raw_persisted=merged_persisted,
+            evaluated_persisted=merged_persisted,
+        ),
+        shard_persisted_bytes=(
+            int(sum(shard_persisted_values)) if shard_persisted_values else None
+        ),
+        shard_keys=shard_keys,
+        context={
+            "measurement_scope": "distributed_shards",
+            "throughput_kind": "aggregate_compute",
+        },
+        warnings=warnings,
+    )
+
+
+def _persisted_array_footprint(
+    store: Any,
+    key: Optional[str],
+    *,
+    enabled: bool,
+) -> Tuple[PersistedArtifactFootprint, Optional[str]]:
+    if not enabled:
+        return PersistedArtifactFootprint(status="disabled"), None
+    if store is None or not key:
+        return PersistedArtifactFootprint(status="not_persisted"), None
+    try:
+        stat = store.stat_array(key)
+    except FileNotFoundError:
+        return PersistedArtifactFootprint(status="not_persisted"), None
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        return (
+            PersistedArtifactFootprint(status="unavailable", reason=reason),
+            f"Persisted embedding size is unavailable for {key!r}: {reason}",
+        )
+    return (
+        PersistedArtifactFootprint(
+            status="measured",
+            bytes=int(stat.size_bytes),
+            uri=str(stat.uri),
+            storage_format=str(stat.storage_format),
+        ),
+        None,
+    )
+
+
+def _artifact_footprint_from_dict(value: Dict[str, Any]) -> ArtifactFootprint:
+    return ArtifactFootprint(**value)
+
+
+def _model_footprint_from_dict(value: Dict[str, Any]) -> ModelFootprint:
+    payload = dict(value)
+    payload["artifacts"] = [
+        _artifact_footprint_from_dict(dict(item)) for item in payload.get("artifacts", [])
+    ]
+    return ModelFootprint(**payload)
+
+
+def _persisted_footprint_from_dict(
+    value: Optional[Dict[str, Any]],
+) -> Optional[PersistedArtifactFootprint]:
+    return PersistedArtifactFootprint(**dict(value)) if value is not None else None
+
+
+def _embedding_footprint_from_dict(value: Any) -> Optional[EmbeddingFootprint]:
+    if value is None:
+        return None
+    payload = dict(value)
+    payload["raw_persisted"] = _persisted_footprint_from_dict(payload.get("raw_persisted"))
+    payload["evaluated_persisted"] = _persisted_footprint_from_dict(
+        payload.get("evaluated_persisted")
+    )
+    return EmbeddingFootprint(**payload)
+
+
+def _max_profile_value(
+    profiles: Sequence[Tuple[str, ResourceProfile]],
+    getter: Callable[[ResourceProfile], Optional[int]],
+) -> Tuple[Optional[str], Optional[int]]:
+    values = [(key, getter(profile)) for key, profile in profiles]
+    available = [(key, int(value)) for key, value in values if value is not None]
+    return max(available, key=lambda item: item[1]) if available else (None, None)
+
+
+def _consistent_model_footprint(
+    profiles: Sequence[Tuple[str, ResourceProfile]],
+) -> Optional[ModelFootprint]:
+    measured = [
+        profile.model for _key, profile in profiles if profile.model.status != "unavailable"
+    ]
+    if not measured:
+        return None
+    identities = {
+        (
+            model.parameter_count,
+            model.parameter_bytes,
+            model.trainable_parameter_count,
+            model.trainable_parameter_bytes,
+            model.buffer_bytes,
+            model.in_memory_bytes,
+            model.checkpoint_bytes,
+            tuple(model.weight_dtypes),
+        )
+        for model in measured
+    }
+    if len(identities) != 1:
+        raise ValueError("Resource-profile shards have inconsistent model footprints.")
+    return measured[0]
 
 
 class TorchResourceProfileAdapter(BaseResourceProfileAdapter):

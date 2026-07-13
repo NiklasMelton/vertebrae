@@ -6,7 +6,7 @@ from typing import Any, Iterable, Tuple
 
 import numpy as np
 
-from vertebrae.cache.artifact_store import ArtifactStoreConfig
+from vertebrae.cache.artifact_store import ArtifactStat, ArtifactStoreConfig
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import is_sparse_matrix
@@ -127,6 +127,20 @@ class LocalArtifactStore:
 
             return sparse.load_npz(sparse_target)
         return np.load(path / "embeddings.npy", allow_pickle=False)
+
+    def stat_array(self, key: str) -> ArtifactStat:
+        """Return the persisted array file size without loading it."""
+
+        path = self._path(key)
+        for filename, storage_format in (("embeddings.npz", "npz"), ("embeddings.npy", "npy")):
+            target = path / filename
+            if target.exists():
+                return ArtifactStat(
+                    uri=str(target),
+                    size_bytes=int(target.stat().st_size),
+                    storage_format=storage_format,
+                )
+        raise FileNotFoundError(f"No array artifact found for key {key}.")
 
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as a JSON artifact.

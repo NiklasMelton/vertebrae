@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any, List
 
+from vertebrae.profiling import DistributedResourceProfile
 from vertebrae.scoring.separatix import probe_summary_for_result
 
 
@@ -181,6 +182,20 @@ def render_markdown_report(result: Any) -> str:
         for item in profiled_cohort:
             profile = item.resource_profile
             assert profile is not None
+            if isinstance(profile, DistributedResourceProfile):
+                evaluated_bytes = profile.embedding.evaluated_bytes if profile.embedding else None
+                lines.append(
+                    f"| {item.name} | worker-first | "
+                    f"{_format_milliseconds(profile.worker_first_calls.median_seconds)} | "
+                    f"{_format_milliseconds(profile.worker_first_calls.p95_seconds)} | "
+                    f"{_format_float(profile.aggregate_compute_throughput_samples_per_second)} | "
+                    f"{_format_bytes(profile.max_worker_peak_rss_bytes)} | "
+                    f"{_format_bytes(profile.max_worker_peak_device_allocated_bytes)} | "
+                    f"{_format_bytes(profile.model.in_memory_bytes if profile.model else None)} | "
+                    f"{_format_bytes(profile.model.checkpoint_bytes if profile.model else None)} | "
+                    f"{_format_bytes(evaluated_bytes)} | workers | aggregate compute |"
+                )
+                continue
             inference = profile.inference
             evaluated_bytes = profile.embedding.evaluated_bytes if profile.embedding else None
             lines.append(
@@ -229,68 +244,10 @@ def render_markdown_report(result: Any) -> str:
         if item.resource_profile:
             profile = item.resource_profile
             lines.extend(["", "#### Resource profile", ""])
-            lines.extend(
-                [
-                    f"- Status: {profile.status}",
-                    f"- Inference status: {profile.inference.status}",
-                    "- First call: "
-                    f"{_format_milliseconds(profile.inference.first_call_seconds)} ms",
-                    f"- First call includes fit: {profile.inference.first_call_includes_fit}",
-                    f"- Warm calls: {profile.inference.warm_call_count}",
-                    "- Warm median: "
-                    f"{_format_milliseconds(profile.inference.warm_median_seconds)} ms",
-                    f"- Warm p95: {_format_milliseconds(profile.inference.warm_p95_seconds)} ms",
-                    "- Throughput: "
-                    f"{_format_float(profile.inference.throughput_samples_per_second)} samples/s",
-                    f"- Peak host RSS: {_format_bytes(profile.host_memory.peak_rss_bytes)}",
-                    "- Peak host RSS increase: "
-                    f"{_format_bytes(profile.host_memory.peak_increase_bytes)}",
-                    "- Peak device allocated: "
-                    f"{_format_bytes(profile.device_memory.peak_allocated_bytes)}",
-                    "- Peak device allocated increase: "
-                    f"{_format_bytes(profile.device_memory.peak_allocated_increase_bytes)}",
-                    f"- Device-memory status: {profile.device_memory.status}",
-                    f"- Device-memory scope: {profile.device_memory.measurement_scope or ''}",
-                    "- Device-memory unavailable reason: "
-                    f"{profile.device_memory.unavailable_reason or ''}",
-                    f"- Model-footprint status: {profile.model.status}",
-                    f"- Parameter-footprint status: {profile.model.parameter_status}",
-                    f"- Checkpoint-footprint status: {profile.model.checkpoint_status}",
-                    f"- Parameters: {profile.model.parameter_count or ''}",
-                    f"- Parameter bytes: {_format_bytes(profile.model.parameter_bytes)}",
-                    "- Trainable parameters: "
-                    + (
-                        str(profile.model.trainable_parameter_count)
-                        if profile.model.trainable_parameter_count is not None
-                        else ""
-                    ),
-                    "- Trainable parameter bytes: "
-                    f"{_format_bytes(profile.model.trainable_parameter_bytes)}",
-                    f"- Buffer bytes: {_format_bytes(profile.model.buffer_bytes)}",
-                    f"- Model in-memory bytes: {_format_bytes(profile.model.in_memory_bytes)}",
-                    f"- Checkpoint bytes: {_format_bytes(profile.model.checkpoint_bytes)}",
-                    f"- Model weight dtypes: {profile.model.weight_dtypes}",
-                    f"- Synchronization: {profile.context.get('synchronization_status', '')}",
-                    f"- Batch sizes: {profile.inference.batch_sizes}",
-                ]
-            )
-            if profile.embedding:
-                lines.extend(
-                    [
-                        f"- Raw embedding bytes: {_format_bytes(profile.embedding.raw_bytes)}",
-                        "- Evaluated embedding bytes: "
-                        f"{_format_bytes(profile.embedding.evaluated_bytes)}",
-                        "- Bytes per embedding: "
-                        f"{_format_float(profile.embedding.bytes_per_embedding)}",
-                    ]
-                )
-            for artifact in profile.model.artifacts:
-                lines.append(
-                    "- Deployment artifact: "
-                    f"{artifact.role} {artifact.path} ({artifact.status}, {artifact.bytes} bytes)"
-                )
-            for warning in profile.warnings:
-                lines.append(f"- Warning: {warning}")
+            if isinstance(profile, DistributedResourceProfile):
+                lines.extend(_distributed_resource_details(profile))
+            else:
+                lines.extend(_local_resource_details(profile))
         if overlap:
             lines.extend(
                 [
@@ -518,6 +475,88 @@ def _format_milliseconds(value: Any) -> str:
 
 def _format_bytes(value: Any) -> str:
     return "" if value is None else str(int(value))
+
+
+def _distributed_resource_details(profile: DistributedResourceProfile) -> List[str]:
+    embedding = profile.embedding
+    model = profile.model
+    persisted = embedding.evaluated_persisted if embedding else None
+    return [
+        f"- Status: {profile.status}",
+        "- Scope: independent distributed worker profiling windows",
+        f"- Profiled workers: {profile.profiled_shard_count}/{profile.shard_count}",
+        f"- Worker-first calls: {profile.worker_first_calls.count}",
+        "- Worker-first median: "
+        f"{_format_milliseconds(profile.worker_first_calls.median_seconds)} ms",
+        f"- Worker-first p95: {_format_milliseconds(profile.worker_first_calls.p95_seconds)} ms",
+        f"- Worker-first max: {_format_milliseconds(profile.worker_first_calls.max_seconds)} ms",
+        "- Aggregate compute throughput: "
+        f"{_format_float(profile.aggregate_compute_throughput_samples_per_second)} samples/s",
+        "- Throughput meaning: summed samples divided by summed worker compute seconds; "
+        "not cluster wall-clock throughput",
+        f"- Maximum worker RSS: {_format_bytes(profile.max_worker_peak_rss_bytes)}",
+        f"- Maximum worker RSS shard: {profile.max_worker_peak_rss_shard_key or ''}",
+        "- Maximum worker device allocation: "
+        f"{_format_bytes(profile.max_worker_peak_device_allocated_bytes)}",
+        "- Logical evaluated embedding bytes: "
+        f"{_format_bytes(embedding.evaluated_bytes if embedding else None)}",
+        "- Persisted evaluated embedding bytes: "
+        f"{_format_bytes(persisted.bytes if persisted else None)}",
+        f"- Persisted evaluated status: {persisted.status if persisted else ''}",
+        f"- Shard persisted bytes: {_format_bytes(profile.shard_persisted_bytes)}",
+        f"- Parameters: {model.parameter_count if model else ''}",
+        f"- Model in-memory bytes: " f"{_format_bytes(model.in_memory_bytes if model else None)}",
+        f"- Checkpoint bytes: {_format_bytes(model.checkpoint_bytes if model else None)}",
+        f"- Weight dtypes: {model.weight_dtypes if model else []}",
+        *[f"- Warning: {warning}" for warning in profile.warnings],
+    ]
+
+
+def _local_resource_details(profile: Any) -> List[str]:
+    embedding = profile.embedding
+    raw_persisted = embedding.raw_persisted if embedding else None
+    evaluated_persisted = embedding.evaluated_persisted if embedding else None
+    lines = [
+        f"- Status: {profile.status}",
+        f"- Inference status: {profile.inference.status}",
+        f"- First call: {_format_milliseconds(profile.inference.first_call_seconds)} ms",
+        f"- First call includes fit: {profile.inference.first_call_includes_fit}",
+        f"- Warm calls: {profile.inference.warm_call_count}",
+        f"- Warm median: {_format_milliseconds(profile.inference.warm_median_seconds)} ms",
+        f"- Warm p95: {_format_milliseconds(profile.inference.warm_p95_seconds)} ms",
+        "- Throughput: "
+        f"{_format_float(profile.inference.throughput_samples_per_second)} samples/s",
+        f"- Peak host RSS: {_format_bytes(profile.host_memory.peak_rss_bytes)}",
+        "- Peak host RSS increase: " f"{_format_bytes(profile.host_memory.peak_increase_bytes)}",
+        f"- Peak device allocated: {_format_bytes(profile.device_memory.peak_allocated_bytes)}",
+        f"- Model-footprint status: {profile.model.status}",
+        f"- Parameters: {profile.model.parameter_count or ''}",
+        f"- Model in-memory bytes: {_format_bytes(profile.model.in_memory_bytes)}",
+        f"- Checkpoint bytes: {_format_bytes(profile.model.checkpoint_bytes)}",
+        f"- Synchronization: {profile.context.get('synchronization_status', '')}",
+        f"- Cache: {profile.context.get('cache_status', '')}",
+        f"- Measurement scope: {profile.context.get('measurement_scope', '')}",
+        f"- Batch sizes: {profile.inference.batch_sizes}",
+    ]
+    if embedding:
+        lines.extend(
+            [
+                f"- Raw logical embedding bytes: {_format_bytes(embedding.raw_bytes)}",
+                "- Evaluated logical embedding bytes: "
+                f"{_format_bytes(embedding.evaluated_bytes)}",
+                "- Raw persisted embedding bytes: "
+                f"{_format_bytes(raw_persisted.bytes if raw_persisted else None)}",
+                "- Evaluated persisted embedding bytes: "
+                f"{_format_bytes(evaluated_persisted.bytes if evaluated_persisted else None)}",
+            ]
+        )
+    for artifact in profile.model.artifacts:
+        lines.append(
+            "- Deployment artifact: "
+            f"{artifact.role} {artifact.path} ({artifact.status}, {artifact.bytes} bytes)"
+        )
+    lines.extend(f"- Warning: {warning}" for warning in profile.warnings)
+    return lines
 
 
 def _alignment_recipe_label(recipe: Any) -> str:

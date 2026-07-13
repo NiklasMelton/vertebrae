@@ -728,6 +728,13 @@ class Benchmark:
                         base_resource_profile,
                         embeddings,
                         compressed_embeddings,
+                        store=store,
+                        raw_key=embedding_metadata.get("cache_key"),
+                        evaluated_key=compression_metadata.get(
+                            "cache_key",
+                            embedding_metadata.get("cache_key"),
+                        ),
+                        persisted_storage=self.resource_profiling_config.persisted_storage,
                     ),
                 )
             )

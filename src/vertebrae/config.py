@@ -578,6 +578,7 @@ class ResourceProfilingConfig:
     enabled: bool = False
     host_memory: bool = True
     device_memory: bool = True
+    persisted_storage: bool = True
     host_sample_interval_seconds: float = 0.01
     quality_tolerance: float = 0.01
 

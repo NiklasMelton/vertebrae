@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from vertebrae.profiling import ResourceProfile
+from vertebrae.profiling import DistributedResourceProfile, ResourceProfile, ResourceProfileLike
 from vertebrae.scoring.metrics import MetricResult
 from vertebrae.scoring.separatix import SeparatixResult, probe_summary_for_result
 from vertebrae.utils.serialization import make_json_safe
@@ -47,7 +47,7 @@ class ExtractorResult:
     target_view: Optional[Dict[str, Any]] = None
     weakest_class: Optional[str] = None
     weakest_class_score: Optional[float] = None
-    resource_profile: Optional[ResourceProfile] = None
+    resource_profile: Optional[ResourceProfileLike] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the extractor result to a JSON-safe dictionary.
@@ -140,9 +140,13 @@ class BenchmarkResult:
         rows = []
         for rank, item in enumerate(self.ranked_results(), start=1):
             profile = item.resource_profile
-            inference = profile.inference if profile else None
-            host_memory = profile.host_memory if profile else None
-            device_memory = profile.device_memory if profile else None
+            distributed_profile = (
+                profile if isinstance(profile, DistributedResourceProfile) else None
+            )
+            local_profile = profile if isinstance(profile, ResourceProfile) else None
+            inference = local_profile.inference if local_profile else None
+            host_memory = local_profile.host_memory if local_profile else None
+            device_memory = local_profile.device_memory if local_profile else None
             model = profile.model if profile else None
             embedding = profile.embedding if profile else None
             probe = probe_summary_for_result(item.separatix)
@@ -259,8 +263,60 @@ class BenchmarkResult:
                     "checkpoint_bytes": model.checkpoint_bytes if model else None,
                     "raw_embedding_bytes": embedding.raw_bytes if embedding else None,
                     "evaluated_embedding_bytes": (embedding.evaluated_bytes if embedding else None),
+                    "raw_persisted_embedding_bytes": (
+                        embedding.raw_persisted.bytes
+                        if embedding and embedding.raw_persisted
+                        else None
+                    ),
+                    "evaluated_persisted_embedding_bytes": (
+                        embedding.evaluated_persisted.bytes
+                        if embedding and embedding.evaluated_persisted
+                        else None
+                    ),
+                    "evaluated_persisted_embedding_status": (
+                        embedding.evaluated_persisted.status
+                        if embedding and embedding.evaluated_persisted
+                        else None
+                    ),
                     "embedding_bytes_per_sample": (
                         embedding.bytes_per_embedding if embedding else None
+                    ),
+                    "resource_profile_scope": (
+                        "distributed_shards"
+                        if distributed_profile
+                        else "local"
+                        if profile
+                        else None
+                    ),
+                    "worker_first_call_median_seconds": (
+                        distributed_profile.worker_first_calls.median_seconds
+                        if distributed_profile
+                        else None
+                    ),
+                    "worker_first_call_p95_seconds": (
+                        distributed_profile.worker_first_calls.p95_seconds
+                        if distributed_profile
+                        else None
+                    ),
+                    "worker_first_call_max_seconds": (
+                        distributed_profile.worker_first_calls.max_seconds
+                        if distributed_profile
+                        else None
+                    ),
+                    "aggregate_compute_throughput_samples_per_second": (
+                        distributed_profile.aggregate_compute_throughput_samples_per_second
+                        if distributed_profile
+                        else None
+                    ),
+                    "max_worker_peak_rss_bytes": (
+                        distributed_profile.max_worker_peak_rss_bytes
+                        if distributed_profile
+                        else None
+                    ),
+                    "max_worker_peak_device_allocated_bytes": (
+                        distributed_profile.max_worker_peak_device_allocated_bytes
+                        if distributed_profile
+                        else None
                     ),
                 }
             )
