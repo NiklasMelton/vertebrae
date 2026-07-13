@@ -126,7 +126,9 @@ def _assert_distributed_runtime_roundtrip(backend, tmp_path, extractor_name):
     )
 
     assert len(score_artifacts) == 2
-    assert all(0.0 <= artifact["score"]["score"] <= 1.0 for artifact in score_artifacts)
+    assert all(
+        0.0 <= artifact["metrics"]["overlap"]["score"] <= 1.0 for artifact in score_artifacts
+    )
     assert collection["repeats"] == 2
     assert len(collection["scores"]) == 2
 

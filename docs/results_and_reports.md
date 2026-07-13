@@ -70,6 +70,19 @@ best = result.ranked_results()[0]
 print(best.name, best.primary_metric_name, best.primary_score)
 ```
 
+The Markdown ranking table uses the same metric-aware summary fields. Its current
+core columns are `primary_metric`, `primary_score`, `overlap_score`,
+`overlap_macro`, `overlap_weighted`, `stability_interval`, `weakest_class`,
+`best_probe`, `probe_metric`, and `probe_score`, followed by embedding,
+compression, recommendation, and Separatix fields. Target and label views are
+included explicitly so expanded results remain distinguishable.
+
+Probe fields are target-aware. For example, a single-label diagnostic may select
+balanced accuracy, a multi-label diagnostic may select macro/micro F1 or sample
+Jaccard, and a regression diagnostic may select R². Consumers should inspect
+`probe_metric` before interpreting `probe_score`; there is no universal
+`probe_accuracy` field.
+
 ## JSON and Markdown output
 
 Reports can be written directly from the result object:
@@ -109,6 +122,21 @@ At a high level, reports include:
 - warnings,
 - recommendations,
 - reproducibility metadata.
+
+The same report structure covers the major problem classes, with target-specific
+details:
+
+| problem class | summary metadata | score detail |
+| --- | --- | --- |
+| single-label classification | class names and counts | per-class and pairwise overlap |
+| multi-label classification | label names, cardinality, and density | per-label overlap |
+| regression | target names and target statistics | per-target continuous overlap |
+| hierarchy or named target views | active and available views | one result variant per evaluated view |
+| dense segmentation | source-image groups and token provenance | per-class token overlap |
+
+These values are diagnostics for the evaluated representation and protocol. They
+are not substitutes for task-native metrics such as IoU, RMSE, retrieval recall,
+or ranking quality.
 
 Segmentation reports also include source-image counts, candidate and retained
 tokens, ignored-token reasons, background counts, and spatial layout metadata.
