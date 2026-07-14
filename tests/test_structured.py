@@ -5,6 +5,8 @@ from vertebrae import (
     BenchmarkDataset,
     CallableStructuredExtractor,
     DatasetIdentity,
+    ExecutionConfig,
+    LocalBackend,
     TargetView,
     UnitAnnotation,
     drop_special_rows,
@@ -138,6 +140,24 @@ def test_structured_benchmark_reuses_standard_scoring_pipeline(tmp_path, fake_ov
     assert "Structured task family: sequence" in report
     assert "Alignment mode: explicit" in report
     assert "drop_special_rows (drop_special_rows)" in report
+
+
+def test_structured_benchmark_dispatches_as_an_extractor_job(tmp_path, fake_overlapindex):
+    result = Benchmark(
+        dataset=_dataset(),
+        extractors=[_extractor()],
+        execution=LocalBackend(),
+        execution_config=ExecutionConfig(total_shards=3),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        structured_aligners={"tokens": drop_special_rows()},
+    ).run()
+
+    assert result.extractor_results[0].name == "structured:tokens"
+    assert result.dataset_summary["structured_outputs"][0]["n_units"] == 8
+    assert result.metadata["execution"]["artifact_backed"] is True
+    assert result.metadata["execution"]["effective_total_shards"] == [1]
 
 
 def test_structured_artifacts_have_independent_output_boundaries(tmp_path):

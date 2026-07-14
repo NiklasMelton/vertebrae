@@ -7,7 +7,7 @@ from typing import Any, Iterable, Optional
 
 import numpy as np
 
-from vertebrae import __version__
+from vertebrae._version import __version__
 from vertebrae.cache import ArtifactStore, ArtifactStoreConfig, create_artifact_store_from_config
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json, hash_json_exact
 from vertebrae.compression.paired import compress_embedding_pair

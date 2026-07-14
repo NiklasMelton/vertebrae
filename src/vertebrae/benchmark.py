@@ -7,7 +7,7 @@ from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 
-from vertebrae import __version__
+from vertebrae._version import __version__
 from vertebrae.cache import ArtifactStore, create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.compression import (
@@ -20,6 +20,7 @@ from vertebrae.config import (
     ContinuousOverlapScoringConfig,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
+    ExecutionConfig,
     LabelViewConfig,
     MemoryConfig,
     OverlapScoringConfig,
@@ -29,8 +30,8 @@ from vertebrae.config import (
     StabilityConfig,
     TargetViewConfig,
 )
+from vertebrae.execution.base import ExecutionBackend
 from vertebrae.execution.jobs import SampleBatch
-from vertebrae.execution.local import LocalBackend
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.profiling import ResourceProfiler, with_embedding_footprint
 from vertebrae.reports.recommendations import (
@@ -64,7 +65,10 @@ class Benchmark:
         stability_config: Stability-analysis configuration.
         cache_config: Embedding cache configuration.
         embedding_config: Embedding batching and streaming configuration.
-        execution: Local execution backend.
+        execution: Optional local, Ray, or Dask execution backend. When omitted,
+            the benchmark uses the direct in-process path.
+        execution_config: Artifact-backed execution and sharding settings used
+            only when an explicit backend is provided.
     """
 
     def __init__(
@@ -84,6 +88,7 @@ class Benchmark:
         embedding_config: Optional[EmbeddingConfig] = None,
         memory_config: Optional[MemoryConfig] = None,
         execution: Optional[Any] = None,
+        execution_config: Optional[ExecutionConfig] = None,
         segmentation_config: Optional[SegmentationConfig] = None,
         structured_aligners: Optional[dict[str, Any]] = None,
         metrics: Optional[Iterable[Any]] = None,
@@ -109,7 +114,12 @@ class Benchmark:
         self.compression_configs = list(compression_configs or default_compressions)
         self.embedding_config = embedding_config or EmbeddingConfig()
         self.memory_config = memory_config or MemoryConfig()
-        self.execution = execution or LocalBackend()
+        if execution is None and execution_config is not None:
+            raise ValueError("execution_config requires an explicit execution backend.")
+        if execution is not None and not isinstance(execution, ExecutionBackend):
+            raise TypeError("execution must implement submit(), gather(), status(), and map().")
+        self.execution = execution
+        self.execution_config = execution_config or ExecutionConfig()
         self.segmentation_config = segmentation_config or SegmentationConfig()
         self.structured_aligners = dict(structured_aligners or {})
         self.metrics = [as_embedding_metric(metric) for metric in (metrics or [])]
@@ -178,6 +188,10 @@ class Benchmark:
             )
         if not self.extractors:
             raise ValueError("At least one extractor must be provided.")
+        if self.execution is not None:
+            from vertebrae.execution.benchmark_runner import run_artifact_backed_benchmark
+
+            return run_artifact_backed_benchmark(self)
         if getattr(self.dataset, "modality", None) == "segmentation":
             return self._run_segmentation()
         if self.dataset.unit_annotations() and any(
@@ -284,7 +298,6 @@ class Benchmark:
                     compression_configs=self.compression_configs,
                     embedding_config=self.embedding_config,
                     memory_config=self.memory_config,
-                    execution=self.execution,
                     metrics=[metric for metric in self.metrics if metric.name != "overlap"],
                     primary_metric=self.primary_metric,
                     resource_profiling_config=self.resource_profiling_config,
@@ -402,7 +415,6 @@ class Benchmark:
                     compression_configs=self.compression_configs,
                     embedding_config=self.embedding_config,
                     memory_config=self.memory_config,
-                    execution=self.execution,
                     metrics=[metric for metric in self.metrics if metric.name != "overlap"],
                     primary_metric=self.primary_metric,
                     resource_profiling_config=self.resource_profiling_config,
@@ -1058,7 +1070,7 @@ class Benchmark:
         first_batch = next(
             dataset.iter_batches(
                 batch_size=min(self.embedding_config.batch_size, len(dataset.y)),
-                shard=self.embedding_config.shard,
+                shard=None,
             )
         )
         if self._supports_transform_many(extractor):
@@ -1327,13 +1339,6 @@ class Benchmark:
     def _should_stream_embeddings(self, extractor: Any) -> bool:
         if not self.embedding_config.streaming_enabled:
             return False
-        shard = self.embedding_config.shard
-        if shard is not None and not shard.is_complete:
-            raise ValueError(
-                "Benchmark.run requires a complete embedding artifact for scoring. "
-                "Use BenchmarkDataset.iter_batches(..., shard=...) or a future embedding "
-                "job runner to materialize distributed shards without duplicate samples."
-            )
         return bool(getattr(extractor, "streaming_safe", False)) or bool(
             getattr(extractor, "already_fitted", False)
         )
@@ -1352,7 +1357,7 @@ class Benchmark:
         batch_iterator = iter(
             dataset.iter_batches(
                 batch_size=self.embedding_config.batch_size,
-                shard=self.embedding_config.shard,
+                shard=None,
             )
         )
         if probe_plan is None:
@@ -1434,7 +1439,7 @@ class Benchmark:
         batch_iterator = iter(
             dataset.iter_batches(
                 batch_size=self.embedding_config.batch_size,
-                shard=self.embedding_config.shard,
+                shard=None,
             )
         )
         if probe_plan is None:

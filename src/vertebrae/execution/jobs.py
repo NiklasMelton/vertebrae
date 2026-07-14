@@ -152,6 +152,8 @@ class EmbeddingShardJob:
     shard: ShardSpec
     output_key: str
     batch_size: int = 128
+    fit_extractor: bool = True
+    streaming_enabled: bool = True
     resources: ResourceSpec = ResourceSpec()
     resource_profiling_config: ResourceProfilingConfig = field(
         default_factory=ResourceProfilingConfig
@@ -344,4 +346,16 @@ class SeparatixJob:
     output_key: str
     separatix_config: Any = None
     groups_key: Optional[str] = None
+    resources: ResourceSpec = ResourceSpec()
+
+
+@dataclass(frozen=True)
+class StabilityJob:
+    """Run stability analysis over persisted embeddings and targets."""
+
+    embedding_key: str
+    labels_key: str
+    output_key: str
+    scoring_config: Any
+    stability_config: Any
     resources: ResourceSpec = ResourceSpec()

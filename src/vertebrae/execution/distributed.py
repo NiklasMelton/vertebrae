@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, Iterator, Optional, Tuple
 
 import numpy as np
 
-from vertebrae import __version__
+from vertebrae._version import __version__
 from vertebrae.cache import (
     ArtifactStore,
     ArtifactStoreConfig,
@@ -30,6 +30,7 @@ from vertebrae.execution.jobs import (
     ScoringJob,
     SeparatixJob,
     ShardSpec,
+    StabilityJob,
 )
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.profiling import (
@@ -150,6 +151,14 @@ def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
 
     suffix = "default" if seed is None else f"seed-{seed}"
     return f"{embedding_key}/scores/{suffix}"
+
+
+def stability_artifact_key(embedding_key: str, stability_config: Any = None) -> str:
+    """Build a configuration-specific stability artifact key."""
+
+    from vertebrae.cache.fingerprint import hash_json
+
+    return f"{embedding_key}/diagnostics/stability-{hash_json(make_json_safe(stability_config))}"
 
 
 def retrieval_scoring_artifact_key(query_embedding_key: str, gallery_embedding_key: str) -> str:
@@ -452,6 +461,9 @@ def plan_embedding_shard_jobs(
     total_shards: int,
     batch_size: int = 128,
     resource_profiling_config: Optional[ResourceProfilingConfig] = None,
+    output_key: Optional[str] = None,
+    fit_extractor: bool = True,
+    streaming_enabled: bool = True,
 ) -> list[EmbeddingShardJob]:
     """Create deterministic embedding shard jobs.
 
@@ -465,7 +477,7 @@ def plan_embedding_shard_jobs(
         Embedding shard jobs with canonical output keys.
     """
 
-    base_key = embedding_artifact_key(dataset, extractor)
+    base_key = output_key or embedding_artifact_key(dataset, extractor)
     return [
         EmbeddingShardJob(
             dataset=dataset,
@@ -473,6 +485,8 @@ def plan_embedding_shard_jobs(
             shard=shard,
             output_key=embedding_shard_key(base_key, shard),
             batch_size=batch_size,
+            fit_extractor=fit_extractor,
+            streaming_enabled=streaming_enabled,
             resource_profiling_config=(resource_profiling_config or ResourceProfilingConfig()),
         )
         for shard in (
@@ -546,6 +560,7 @@ def materialize_label_artifact(
     dataset: Any,
     store: ArtifactStore,
     key: Any = None,
+    aligned_embedding_identity_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """Materialize dataset labels as an artifact.
 
@@ -572,6 +587,7 @@ def materialize_label_artifact(
         "output_key": output_key,
         "artifact_path": artifact_path,
         "dataset_identity_key": dataset.identity_key(),
+        "aligned_embedding_identity_key": aligned_embedding_identity_key,
         "n_samples": int(len(dataset.y)),
         "dtype": str(np.asarray(dataset.y).dtype),
         "target_type": labels["target_type"],
@@ -602,6 +618,7 @@ def materialize_group_artifact(
     dataset: Any,
     store: ArtifactStore,
     key: Any = None,
+    aligned_embedding_identity_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """Materialize aligned independence groups without reporting raw IDs."""
 
@@ -616,6 +633,7 @@ def materialize_group_artifact(
         "output_key": output_key,
         "artifact_path": artifact_path,
         "dataset_identity_key": dataset.identity_key(),
+        "aligned_embedding_identity_key": aligned_embedding_identity_key,
         "n_samples": int(len(groups)),
         "n_groups": int(len(np.unique(groups))),
         "group_name": dataset.metadata.get("group_name", "group"),
@@ -967,6 +985,73 @@ def score_embedding_artifacts(
     )
 
 
+def compress_embedding_artifacts(
+    jobs: Iterable[CompressionJob], store: ArtifactStore, execution: Any
+) -> list[dict[str, Any]]:
+    """Run independent compression jobs through an execution backend."""
+
+    return execution.map(
+        partial(_compress_embedding_artifact_job, store_config=store.config()),
+        jobs,
+    )
+
+
+def diagnose_embedding_artifacts(
+    jobs: Iterable[SeparatixJob], store: ArtifactStore, execution: Any
+) -> list[dict[str, Any]]:
+    """Run independent Separatix jobs through an execution backend."""
+
+    return execution.map(
+        partial(_diagnose_embedding_artifact_job, store_config=store.config()),
+        jobs,
+    )
+
+
+def run_stability_artifact(job: StabilityJob, store: ArtifactStore) -> dict[str, Any]:
+    """Run stability analysis over persisted embeddings and targets."""
+
+    embedding_metadata, label_metadata = validate_embedding_label_artifacts(
+        store,
+        embedding_key=job.embedding_key,
+        labels_key=job.labels_key,
+    )
+    from vertebrae.scoring.stability import run_stability_analysis
+
+    payload = run_stability_analysis(
+        store.get_array(job.embedding_key),
+        store.get_labels(job.labels_key),
+        job.scoring_config,
+        job.stability_config,
+        label_names=label_metadata.get("label_names"),
+        target_type=label_metadata.get("target_type", "auto"),
+        target_names=label_metadata.get("target_names"),
+    )
+    artifact = {
+        "artifact_type": "stability_diagnostic",
+        "vertebrae_version": __version__,
+        "output_key": job.output_key,
+        "embedding_key": job.embedding_key,
+        "labels_key": job.labels_key,
+        "stability": payload,
+        "embedding_metadata": embedding_metadata,
+        "label_metadata": label_metadata,
+        "resources": asdict(job.resources),
+    }
+    store.put_json(job.output_key, artifact)
+    return artifact
+
+
+def run_stability_artifacts(
+    jobs: Iterable[StabilityJob], store: ArtifactStore, execution: Any
+) -> list[dict[str, Any]]:
+    """Run independent stability jobs through an execution backend."""
+
+    return execution.map(
+        partial(_run_stability_artifact_job, store_config=store.config()),
+        jobs,
+    )
+
+
 def plan_compression_job(
     embedding_key: str,
     compression_config: Any,
@@ -1010,10 +1095,14 @@ def validate_embedding_label_artifacts(
         )
     embedding_identity_key = embedding_metadata.get("dataset_identity_key")
     label_identity_key = label_metadata.get("dataset_identity_key")
+    aligned_identity_key = label_metadata.get("aligned_embedding_identity_key")
     if (
         embedding_identity_key
         and label_identity_key
-        and embedding_identity_key != label_identity_key
+        and (
+            embedding_identity_key != label_identity_key
+            and embedding_identity_key != aligned_identity_key
+        )
     ):
         raise ValueError("Embedding and label artifacts have different dataset identities.")
     return embedding_metadata, label_metadata
@@ -1034,16 +1123,17 @@ def _load_validated_groups(
     expected_rows = int(label_metadata.get("n_samples", -1))
     if int(group_metadata.get("n_samples", -2)) != expected_rows:
         raise ValueError("Group and label artifacts have different row counts.")
-    identities = {
-        identity
-        for identity in (
-            embedding_metadata.get("dataset_identity_key"),
-            label_metadata.get("dataset_identity_key"),
-            group_metadata.get("dataset_identity_key"),
-        )
-        if identity
+    embedding_identity = embedding_metadata.get("dataset_identity_key")
+    compatible_identities = {
+        label_metadata.get("aligned_embedding_identity_key")
+        or label_metadata.get("dataset_identity_key"),
+        group_metadata.get("aligned_embedding_identity_key")
+        or group_metadata.get("dataset_identity_key"),
     }
-    if len(identities) > 1:
+    compatible_identities.discard(None)
+    if embedding_identity and any(
+        identity != embedding_identity for identity in compatible_identities
+    ):
         raise ValueError("Embedding, label, and group artifacts have different dataset identities.")
     groups = store.get_labels(groups_key)
     if len(groups) != expected_rows:
@@ -1188,7 +1278,12 @@ def benchmark_result_from_artifacts(
     embedding_metadata = score_artifact.get("embedding_metadata", {})
     label_metadata = score_artifact.get("label_metadata", {})
     group_metadata = score_artifact.get("group_metadata") or {}
-    stability = store.get_json(stability_key) if stability_key else None
+    stability_artifact = store.get_json(stability_key) if stability_key else None
+    stability = (
+        stability_artifact.get("stability", stability_artifact)
+        if stability_artifact is not None
+        else None
+    )
     separatix_artifact = store.get_json(separatix_key) if separatix_key else None
     separatix = None
     if separatix_artifact:
@@ -1460,6 +1555,13 @@ def _compress_embedding_artifact_job(
     return compress_embedding_artifact(job, create_artifact_store_from_config(store_config))
 
 
+def _run_stability_artifact_job(
+    job: StabilityJob,
+    store_config: ArtifactStoreConfig,
+) -> dict[str, Any]:
+    return run_stability_artifact(job, create_artifact_store_from_config(store_config))
+
+
 def materialize_embedding_shard(
     job: EmbeddingShardJob,
     store: ArtifactStore,
@@ -1482,7 +1584,8 @@ def materialize_embedding_shard(
     sample_indices = job.shard.indices(len(dataset.y))
     if len(sample_indices) == 0:
         raise ValueError("Embedding shard contains no samples.")
-    extractor.fit(dataset.X, dataset.y)
+    if job.fit_extractor:
+        extractor.fit(dataset.X, dataset.y)
     profiler = ResourceProfiler(
         job.resource_profiling_config,
         extractor,
@@ -1859,7 +1962,8 @@ def _local_embedding_batches(
     local_positions: dict[int, int],
     profiler: ResourceProfiler,
 ) -> Iterator[Tuple[np.ndarray, Any]]:
-    for batch in dataset.iter_batches(batch_size=job.batch_size, shard=job.shard):
+    batch_size = job.batch_size if job.streaming_enabled else len(dataset.y)
+    for batch in dataset.iter_batches(batch_size=batch_size, shard=job.shard):
 
         def call(batch: Any = batch) -> Any:
             return extractor.transform(batch.X)
@@ -1902,7 +2006,8 @@ def _materialize_multi_output_embedding_shard(
     }
     output_recipes: Dict[str, dict[str, Any]] = {}
     output_metadata: Dict[str, dict[str, Any]] = {}
-    for batch in dataset.iter_batches(batch_size=job.batch_size, shard=job.shard):
+    batch_size = job.batch_size if job.streaming_enabled else len(dataset.y)
+    for batch in dataset.iter_batches(batch_size=batch_size, shard=job.shard):
 
         def call(batch: Any = batch) -> Any:
             return _validated_multi_outputs(

@@ -62,6 +62,9 @@ def test_s3_artifact_store_roundtrip_with_fake_boto3(monkeypatch):
     with pytest.raises(TypeError, match=r"unsupported object at \$\.metadata\.model"):
         store.put_json("runs/invalid", {"metadata": {"model": object()}})
     assert objects == before
+    recreated.delete_prefix("runs")
+    assert not any("/runs/" in key for _, key in objects)
+    assert recreated.exists("arrays/dense")
 
 
 def test_gcs_artifact_store_roundtrip_with_fake_client(monkeypatch):
@@ -98,6 +101,9 @@ def test_gcs_artifact_store_roundtrip_with_fake_client(monkeypatch):
     with pytest.raises(TypeError, match=r"unsupported object at \$\.metadata\.model"):
         store.put_json("runs/invalid", {"metadata": {"model": object()}})
     assert objects == before
+    recreated.delete_prefix("runs")
+    assert not any("/runs/" in key for _, key in objects)
+    assert recreated.exists("arrays/dense")
 
 
 def test_local_json_rejects_invalid_metadata_without_overwriting_previous_value(tmp_path):
@@ -108,6 +114,19 @@ def test_local_json_rejects_invalid_metadata_without_overwriting_previous_value(
         store.put_json("runs/demo", {"metadata": {"model": object()}})
 
     assert store.get_json("runs/demo") == {"ok": True}
+
+
+def test_local_delete_prefix_removes_only_selected_artifacts(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    store.put_json("runs/one/result", {"ok": True})
+    store.put_json("runs/two/result", {"ok": True})
+
+    store.delete_prefix("runs/one")
+
+    assert not (tmp_path / "runs/one").exists()
+    assert store.get_json("runs/two/result") == {"ok": True}
+    with pytest.raises(ValueError, match="root"):
+        store.delete_prefix("")
 
 
 def test_local_array_stat_uses_actual_file_size(tmp_path):
@@ -347,6 +366,21 @@ def _fake_boto3_module(objects):
         def delete_object(self, Bucket, Key):
             objects.pop((Bucket, Key), None)
 
+        def list_objects_v2(self, Bucket, Prefix, ContinuationToken=None):
+            del ContinuationToken
+            return {
+                "Contents": [
+                    {"Key": key}
+                    for bucket, key in objects
+                    if bucket == Bucket and key.startswith(Prefix)
+                ],
+                "IsTruncated": False,
+            }
+
+        def delete_objects(self, Bucket, Delete):
+            for item in Delete["Objects"]:
+                objects.pop((Bucket, item["Key"]), None)
+
     class FakeSession:
         def __init__(self, profile_name=None, region_name=None):
             self.profile_name = profile_name
@@ -401,6 +435,13 @@ def _fake_gcs_storage_module(objects):
 
         def blob(self, blob_name):
             return FakeBlob(self.name, blob_name)
+
+        def list_blobs(self, prefix=""):
+            return [
+                FakeBlob(self.name, blob_name)
+                for bucket_name, blob_name in objects
+                if bucket_name == self.name and blob_name.startswith(prefix)
+            ]
 
     class FakeClient:
         def __init__(self, project=None):

@@ -15,6 +15,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_text_pipel
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_tabular_pipeline.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_wine_pipeline.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/multi_extractor_comparison.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/dispatched_benchmark.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/cache_reuse.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_outputs.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_depth.py
@@ -45,6 +46,8 @@ Each script writes reports to `examples/output/`.
   pipelines on the bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare several extractors on the same labeled
   numeric dataset.
+- `dispatched_benchmark.py`: run the ordinary benchmark API through a two-worker,
+  artifact-backed local execution backend.
 - `cache_reuse.py`: show how embedding caching avoids recomputing extractor output
   on repeated runs.
 - `structured_outputs.py`: materialize OCR/layout regions, ASR tokens, and pose
