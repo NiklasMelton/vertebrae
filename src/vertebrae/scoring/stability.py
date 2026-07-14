@@ -15,6 +15,7 @@ from vertebrae.utils.labels import (
     normalize_targets,
     stratified_label_indices,
 )
+from vertebrae.utils.validation import ensure_numeric_matrix
 
 
 def run_stability_analysis(
@@ -42,7 +43,7 @@ def run_stability_analysis(
     if not config.enabled or config.mode == "none":
         return None
 
-    embeddings = np.asarray(Z)
+    embeddings = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
     labels, label_metadata = normalize_targets(
         y,
         label_names=label_names,

@@ -93,12 +93,19 @@ Keeps the first `n_components` dimensions without fitting a model.
 
 - Accepts dense and sparse input.
 - Requires `n_components`.
+- Honors `dtype` after truncation while preserving sparse storage.
 - Use `assume_matryoshka=True` when the embedding source is intentionally
   dimension-ordered, such as matryoshka-trained or shortened embeddings.
 
 When `assume_matryoshka=False`, `vertebrae` records a warning so reports make it
 clear this is being treated as a prefix-based diagnostic rather than a claimed
 model-native shortening path.
+
+For every dimensional method, a requested `n_components` greater than or equal to
+the current embedding width is recorded as a skipped compression and leaves values,
+sparsity, dimensions, and dtype unchanged. A requested `dtype` is applied only when
+compression is actually performed. PCA and incremental PCA also reject a reducing
+dimension that exceeds the number of samples on the side used to fit the transform.
 
 ### `quantize`
 

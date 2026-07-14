@@ -4,8 +4,8 @@ from dataclasses import asdict, dataclass, field
 from time import perf_counter
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from vertebrae.compression import compress_embeddings, compression_variant_name
-from vertebrae.compression.base import _compression_metadata, create_embedding_compressor
+from vertebrae.compression import compression_variant_name
+from vertebrae.compression.paired import compress_embedding_pair
 from vertebrae.config import (
     EmbeddingCompressionConfig,
     EmbeddingConfig,
@@ -217,7 +217,11 @@ class RetrievalBenchmark:
                             "scoring_seconds": perf_counter() - score_start,
                         },
                         warnings=sorted(
-                            set(forward.warnings + (reverse.warnings if reverse else []))
+                            set(
+                                forward.warnings
+                                + (reverse.warnings if reverse else [])
+                                + list(compression_metadata.get("warnings", []))
+                            )
                         ),
                         recipe=getattr(extractor, "recipe", lambda: {})(),
                         resource_profiles=_endpoint_profiles(
@@ -335,20 +339,13 @@ class RetrievalBenchmark:
 def _compress_pair(
     query: Any, gallery: Any, config: EmbeddingCompressionConfig
 ) -> tuple[Any, Any, Dict[str, Any]]:
-    if not config.enabled or config.method == "none":
-        gallery_result = compress_embeddings(gallery, config=config)
-        return (
-            query,
-            gallery_result.embeddings,
-            {
-                **gallery_result.metadata,
-                "fit_side": "gallery",
-            },
-        )
-    compressor = create_embedding_compressor(config)
-    gallery_result = compressor.fit_transform(gallery)
-    query_result = compressor.transform(query)
-    metadata = _compression_metadata(compressor, gallery, gallery_result, warnings=[])
+    gallery_result, query_result, metadata = compress_embedding_pair(
+        gallery,
+        query,
+        config,
+        fit_name="gallery embeddings",
+        paired_name="query embeddings",
+    )
     return (
         query_result,
         gallery_result,

@@ -19,7 +19,7 @@ from vertebrae.utils.semantic_labels import (
     semantic_label_catalog,
     semantic_label_key,
 )
-from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix, sparse_to_dense
+from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
 @dataclass
@@ -91,6 +91,15 @@ class ZeroShotScoreResult:
         }
 
 
+@dataclass
+class _BlockwiseScores:
+    predicted_indices: np.ndarray
+    correct_scores: np.ndarray
+    best_incorrect_scores: np.ndarray
+    top_k_hits: Dict[int, int]
+    tied: int
+
+
 class ZeroShotScorer:
     """Score frozen samples against fixed text prompt prototypes.
 
@@ -114,8 +123,12 @@ class ZeroShotScorer:
     ) -> ZeroShotScoreResult:
         """Evaluate exact sample-to-class prototype matching."""
 
-        samples = _dense(sample_embeddings, "sample embeddings", self.config.max_dense_bytes)
-        prompts = _dense(prompt_embeddings, "prompt embeddings", self.config.max_dense_bytes)
+        sample_matrix = ensure_numeric_matrix(
+            sample_embeddings, "sample embeddings", allow_sparse=True
+        )
+        prompt_matrix = ensure_numeric_matrix(
+            prompt_embeddings, "prompt embeddings", allow_sparse=True
+        )
         target = np.asarray(labels, dtype=object)
         if target.ndim != 1:
             raise ValueError("Zero-shot labels must be a one-dimensional single-label sequence.")
@@ -124,31 +137,62 @@ class ZeroShotScorer:
         _validate_semantic_labels(target.tolist(), "labels")
         _validate_semantic_labels(classes, "class_labels")
         _validate_semantic_labels(prompt_target, "prompt_labels")
-        if samples.shape[0] != len(target):
+        if sample_matrix.shape[0] != len(target):
             raise ValueError("sample embeddings and labels must have the same number of rows.")
-        if samples.shape[1] != prompts.shape[1]:
+        if sample_matrix.shape[1] != prompt_matrix.shape[1]:
             raise ValueError("sample and prompt embedding dimensions must match.")
         if len(classes) < 2 or len(set(classes)) != len(classes):
             raise ValueError("class_labels must contain at least two unique labels.")
         if set(target.tolist()) != set(classes):
             raise ValueError("class_labels must contain exactly the observed sample labels.")
-        if len(prompt_target) != len(prompts) or set(prompt_target) != set(classes):
+        if len(prompt_target) != prompt_matrix.shape[0] or set(prompt_target) != set(classes):
             raise ValueError("prompt_labels must align with prompts and cover every class exactly.")
-        if template_ids is not None and len(template_ids) != len(prompts):
+        if template_ids is not None and len(template_ids) != prompt_matrix.shape[0]:
             raise ValueError("template_ids must align one-to-one with prompt embeddings.")
-        if sample_ids is not None and len(sample_ids) != len(samples):
+        if sample_ids is not None and len(sample_ids) != sample_matrix.shape[0]:
             raise ValueError("sample_ids must align one-to-one with sample embeddings.")
+        required_bytes = _working_set_bytes(
+            sample_matrix.shape,
+            prompt_matrix.shape,
+            len(classes),
+            self.config.sample_batch_size,
+        )
+        if required_bytes > self.config.max_dense_bytes:
+            raise MemoryError(
+                "Zero-shot scoring requires an estimated "
+                f"{required_bytes} dense working-set bytes for its float64 endpoints, "
+                "prototypes, result accumulators, and one configured score block, exceeding "
+                f"ZeroShotConfig.max_dense_bytes={self.config.max_dense_bytes}. Lower "
+                "sample_batch_size, compress the embeddings, or increase max_dense_bytes."
+            )
+        samples = _owned_float64(sample_matrix)
+        prompts = _owned_float64(prompt_matrix)
         _assert_nonzero_rows(samples, "sample embeddings")
         _assert_nonzero_rows(prompts, "prompt embeddings")
+        _normalize_rows_in_place(prompts)
+        if self.config.similarity == "cosine":
+            _normalize_rows_in_place(samples)
 
         prototypes, coherence = _prototypes(prompts, prompt_target, classes)
-        scores = _similarities(samples, prototypes, self.config.similarity)
-        predicted_indices, tied = _predictions(scores)
-        predicted = np.asarray([classes[index] for index in predicted_indices], dtype=object)
         class_positions = {label: index for index, label in enumerate(classes)}
         target_indices = np.asarray([class_positions[label] for label in target], dtype=int)
+        blockwise = _score_blockwise(
+            samples,
+            prototypes,
+            target_indices,
+            self.config.similarity,
+            self.config.top_k,
+            self.config.sample_batch_size,
+        )
+        predicted = np.asarray(
+            [classes[index] for index in blockwise.predicted_indices], dtype=object
+        )
         metrics, per_class, matrix = _classification_metrics(
-            target_indices, predicted_indices, classes, scores, self.config.top_k
+            target_indices,
+            blockwise.predicted_indices,
+            classes,
+            blockwise.top_k_hits,
+            self.config.top_k,
         )
         warnings = []
         skipped_top_k = [k for k in self.config.top_k if k > len(classes)]
@@ -157,21 +201,18 @@ class ZeroShotScorer:
                 "Skipped Top-K metrics with K larger than the number of declared classes: "
                 f"{skipped_top_k}."
             )
-        if tied:
+        if blockwise.tied:
             warnings.append(
-                f"{tied} sample(s) had an exact top-score tie; declared class order broke ties."
+                f"{blockwise.tied} sample(s) had an exact top-score tie; "
+                "declared class order broke ties."
             )
-        correct_scores = scores[np.arange(len(scores)), target_indices]
-        incorrect = scores.copy()
-        incorrect[np.arange(len(scores)), target_indices] = -np.inf
-        best_incorrect = np.max(incorrect, axis=1)
-        margins = correct_scores - best_incorrect
+        margins = blockwise.correct_scores - blockwise.best_incorrect_scores
         diagnostics: Dict[str, Any] = {
-            "correct_similarity": _summary(correct_scores),
-            "best_incorrect_similarity": _summary(best_incorrect),
+            "correct_similarity": _summary(blockwise.correct_scores),
+            "best_incorrect_similarity": _summary(blockwise.best_incorrect_scores),
             "correct_class_margin": _summary(margins),
             "prompt_coherence": coherence,
-            "n_top_score_ties": tied,
+            "n_top_score_ties": blockwise.tied,
             "n_samples": len(samples),
             "n_classes": len(classes),
             "n_prompts": len(prompts),
@@ -183,6 +224,7 @@ class ZeroShotScorer:
                 self.config.worst_samples,
             ),
         }
+        del blockwise, margins, predicted, prototypes
         if template_ids is not None:
             template_values = tuple(template_ids)
             unique_templates = tuple(dict.fromkeys(template_values))
@@ -219,11 +261,31 @@ class ZeroShotScorer:
         )
 
 
-def _dense(value: Any, name: str, max_dense_bytes: int) -> np.ndarray:
-    matrix = ensure_numeric_matrix(value, name, allow_sparse=True)
+def _owned_float64(matrix: Any) -> np.ndarray:
     if is_sparse_matrix(matrix):
-        matrix = sparse_to_dense(matrix, name, max_dense_bytes)
-    return np.asarray(matrix, dtype=np.float64)
+        return matrix.astype(np.float64, copy=False).toarray()
+    return np.array(matrix, dtype=np.float64, copy=True)
+
+
+def _working_set_bytes(
+    sample_shape: Tuple[int, int],
+    prompt_shape: Tuple[int, int],
+    n_classes: int,
+    sample_batch_size: int,
+) -> int:
+    """Estimate the scorer-owned dense working set before allocating it."""
+
+    n_samples, embedding_dim = sample_shape
+    n_prompts = prompt_shape[0]
+    batch_rows = min(sample_batch_size, n_samples)
+    float_bytes = np.dtype(np.float64).itemsize
+    endpoints = (n_samples + n_prompts) * embedding_dim * float_bytes
+    prototypes = n_classes * embedding_dim * float_bytes
+    # Target/prediction indices, three diagnostic vectors, margins, and one ordering buffer.
+    accumulators = n_samples * 7 * float_bytes
+    # One float64 score block plus conservative rank/tie comparison workspace.
+    score_workspace = batch_rows * n_classes * (float_bytes + 8)
+    return int(endpoints + prototypes + accumulators + score_workspace)
 
 
 def _assert_nonzero_rows(value: np.ndarray, name: str) -> None:
@@ -232,21 +294,32 @@ def _assert_nonzero_rows(value: np.ndarray, name: str) -> None:
 
 
 def _prototypes(
-    prompts: np.ndarray, prompt_labels: Sequence[Any], classes: Sequence[Any]
+    prompts: np.ndarray,
+    prompt_labels: Sequence[Any],
+    classes: Sequence[Any],
+    row_mask: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, Dict[Any, Dict[str, float]]]:
-    normalized = _normalize_rows(prompts)
     prototypes = []
     coherence: Dict[Any, Dict[str, float]] = {}
-    labels = np.asarray(prompt_labels, dtype=object)
     for label in classes:
-        rows = normalized[labels == label]
-        prototype = np.mean(rows, axis=0, keepdims=True)
+        indices = [
+            index
+            for index, prompt_label in enumerate(prompt_labels)
+            if prompt_label == label and (row_mask is None or bool(row_mask[index]))
+        ]
+        prototype = np.zeros((1, prompts.shape[1]), dtype=np.float64)
+        for index in indices:
+            prototype[0] += prompts[index]
+        prototype /= float(len(indices))
         _assert_nonzero_rows(prototype, f"prompt prototype for class {label!r}")
-        prototype = _normalize_rows(prototype)[0]
-        prototypes.append(prototype)
-        similarities = rows @ prototype
+        _normalize_rows_in_place(prototype)
+        prototype_row = prototype[0]
+        prototypes.append(prototype_row)
+        similarities = np.asarray(
+            [float(prompts[index] @ prototype_row) for index in indices], dtype=np.float64
+        )
         coherence[label] = {
-            "n_prompts": float(len(rows)),
+            "n_prompts": float(len(indices)),
             "mean_similarity": float(np.mean(similarities)),
             "min_similarity": float(np.min(similarities)),
             "max_similarity": float(np.max(similarities)),
@@ -255,26 +328,61 @@ def _prototypes(
 
 
 def _similarities(samples: np.ndarray, prototypes: np.ndarray, similarity: str) -> np.ndarray:
-    if similarity == "cosine":
-        return _normalize_rows(samples) @ prototypes.T
-    if similarity == "dot":
+    if similarity in {"cosine", "dot"}:
         return samples @ prototypes.T
     sample_norms = np.einsum("ij,ij->i", samples, samples)[:, None]
     prototype_norms = np.einsum("ij,ij->i", prototypes, prototypes)[None, :]
-    return -(sample_norms + prototype_norms - 2.0 * (samples @ prototypes.T))
+    scores = samples @ prototypes.T
+    scores *= 2.0
+    scores -= sample_norms
+    scores -= prototype_norms
+    np.negative(scores, out=scores)
+    return scores
 
 
-def _predictions(scores: np.ndarray) -> Tuple[np.ndarray, int]:
-    maximum = np.max(scores, axis=1, keepdims=True)
-    ties = int(np.count_nonzero(np.sum(scores == maximum, axis=1) > 1))
-    return np.argmax(scores, axis=1), ties
+def _score_blockwise(
+    samples: np.ndarray,
+    prototypes: np.ndarray,
+    target_indices: np.ndarray,
+    similarity: str,
+    top_k: Sequence[int],
+    sample_batch_size: int,
+) -> _BlockwiseScores:
+    n_samples = len(samples)
+    predicted = np.empty(n_samples, dtype=np.int64)
+    correct = np.empty(n_samples, dtype=np.float64)
+    best_incorrect = np.empty(n_samples, dtype=np.float64)
+    valid_top_k = tuple(k for k in top_k if k <= len(prototypes))
+    top_k_hits = {k: 0 for k in valid_top_k}
+    class_indices = np.arange(len(prototypes), dtype=np.int64)[None, :]
+    tied = 0
+    for start in range(0, n_samples, sample_batch_size):
+        stop = min(start + sample_batch_size, n_samples)
+        scores = _similarities(samples[start:stop], prototypes, similarity)
+        local_rows = np.arange(stop - start)
+        local_targets = target_indices[start:stop]
+        maximum = np.max(scores, axis=1, keepdims=True)
+        tied += int(np.count_nonzero(np.sum(scores == maximum, axis=1) > 1))
+        predicted[start:stop] = np.argmax(scores, axis=1)
+        local_correct = scores[local_rows, local_targets]
+        correct[start:stop] = local_correct
+        better = scores > local_correct[:, None]
+        tied_before = (scores == local_correct[:, None]) & (
+            class_indices < local_targets[:, None]
+        )
+        ranks = 1 + np.sum(better | tied_before, axis=1)
+        for k in valid_top_k:
+            top_k_hits[k] += int(np.count_nonzero(ranks <= k))
+        scores[local_rows, local_targets] = -np.inf
+        best_incorrect[start:stop] = np.max(scores, axis=1)
+    return _BlockwiseScores(predicted, correct, best_incorrect, top_k_hits, tied)
 
 
 def _classification_metrics(
     target_indices: np.ndarray,
     predicted_indices: np.ndarray,
     classes: Sequence[Any],
-    scores: np.ndarray,
+    top_k_hits: Dict[int, int],
     top_k: Sequence[int],
 ) -> Tuple[Dict[str, float], Dict[Any, Dict[str, float]], List[List[int]]]:
     encoded_classes = list(range(len(classes)))
@@ -301,10 +409,7 @@ def _classification_metrics(
     }
     for k in top_k:
         if k <= len(classes):
-            top_indices = np.argsort(-scores, axis=1, kind="stable")[:, :k]
-            metrics[f"top_k_accuracy@{k}"] = float(
-                np.mean(np.any(top_indices == target_indices[:, None], axis=1))
-            )
+            metrics[f"top_k_accuracy@{k}"] = float(top_k_hits[k] / len(target_indices))
     per_class = {
         label: {
             "precision": float(precision[index]),
@@ -334,24 +439,33 @@ def _template_metrics(
 ) -> Dict[str, Dict[str, float]]:
     results = {}
     template_array = np.asarray(template_ids, dtype=object)
-    label_array = np.asarray(prompt_labels, dtype=object)
     for template in templates:
         mask = template_array == template
-        prototypes, _ = _prototypes(prompts[mask], label_array[mask], classes)
-        scores = _similarities(samples, prototypes, config.similarity)
+        prototypes, _ = _prototypes(prompts, prompt_labels, classes, row_mask=mask)
         class_positions = {label: index for index, label in enumerate(classes)}
         target_indices = np.asarray([class_positions[label] for label in target], dtype=int)
-        predicted_indices = np.argmax(scores, axis=1)
+        blockwise = _score_blockwise(
+            samples,
+            prototypes,
+            target_indices,
+            config.similarity,
+            config.top_k,
+            config.sample_batch_size,
+        )
         metrics, _per_class, _matrix = _classification_metrics(
-            target_indices, predicted_indices, classes, scores, config.top_k
+            target_indices,
+            blockwise.predicted_indices,
+            classes,
+            blockwise.top_k_hits,
+            config.top_k,
         )
         results[template] = metrics
     return results
 
 
-def _normalize_rows(value: np.ndarray) -> np.ndarray:
+def _normalize_rows_in_place(value: np.ndarray) -> None:
     norms = np.linalg.norm(value, axis=1, keepdims=True)
-    return value / norms
+    value /= norms
 
 
 def _summary(values: np.ndarray) -> Dict[str, float]:

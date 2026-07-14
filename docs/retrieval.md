@@ -17,5 +17,11 @@ retrieval-capable OpenCLIP, SigLIP, and compatible Hugging Face multimodal adapt
 The default is exact cosine ranking with NDCG@10 as the primary score. Reports include
 NDCG, precision, recall, hit rate, MRR, mAP, and positive/negative similarity margins.
 
+Optional paired compression is fitted on gallery embeddings and applied to query
+embeddings with the same transform. Requests whose `n_components` is greater than or
+equal to the endpoint width are explicit no-ops: both endpoints retain their values,
+sparsity, and dtype, and result metadata records `applied=False` with a warning. The
+same rule applies in local and artifact-backed retrieval workflows.
+
 The protocol is deliberately not an ANN, reranking, learned retrieval, or recommender
 benchmark. It evaluates the fixed embedding geometry and declared candidate set only.

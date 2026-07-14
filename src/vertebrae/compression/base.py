@@ -62,7 +62,10 @@ class _PrefixTruncateCompressor(EmbeddingCompressor):
 
     def transform(self, Z: Any) -> Any:
         matrix = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
-        return matrix[:, : self.config.n_components]
+        transformed = matrix[:, : self.config.n_components]
+        if self.config.dtype is not None:
+            transformed = transformed.astype(self.config.dtype, copy=False)
+        return transformed
 
     def recipe(self) -> Dict[str, Any]:
         return {
@@ -80,6 +83,16 @@ class _SklearnEmbeddingCompressor(EmbeddingCompressor):
 
     def fit(self, Z: Any, y: Any = None) -> "_SklearnEmbeddingCompressor":
         matrix = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
+        if (
+            self.config.method in {"pca", "incremental_pca"}
+            and self.config.n_components is not None
+            and self.config.n_components > matrix.shape[0]
+        ):
+            raise ValueError(
+                f"Compression method '{self.config.method}' cannot fit n_components="
+                f"{self.config.n_components} from only {matrix.shape[0]} fit-side samples; "
+                "reduce n_components or provide more fit-side samples."
+            )
         if self.config.method in {"pca", "incremental_pca"} and is_sparse_matrix(matrix):
             raise ValueError(
                 f"Compression method '{self.config.method}' requires dense embeddings; "
@@ -213,6 +226,7 @@ def compress_embeddings(
             "compressed_dim": original_dim,
             "input_sparse": original_sparse,
             "output_sparse": original_sparse,
+            "dtype": str(getattr(matrix, "dtype", "unknown")),
             "warnings": [],
             "recipe": {"method": "none", "enabled": False},
         }
@@ -234,6 +248,7 @@ def compress_embeddings(
             "compressed_dim": original_dim,
             "input_sparse": original_sparse,
             "output_sparse": original_sparse,
+            "dtype": str(getattr(matrix, "dtype", "unknown")),
             "warnings": warnings,
             "recipe": compressor.recipe(),
         }
