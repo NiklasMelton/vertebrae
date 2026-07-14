@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator, MemoryConfig
+from vertebrae import BenchmarkDataset, DatasetIdentity, EmbeddingConfig, Evaluator, MemoryConfig
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor
 from vertebrae.utils.memory import resolve_memory_budget
@@ -43,6 +43,7 @@ def test_streaming_embedding_fails_after_probe_when_auto_subsampling_disabled(
         np.arange(30).reshape(10, 3),
         ["a"] * 5 + ["b"] * 5,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor("large_embeddings", embed, streaming_safe=True)
 
@@ -78,6 +79,7 @@ def test_streaming_embedding_auto_subsamples_when_scoring_would_exceed_memory(
         np.arange(30).reshape(10, 3),
         ["a"] * 5 + ["b"] * 5,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor("large_embeddings", embed, streaming_safe=True)
 
@@ -115,6 +117,7 @@ def test_user_requested_subsample_rate_limits_benchmark_samples(tmp_path, fake_o
         np.arange(36).reshape(12, 3),
         ["a"] * 6 + ["b"] * 6,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor("subsampled_embeddings", embed, streaming_safe=True)
 
@@ -144,6 +147,7 @@ def test_streaming_embedding_records_memory_estimate(tmp_path, fake_overlapindex
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "small_embeddings",
@@ -179,6 +183,7 @@ def test_streaming_probe_is_reused_when_no_subsampling_is_needed(tmp_path, fake_
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor("small_embeddings", embed, streaming_safe=True)
 

@@ -4,7 +4,13 @@ import types
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, Evaluator, ZeroShotBenchmark, ZeroShotDataset
+from vertebrae import (
+    BenchmarkDataset,
+    DatasetIdentity,
+    Evaluator,
+    ZeroShotBenchmark,
+    ZeroShotDataset,
+)
 from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
 from vertebrae.extractors import HFMultimodalExtractor
 
@@ -138,6 +144,7 @@ def _dataset():
         },
         labels=["left", "left", "right", "right"],
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
 
@@ -177,6 +184,7 @@ def test_hf_multimodal_runs_zero_shot_protocol(fake_multimodal_modules, fake_ove
             [np.zeros((2, 2, 3), dtype=np.uint8)] * 4,
             ["left", "left", "right", "right"],
             modality="image",
+            identity=DatasetIdentity.ephemeral(),
         ),
         ["{label}"],
     )

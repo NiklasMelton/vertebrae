@@ -56,14 +56,14 @@ def embedding_artifact_key(dataset: Any, extractor: Any) -> str:
     """Build the canonical embedding artifact key.
 
     Args:
-        dataset: Dataset object with a `fingerprint()` method.
+        dataset: Dataset object with an `identity_key()` method.
         extractor: Feature extractor with a serializable `recipe()`.
 
     Returns:
         Artifact key for the complete embedding matrix.
     """
 
-    dataset_key = dataset.fingerprint()
+    dataset_key = dataset.identity_key()
     extractor_key = fingerprint_extractor_recipe(extractor.recipe())
     return f"embeddings/{dataset_key}/{extractor_key}"
 
@@ -82,7 +82,7 @@ def retrieval_embedding_artifact_key(
         )
     recipe_hash = fingerprint_extractor_recipe(recipe)
     branch_key = "default" if branch is None else hash_json({"branch": branch})
-    return f"retrieval/embeddings/{dataset.fingerprint()}/{recipe_hash}/{side}/{branch_key}"
+    return f"retrieval/embeddings/{dataset.identity_key()}/{recipe_hash}/{side}/{branch_key}"
 
 
 def retrieval_embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
@@ -122,19 +122,19 @@ def labels_artifact_key(dataset: Any) -> str:
     """Build the canonical label artifact key.
 
     Args:
-        dataset: Dataset object with a `fingerprint()` method.
+        dataset: Dataset object with an `identity_key()` method.
 
     Returns:
         Artifact key for labels.
     """
 
-    return f"labels/{dataset.fingerprint()}"
+    return f"labels/{dataset.identity_key()}"
 
 
 def groups_artifact_key(dataset: Any) -> str:
     """Build the canonical independence-group artifact key."""
 
-    return f"groups/{dataset.fingerprint()}"
+    return f"groups/{dataset.identity_key()}"
 
 
 def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
@@ -196,7 +196,7 @@ def materialize_segmentation_artifacts(
         streaming=True,
         context={"measurement_scope": "artifact_materialization", "modality": "segmentation"},
     )
-    base_key = f"segmentation/{dataset.fingerprint()}/" f"{fingerprint_extractor_recipe(recipe)}"
+    base_key = f"segmentation/{dataset.identity_key()}/" f"{fingerprint_extractor_recipe(recipe)}"
     outputs = []
     materializations = list(
         materialize_segmentation_outputs(
@@ -225,8 +225,8 @@ def materialize_segmentation_artifacts(
             "vertebrae_version": __version__,
             "output_key": output_key,
             "artifact_path": artifact_path,
-            "dataset_fingerprint": materialization.dataset.fingerprint(),
-            "source_dataset_fingerprint": dataset.fingerprint(),
+            "dataset_identity_key": materialization.dataset.identity_key(),
+            "source_dataset_identity_key": dataset.identity_key(),
             "extractor_recipe": recipe,
             "recipe_hash": fingerprint_extractor_recipe(recipe),
             "output_name": materialization.name,
@@ -268,7 +268,7 @@ def materialize_segmentation_artifacts(
                 "vertebrae_version": __version__,
                 "output_key": labels_key,
                 "artifact_path": label_path,
-                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "dataset_identity_key": materialization.dataset.identity_key(),
                 "n_samples": int(len(labels)),
                 "target_type": label_summary["target_type"],
                 "class_counts": make_json_safe(label_summary["class_counts"]),
@@ -285,7 +285,7 @@ def materialize_segmentation_artifacts(
                 "vertebrae_version": __version__,
                 "output_key": groups_key,
                 "artifact_path": group_path,
-                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "dataset_identity_key": materialization.dataset.identity_key(),
                 "n_samples": int(len(groups)),
                 "n_groups": int(len(np.unique(groups))),
                 "group_name": "image_id",
@@ -297,7 +297,7 @@ def materialize_segmentation_artifacts(
         "artifact_type": "segmentation_embedding_bundle",
         "vertebrae_version": __version__,
         "output_key": base_key,
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": recipe,
         "resource_profiling_config": asdict(resource_config),
         "resource_profile": (
@@ -329,7 +329,7 @@ def materialize_structured_artifacts(
         streaming=True,
         context={"measurement_scope": "artifact_materialization", "modality": "structured"},
     )
-    base_key = f"structured/{dataset.fingerprint()}/{fingerprint_extractor_recipe(recipe)}"
+    base_key = f"structured/{dataset.identity_key()}/{fingerprint_extractor_recipe(recipe)}"
     outputs = []
     materializations = list(
         materialize_structured_outputs(
@@ -358,8 +358,8 @@ def materialize_structured_artifacts(
             "vertebrae_version": __version__,
             "output_key": output_key,
             "artifact_path": artifact_path,
-            "dataset_fingerprint": materialization.dataset.fingerprint(),
-            "source_dataset_fingerprint": dataset.fingerprint(),
+            "dataset_identity_key": materialization.dataset.identity_key(),
+            "source_dataset_identity_key": dataset.identity_key(),
             "extractor_recipe": recipe,
             "recipe_hash": fingerprint_extractor_recipe(recipe),
             "output_name": materialization.name,
@@ -405,7 +405,7 @@ def materialize_structured_artifacts(
                 "vertebrae_version": __version__,
                 "output_key": labels_key,
                 "artifact_path": label_path,
-                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "dataset_identity_key": materialization.dataset.identity_key(),
                 "n_samples": int(len(labels)),
                 "target_type": label_summary["target_type"],
                 "class_counts": make_json_safe(label_summary["class_counts"]),
@@ -422,7 +422,7 @@ def materialize_structured_artifacts(
                 "vertebrae_version": __version__,
                 "output_key": groups_key,
                 "artifact_path": group_path,
-                "dataset_fingerprint": materialization.dataset.fingerprint(),
+                "dataset_identity_key": materialization.dataset.identity_key(),
                 "n_samples": int(len(groups)),
                 "n_groups": int(len(np.unique(groups))),
                 "group_name": "parent_id",
@@ -434,7 +434,7 @@ def materialize_structured_artifacts(
         "artifact_type": "structured_embedding_bundle",
         "vertebrae_version": __version__,
         "output_key": base_key,
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": recipe,
         "resource_profiling_config": asdict(resource_config),
         "resource_profile": (
@@ -571,7 +571,7 @@ def materialize_label_artifact(
         "vertebrae_version": __version__,
         "output_key": output_key,
         "artifact_path": artifact_path,
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "n_samples": int(len(dataset.y)),
         "dtype": str(np.asarray(dataset.y).dtype),
         "target_type": labels["target_type"],
@@ -615,7 +615,7 @@ def materialize_group_artifact(
         "vertebrae_version": __version__,
         "output_key": output_key,
         "artifact_path": artifact_path,
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "n_samples": int(len(groups)),
         "n_groups": int(len(np.unique(groups))),
         "group_name": dataset.metadata.get("group_name", "group"),
@@ -818,10 +818,14 @@ def diagnose_embedding_artifact(
             group_metadata = store.get_json(job.groups_key)
             if int(group_metadata.get("n_samples", -1)) != len(labels):
                 raise ValueError("Group and label artifacts have different row counts.")
-            group_fingerprint = group_metadata.get("dataset_fingerprint")
-            label_fingerprint = label_metadata.get("dataset_fingerprint")
-            if group_fingerprint and label_fingerprint and group_fingerprint != label_fingerprint:
-                raise ValueError("Group and label artifacts have different dataset fingerprints.")
+            group_identity_key = group_metadata.get("dataset_identity_key")
+            label_identity_key = label_metadata.get("dataset_identity_key")
+            if (
+                group_identity_key
+                and label_identity_key
+                and group_identity_key != label_identity_key
+            ):
+                raise ValueError("Group and label artifacts have different dataset identities.")
             groups = store.get_labels(job.groups_key)
         excluded = overlap_metadata.get("exclude_classes", [])
         if excluded and target_type != REGRESSION_TARGET:
@@ -1003,10 +1007,14 @@ def validate_embedding_label_artifacts(
             "Embedding and label artifacts have different row counts; "
             f"got {embedding_rows} and {label_rows}."
         )
-    embedding_fingerprint = embedding_metadata.get("dataset_fingerprint")
-    label_fingerprint = label_metadata.get("dataset_fingerprint")
-    if embedding_fingerprint and label_fingerprint and embedding_fingerprint != label_fingerprint:
-        raise ValueError("Embedding and label artifacts have different dataset fingerprints.")
+    embedding_identity_key = embedding_metadata.get("dataset_identity_key")
+    label_identity_key = label_metadata.get("dataset_identity_key")
+    if (
+        embedding_identity_key
+        and label_identity_key
+        and embedding_identity_key != label_identity_key
+    ):
+        raise ValueError("Embedding and label artifacts have different dataset identities.")
     return embedding_metadata, label_metadata
 
 
@@ -1466,7 +1474,7 @@ def materialize_embedding_shard(
         "vertebrae_version": __version__,
         "output_key": job.output_key,
         "artifact_path": artifact_path,
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": extractor.recipe(),
         "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
         "shard": asdict(job.shard),
@@ -1561,7 +1569,7 @@ def materialize_retrieval_embedding_shard(
         "vertebrae_version": __version__,
         "output_key": job.output_key,
         "artifact_path": path,
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": job.extractor.recipe(),
         "recipe_hash": fingerprint_extractor_recipe(job.extractor.recipe()),
         "side": job.side,
@@ -1710,7 +1718,7 @@ def merge_embedding_shards(
         "resources": asdict(job.resources),
     }
     first = manifests[0]
-    for key in ("dataset_fingerprint", "extractor_recipe", "recipe_hash"):
+    for key in ("dataset_identity_key", "extractor_recipe", "recipe_hash"):
         manifest[key] = first.get(key)
     serialized_profiles = [
         (item["output_key"], item.get("resource_profile"))
@@ -1891,7 +1899,7 @@ def _materialize_multi_output_embedding_shard(
             "vertebrae_version": __version__,
             "output_key": output_key,
             "artifact_path": artifact_path,
-            "dataset_fingerprint": dataset.fingerprint(),
+            "dataset_identity_key": dataset.identity_key(),
             "extractor_recipe": extractor.recipe(),
             "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
             "output_name": output_name,
@@ -1920,7 +1928,7 @@ def _materialize_multi_output_embedding_shard(
         "artifact_type": "multi_output_embedding_shard",
         "vertebrae_version": __version__,
         "output_key": job.output_key,
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": extractor.recipe(),
         "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
         "shard": asdict(job.shard),
@@ -1995,7 +2003,7 @@ def _merge_multi_output_embedding_shards(
         "shard_keys": list(job.shard_keys),
         "n_shards": len(job.shard_keys),
         "n_samples": int(job.n_samples),
-        "dataset_fingerprint": first.get("dataset_fingerprint"),
+        "dataset_identity_key": first.get("dataset_identity_key"),
         "extractor_recipe": first.get("extractor_recipe"),
         "recipe_hash": first.get("recipe_hash"),
         "resources": asdict(job.resources),
@@ -2093,14 +2101,14 @@ def _validate_shard_manifests(
     if not manifest_list:
         raise ValueError("At least one shard manifest is required.")
     recipe_hashes = {manifest.get("recipe_hash") for manifest in manifest_list}
-    dataset_fingerprints = {manifest.get("dataset_fingerprint") for manifest in manifest_list}
+    dataset_identity_keys = {manifest.get("dataset_identity_key") for manifest in manifest_list}
     dtypes = {manifest.get("dtype") for manifest in manifest_list}
     sparse_values = {manifest.get("sparse") for manifest in manifest_list}
     dims = {manifest.get("embedding_dim") for manifest in manifest_list}
     if len(recipe_hashes) != 1:
         raise ValueError("Embedding shards have inconsistent extractor recipes.")
-    if len(dataset_fingerprints) != 1:
-        raise ValueError("Embedding shards have inconsistent dataset fingerprints.")
+    if len(dataset_identity_keys) != 1:
+        raise ValueError("Embedding shards have inconsistent dataset identities.")
     if len(dtypes) != 1 or len(sparse_values) != 1 or len(dims) != 1:
         raise ValueError("Embedding shards have inconsistent embedding formats.")
 
@@ -2149,18 +2157,18 @@ def _validate_retrieval_pair_metadata(
     """Ensure paired artifacts belong to one retrieval dataset and extractor recipe."""
     if query_metadata.get("side") != "query" or gallery_metadata.get("side") != "gallery":
         raise ValueError("Retrieval artifacts must declare query and gallery endpoint sides.")
-    query_fingerprint = query_metadata.get("dataset_fingerprint")
-    gallery_fingerprint = gallery_metadata.get("dataset_fingerprint")
-    if not query_fingerprint or query_fingerprint != gallery_fingerprint:
-        raise ValueError("Query and gallery artifacts have incompatible dataset fingerprints.")
+    query_identity_key = query_metadata.get("dataset_identity_key")
+    gallery_identity_key = gallery_metadata.get("dataset_identity_key")
+    if not query_identity_key or query_identity_key != gallery_identity_key:
+        raise ValueError("Query and gallery artifacts have incompatible dataset identities.")
     query_recipe = query_metadata.get("recipe_hash")
     gallery_recipe = gallery_metadata.get("recipe_hash")
     if not query_recipe or query_recipe != gallery_recipe:
         raise ValueError("Query and gallery artifacts have incompatible extractor recipes.")
     if relevance_metadata is not None:
-        relevance_fingerprint = relevance_metadata.get("dataset_fingerprint")
-        if not relevance_fingerprint or relevance_fingerprint != query_fingerprint:
-            raise ValueError("Relevance artifact has an incompatible dataset fingerprint.")
+        relevance_identity_key = relevance_metadata.get("dataset_identity_key")
+        if not relevance_identity_key or relevance_identity_key != query_identity_key:
+            raise ValueError("Relevance artifact has an incompatible dataset identity.")
 
 
 def _shared_artifact_prefix(query_key: str, gallery_key: str) -> Optional[str]:

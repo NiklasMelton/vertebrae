@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -39,12 +40,15 @@ def test_s3_artifact_store_roundtrip_with_fake_boto3(monkeypatch):
     store.put_labels("labels/demo", np.array(["a", "b"]))
     store.put_array("arrays/dense", np.arange(6).reshape(2, 3))
     store.put_array("arrays/sparse", sparse.csr_matrix(np.eye(3)))
+    store.put_array("arrays/rewrite", sparse.csr_matrix(np.eye(3)))
+    store.put_array("arrays/rewrite", np.full((3, 3), 7))
 
     recreated = create_artifact_store_from_config(store.config())
     assert recreated.get_json("runs/demo")["ok"] is True
     assert np.array_equal(recreated.get_labels("labels/demo"), np.array(["a", "b"]))
     assert np.array_equal(recreated.get_array("arrays/dense"), np.arange(6).reshape(2, 3))
     assert np.array_equal(recreated.get_array("arrays/sparse").toarray(), np.eye(3))
+    assert np.array_equal(recreated.get_array("arrays/rewrite"), np.full((3, 3), 7))
     dense_stat = recreated.stat_array("arrays/dense")
     sparse_stat = recreated.stat_array("arrays/sparse")
     assert dense_stat.size_bytes > 0
@@ -68,10 +72,13 @@ def test_gcs_artifact_store_roundtrip_with_fake_client(monkeypatch):
     assert isinstance(store, GCSArtifactStore)
     store.put_json("runs/demo", {"ok": True})
     store.put_array("arrays/dense", np.arange(6).reshape(2, 3))
+    store.put_array("arrays/rewrite", np.eye(3))
+    store.put_array("arrays/rewrite", sparse.csr_matrix(np.full((3, 3), 2)))
 
     recreated = create_artifact_store_from_config(store.config())
     assert recreated.get_json("runs/demo")["ok"] is True
     assert np.array_equal(recreated.get_array("arrays/dense"), np.arange(6).reshape(2, 3))
+    assert np.array_equal(recreated.get_array("arrays/rewrite").toarray(), np.full((3, 3), 2))
     stat = recreated.stat_array("arrays/dense")
     assert stat.size_bytes > 0
     assert stat.storage_format == "npy"
@@ -88,6 +95,75 @@ def test_local_array_stat_uses_actual_file_size(tmp_path):
     assert stat.storage_format == "npy"
     with pytest.raises(FileNotFoundError):
         store.stat_array("missing")
+
+
+def test_local_array_manifest_controls_rewrites_and_invalidates_legacy_arrays(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    key = "arrays/rewrite"
+
+    store.put_array(key, sparse.csr_matrix(np.eye(3)))
+    store.put_array(key, np.full((3, 2), 4, dtype=np.float32))
+    manifest_path = tmp_path / key / "array-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+
+    assert manifest["filename"] == "embeddings.npy"
+    assert manifest["storage_format"] == "npy"
+    assert manifest["shape"] == [3, 2]
+    assert manifest["dtype"] == "float32"
+    assert not (tmp_path / key / "embeddings.npz").exists()
+    assert np.array_equal(store.get_array(key), np.full((3, 2), 4, dtype=np.float32))
+
+    store.put_array(key, sparse.csr_matrix(np.full((3, 2), 9)))
+    assert sparse.issparse(store.get_array(key))
+    assert np.array_equal(store.get_array(key).toarray(), np.full((3, 2), 9))
+    assert not (tmp_path / key / "embeddings.npy").exists()
+
+    legacy = tmp_path / "arrays/legacy"
+    legacy.mkdir(parents=True)
+    np.save(legacy / "embeddings.npy", np.eye(2))
+    assert store.exists("arrays/legacy") is False
+    with pytest.raises(FileNotFoundError, match="manifest"):
+        store.get_array("arrays/legacy")
+
+
+def test_local_array_manifest_detects_corruption_and_missing_targets(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    key = "arrays/corrupt"
+    store.put_array(key, np.eye(2))
+    manifest_path = tmp_path / key / "array-manifest.json"
+    manifest_path.write_text('{"filename": "../../escape.npy"}')
+
+    with pytest.raises(ValueError, match="manifest fields"):
+        store.get_array(key)
+
+    store.put_array(key, np.eye(2))
+    (tmp_path / key / "embeddings.npy").unlink()
+    assert store.exists(key) is False
+    with pytest.raises(FileNotFoundError, match="missing file"):
+        store.get_array(key)
+
+
+def test_failed_batch_or_manifest_commit_preserves_previous_committed_array(tmp_path, monkeypatch):
+    store = LocalArtifactStore(str(tmp_path))
+    key = "arrays/committed"
+    original = np.arange(6).reshape(2, 3)
+    store.put_array(key, original)
+
+    with pytest.raises(ValueError, match="did not cover all samples"):
+        store.put_array_batches(
+            key,
+            [(np.array([0]), np.ones((1, 3)))],
+            n_samples=2,
+        )
+    assert np.array_equal(store.get_array(key), original)
+
+    def fail_manifest(*_args, **_kwargs):
+        raise OSError("simulated manifest publication failure")
+
+    monkeypatch.setattr(store, "_write_array_manifest", fail_manifest)
+    with pytest.raises(OSError, match="publication failure"):
+        store.put_array(key, sparse.csr_matrix(np.eye(2)))
+    assert np.array_equal(store.get_array(key), original)
 
 
 def test_s3_artifact_store_missing_dependency_raises_clear_error():
@@ -147,6 +223,9 @@ def _fake_boto3_module(objects):
                 "ContentLength": len(objects[(Bucket, Key)]),
             }
 
+        def delete_object(self, Bucket, Key):
+            objects.pop((Bucket, Key), None)
+
     class FakeSession:
         def __init__(self, profile_name=None, region_name=None):
             self.profile_name = profile_name
@@ -186,6 +265,9 @@ def _fake_gcs_storage_module(objects):
 
         def reload(self):
             return None
+
+        def delete(self):
+            objects.pop((self.bucket_name, self.blob_name), None)
 
         @property
         def size(self):

@@ -14,7 +14,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset, EmbeddingCompressionConfig
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity, EmbeddingCompressionConfig
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.cli import main
 from vertebrae.config import (
@@ -100,7 +100,9 @@ pytestmark = [
 
 def test_digits_benchmark_real_metrics_cache_compression_reports(tmp_path):
     X, y = _balanced_digits_subset(n_per_class=35)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    dataset = BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    )
     cache_dir = tmp_path / "cache"
 
     benchmark = Benchmark(
@@ -174,6 +176,7 @@ def test_diabetes_regression_real_continuous_overlap(tmp_path):
         modality="tabular",
         target_type="regression",
         target_names=["target"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     result = Benchmark(
@@ -212,7 +215,9 @@ def test_diabetes_regression_real_continuous_overlap(tmp_path):
 
 def test_cli_artifact_workflow_scores_real_overlapindex(tmp_path, capsys):
     X, y = _balanced_digits_subset(n_per_class=12)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    dataset = BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    )
     extractor = SklearnExtractor(
         "cli_scaled_pca",
         Pipeline(
@@ -343,6 +348,7 @@ def test_hf_text_model_family_runs_full_benchmark(monkeypatch, tmp_path):
         ],
         ["business"] * 3 + ["engineering"] * 3,
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFTextExtractor("hf_text", "fake-text", pooling="mean", batch_size=2)
 
@@ -369,6 +375,7 @@ def test_sentence_transformer_model_family_runs_full_benchmark(monkeypatch, tmp_
         ],
         ["support"] * 3 + ["billing"] * 3,
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = SentenceTransformerExtractor("sentence_text", "fake-sentence", batch_size=2)
 
@@ -400,6 +407,7 @@ def test_hf_audio_model_family_runs_full_benchmark(monkeypatch, tmp_path):
         ],
         ["speech"] * 3 + ["music"] * 3,
         sampling_rate=16_000,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFAudioExtractor("hf_audio", "fake-audio", pooling="mean", batch_size=2)
 
@@ -424,6 +432,7 @@ def test_hf_vision_model_family_runs_full_benchmark(monkeypatch, tmp_path):
         [np.full((4, 4, 3), value, dtype=np.uint8) for value in [0, 8, 16, 120, 140, 160]],
         ["dark"] * 3 + ["bright"] * 3,
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFVisionExtractor("hf_vision", "fake-vision", pooling="mean", batch_size=2)
 
@@ -464,6 +473,7 @@ def test_hf_multimodal_model_family_runs_full_benchmark(monkeypatch, tmp_path):
         },
         labels=["catalog"] * 3 + ["lifestyle"] * 3,
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFMultimodalExtractor(
         "hf_multimodal",
@@ -500,6 +510,7 @@ def test_hf_time_series_model_family_runs_full_benchmark(monkeypatch, tmp_path):
             dtype=np.float32,
         ),
         labels=["low"] * 3 + ["high"] * 3,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFTimeSeriesExtractor("hf_timeseries", "fake-ts", pooling="mean", batch_size=2)
 
@@ -530,6 +541,7 @@ def test_hf_video_model_family_runs_full_benchmark(monkeypatch, tmp_path):
         [np.full((4, 2, 2, 3), value, dtype=np.uint8) for value in [0, 8, 16, 120, 140, 160]],
         ["indoor"] * 3 + ["outdoor"] * 3,
         frame_rate=24.0,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFVideoExtractor("hf_video", "fake-video", pooling="mean", batch_size=2)
 
@@ -554,6 +566,7 @@ def test_local_torch_keras_and_onnx_model_families_run_full_benchmark(monkeypatc
         ),
         ["left"] * 3 + ["right"] * 3,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     monkeypatch.setitem(

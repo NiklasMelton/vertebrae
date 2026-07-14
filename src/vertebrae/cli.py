@@ -649,7 +649,7 @@ def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
     )
     return {
         "artifact_type": "retrieval_embedding_plan",
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
         "resource_profiling_config": asdict(resource_config),
         "endpoints": {
@@ -753,7 +753,7 @@ def _cmd_plan_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
     )
     return {
         "artifact_type": "zero_shot_embedding_plan",
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.dataset.identity_key(),
         "extractor_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
         "protocol_key": zero_shot_protocol_artifact_key(dataset),
         "resource_profiling_config": asdict(resource_config),
@@ -1001,7 +1001,7 @@ def _cmd_write_retrieval_relevance(args: argparse.Namespace) -> dict[str, Any]:
         hasattr(dataset, attribute) for attribute in ("relevance", "query_ids", "gallery_ids")
     ):
         raise TypeError("--dataset-pickle must contain a RetrievalDataset.")
-    output_key = args.output_key or f"retrieval/relevance/{dataset.fingerprint()}"
+    output_key = args.output_key or f"retrieval/relevance/{dataset.identity_key()}"
     payload = {
         "artifact_type": "retrieval_relevance",
         "query_ids": list(dataset.query_ids),
@@ -1010,7 +1010,7 @@ def _cmd_write_retrieval_relevance(args: argparse.Namespace) -> dict[str, Any]:
         "n_gallery": len(dataset.gallery_ids),
         "relevance": dataset.relevance,
         "exclusions": sorted(dataset.exclusions or ()),
-        "dataset_fingerprint": dataset.fingerprint(),
+        "dataset_identity_key": dataset.identity_key(),
     }
     _store_from_args(args).put_json(output_key, payload)
     return {"output_key": output_key, **payload}

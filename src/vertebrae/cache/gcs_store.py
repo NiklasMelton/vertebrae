@@ -3,17 +3,22 @@
 import json
 import os
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
 from urllib.parse import urlparse
 
 import numpy as np
 
-from vertebrae.cache.artifact_store import ArtifactStat, ArtifactStoreConfig
+from vertebrae.cache.artifact_store import (
+    ARRAY_MANIFEST_FILENAME,
+    ArrayArtifactManifest,
+    ArtifactStat,
+    ArtifactStoreConfig,
+)
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
-from vertebrae.utils.validation import is_sparse_matrix
 
 
 class GCSArtifactStore:
@@ -71,19 +76,20 @@ class GCSArtifactStore:
     def exists(self, key: str) -> bool:
         """Return whether an embedding artifact exists for `key`."""
 
-        return self._blob_exists(self._artifact_blob_name(key, "embeddings.npy")) or (
-            self._blob_exists(self._artifact_blob_name(key, "embeddings.npz"))
-        )
+        manifest_name = self._artifact_blob_name(key, ARRAY_MANIFEST_FILENAME)
+        if not self._blob_exists(manifest_name):
+            return False
+        manifest = self._read_array_manifest(key)
+        return self._blob_exists(self._artifact_blob_name(key, manifest.filename))
 
     def put_array(self, key: str, arr: Any) -> str:
         """Store a dense or sparse embedding matrix."""
 
-        filename = "embeddings.npz" if is_sparse_matrix(arr) else "embeddings.npy"
         with tempfile.TemporaryDirectory() as tmpdir:
             local = LocalArtifactStore(tmpdir)
             local_path = Path(local.put_array(key, arr))
-            blob_name = self._artifact_blob_name(key, filename)
-            self._upload_file(local_path, blob_name)
+            manifest = local._read_array_manifest(local._path(key))
+            blob_name = self._publish_local_array(key, local_path, manifest)
         return self._uri_for(blob_name)
 
     def put_array_batches(
@@ -105,24 +111,23 @@ class GCSArtifactStore:
                     require_complete=require_complete,
                 )
             )
-            self._upload_file(local_path, self._artifact_blob_name(key, local_path.name))
-        return self._uri_for(self._artifact_blob_name(key, local_path.name))
+            manifest = local._read_array_manifest(local._path(key))
+            blob_name = self._publish_local_array(key, local_path, manifest)
+        return self._uri_for(blob_name)
 
     def get_array(self, key: str) -> Any:
         """Load a dense or sparse embedding matrix."""
 
-        candidates = ("embeddings.npz", "embeddings.npy")
+        manifest = self._read_array_manifest(key)
+        blob_name = self._artifact_blob_name(key, manifest.filename)
+        if not self._blob_exists(blob_name):
+            raise FileNotFoundError(
+                f"Array manifest for key {key} references missing file {manifest.filename}."
+            )
         with tempfile.TemporaryDirectory() as tmpdir:
-            local_path = None
-            for filename in candidates:
-                blob_name = self._artifact_blob_name(key, filename)
-                if self._blob_exists(blob_name):
-                    local_path = Path(tmpdir) / filename
-                    self._download_file(blob_name, local_path)
-                    break
-            if local_path is None:
-                raise FileNotFoundError(f"No array artifact found for key {key}.")
-            if local_path.suffix == ".npz":
+            local_path = Path(tmpdir) / manifest.filename
+            self._download_file(blob_name, local_path)
+            if manifest.storage_format == "npz":
                 from scipy import sparse
 
                 return sparse.load_npz(local_path)
@@ -131,18 +136,19 @@ class GCSArtifactStore:
     def stat_array(self, key: str) -> ArtifactStat:
         """Return blob size using GCS metadata without downloading it."""
 
-        for filename, storage_format in (("embeddings.npz", "npz"), ("embeddings.npy", "npy")):
-            blob_name = self._artifact_blob_name(key, filename)
-            blob = self._bucket_or_raise().blob(blob_name)
-            if not blob.exists():
-                continue
-            blob.reload()
-            return ArtifactStat(
-                uri=self._uri_for(blob_name),
-                size_bytes=int(blob.size or 0),
-                storage_format=storage_format,
+        manifest = self._read_array_manifest(key)
+        blob_name = self._artifact_blob_name(key, manifest.filename)
+        blob = self._bucket_or_raise().blob(blob_name)
+        if not blob.exists():
+            raise FileNotFoundError(
+                f"Array manifest for key {key} references missing file {manifest.filename}."
             )
-        raise FileNotFoundError(f"No array artifact found for key {key}.")
+        blob.reload()
+        return ArtifactStat(
+            uri=self._uri_for(blob_name),
+            size_bytes=int(blob.size or 0),
+            storage_format=manifest.storage_format,
+        )
 
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as JSON."""
@@ -190,6 +196,45 @@ class GCSArtifactStore:
 
         payload = self._get_bytes(self._artifact_blob_name(key, "metadata.json"))
         return json.loads(payload.decode("utf-8"))
+
+    def _read_array_manifest(self, key: str) -> ArrayArtifactManifest:
+        manifest_name = self._artifact_blob_name(key, ARRAY_MANIFEST_FILENAME)
+        if not self._blob_exists(manifest_name):
+            raise FileNotFoundError(f"No committed array manifest found for key {key}.")
+        payload = self._get_bytes(manifest_name)
+        try:
+            value = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Array manifest for key {key} is not valid JSON.") from exc
+        return ArrayArtifactManifest.from_dict(value)
+
+    def _publish_local_array(
+        self,
+        key: str,
+        local_path: Path,
+        manifest: ArrayArtifactManifest,
+    ) -> str:
+        blob_name = self._artifact_blob_name(key, manifest.filename)
+        self._upload_file(local_path, blob_name)
+        manifest_name = self._artifact_blob_name(key, ARRAY_MANIFEST_FILENAME)
+        self._put_bytes(
+            manifest_name,
+            json.dumps(manifest.to_dict(), indent=2, sort_keys=True).encode("utf-8"),
+        )
+        stale_name = "embeddings.npy" if manifest.storage_format == "npz" else "embeddings.npz"
+        stale_blob_name = self._artifact_blob_name(key, stale_name)
+        stale_blob = self._bucket_or_raise().blob(stale_blob_name)
+        if stale_blob.exists():
+            try:
+                stale_blob.delete()
+            except Exception as exc:
+                warnings.warn(
+                    f"Committed {self._uri_for(blob_name)} but could not remove stale "
+                    f"{self._uri_for(stale_blob_name)}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        return blob_name
 
     def _artifact_blob_name(self, key: str, filename: str) -> str:
         clean_key = key.strip("/").replace("..", "__")

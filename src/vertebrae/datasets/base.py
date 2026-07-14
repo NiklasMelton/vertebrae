@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, Iterator, Optional, Union, cast
 
 import numpy as np
 
-from vertebrae.cache.fingerprint import fingerprint_array_like
+from vertebrae.datasets.identity import DatasetIdentity
 from vertebrae.execution.jobs import SampleBatch, ShardSpec
 from vertebrae.utils.labels import (
     REGRESSION_TARGET,
@@ -70,9 +70,11 @@ class BenchmarkDataset:
     X: Any
     y: np.ndarray
     modality: str
+    identity: DatasetIdentity
     input_col: Optional[Union[str, list[str]]] = None
     label_col: Optional[Union[str, list[str]]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    _identity_key_cache: Optional[str] = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_arrays(
@@ -80,6 +82,8 @@ class BenchmarkDataset:
         X: Any,
         y: Any,
         modality: str,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -101,6 +105,7 @@ class BenchmarkDataset:
             X=X,
             y=coerce_label_input(y),
             modality=modality,
+            identity=identity,
             metadata=_metadata_with_target_metadata(
                 metadata,
                 label_names=label_names,
@@ -118,6 +123,8 @@ class BenchmarkDataset:
         input_col: Union[str, list[str]],
         label_col: Union[str, list[str]],
         modality: str,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -183,6 +190,7 @@ class BenchmarkDataset:
             X=X,
             y=labels,
             modality=modality,
+            identity=identity,
             input_col=input_col,
             label_col=label_col,
             metadata=merged_metadata,
@@ -195,6 +203,8 @@ class BenchmarkDataset:
         cls,
         paths: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -223,6 +233,7 @@ class BenchmarkDataset:
             X=np.asarray(paths, dtype=object),
             y=coerce_label_input(labels),
             modality="image",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -233,6 +244,8 @@ class BenchmarkDataset:
         cls,
         paths: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -261,6 +274,7 @@ class BenchmarkDataset:
             X={"path": np.asarray(paths, dtype=object)},
             y=coerce_label_input(labels),
             modality="audio",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -272,6 +286,8 @@ class BenchmarkDataset:
         audio: Any,
         labels: Any,
         sampling_rate: int,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -308,6 +324,7 @@ class BenchmarkDataset:
             },
             y=label_array,
             modality="audio",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -318,6 +335,8 @@ class BenchmarkDataset:
         cls,
         paths: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -346,6 +365,7 @@ class BenchmarkDataset:
             X={"path": np.asarray(paths, dtype=object)},
             y=coerce_label_input(labels),
             modality="video",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -356,6 +376,8 @@ class BenchmarkDataset:
         cls,
         frames: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         frame_rate: Optional[Any] = None,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
@@ -395,6 +417,7 @@ class BenchmarkDataset:
             X=payload,
             y=label_array,
             modality="video",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -405,6 +428,8 @@ class BenchmarkDataset:
         cls,
         series: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         observed_mask: Any = None,
         time_features: Any = None,
         timestamps: Any = None,
@@ -447,6 +472,7 @@ class BenchmarkDataset:
             X=payload,
             y=coerce_label_input(labels),
             modality="time_series",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -458,6 +484,8 @@ class BenchmarkDataset:
         inputs: Dict[str, Any],
         labels: Any,
         modalities: Dict[str, str],
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -519,6 +547,7 @@ class BenchmarkDataset:
             X=normalized_inputs,
             y=label_array,
             modality="multimodal",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -529,6 +558,8 @@ class BenchmarkDataset:
         cls,
         graphs: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -548,6 +579,7 @@ class BenchmarkDataset:
             X=np.asarray(graphs, dtype=object),
             y=coerce_label_input(labels),
             modality="graph",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -558,6 +590,8 @@ class BenchmarkDataset:
         cls,
         embeddings: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
         label_names: Optional[Iterable[Any]] = None,
         target_type: str = "auto",
@@ -586,6 +620,7 @@ class BenchmarkDataset:
             X=embeddings if is_sparse_matrix(embeddings) else np.asarray(embeddings),
             y=coerce_label_input(labels),
             modality="embeddings",
+            identity=identity,
             metadata=merged_metadata,
         )
         dataset.validate()
@@ -597,6 +632,8 @@ class BenchmarkDataset:
         embeddings: Any,
         labels: Any,
         image_ids: Any,
+        *,
+        identity: DatasetIdentity,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> "BenchmarkDataset":
         """Create a grouped token dataset from precomputed segmentation features."""
@@ -609,6 +646,7 @@ class BenchmarkDataset:
         return cls.from_embeddings(
             embeddings,
             labels,
+            identity=identity,
             metadata=merged_metadata,
         ).with_groups(image_ids, name="image_id")
 
@@ -618,6 +656,8 @@ class BenchmarkDataset:
         embeddings: Any,
         labels: Any,
         unit_ids: Any,
+        *,
+        identity: DatasetIdentity,
         parent_ids: Any = None,
         unit_type: str = "unit",
         positions: Any = None,
@@ -635,6 +675,7 @@ class BenchmarkDataset:
         return EmbeddingUnitDataset.from_units(
             embeddings=embeddings,
             labels=labels,
+            identity=identity,
             unit_ids=unit_ids,
             parent_ids=parent_ids,
             unit_type=unit_type,
@@ -654,6 +695,8 @@ class BenchmarkDataset:
         cls,
         embeddings: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         node_ids: Any = None,
         edge_index: Any = None,
         metadata: Optional[Dict[str, Any]] = None,
@@ -687,6 +730,7 @@ class BenchmarkDataset:
         return cls.from_embeddings(
             matrix,
             labels,
+            identity=identity,
             metadata=merged_metadata,
             label_names=label_names,
             target_type=target_type,
@@ -698,6 +742,8 @@ class BenchmarkDataset:
         cls,
         embeddings: Any,
         labels: Any,
+        *,
+        identity: DatasetIdentity,
         entity_ids: Any = None,
         entity_type: str = "entity",
         metadata: Optional[Dict[str, Any]] = None,
@@ -727,6 +773,7 @@ class BenchmarkDataset:
         return cls.from_embeddings(
             matrix,
             labels,
+            identity=identity,
             metadata=merged_metadata,
             label_names=label_names,
             target_type=target_type,
@@ -736,6 +783,8 @@ class BenchmarkDataset:
     @classmethod
     def from_edge_embeddings(
         cls,
+        *,
+        identity: DatasetIdentity,
         edge_embeddings: Any = None,
         labels: Any = None,
         edge_index: Any = None,
@@ -798,6 +847,7 @@ class BenchmarkDataset:
         return cls.from_embeddings(
             matrix,
             labels,
+            identity=identity,
             metadata=merged_metadata,
             label_names=label_names,
             target_type=target_type,
@@ -807,6 +857,8 @@ class BenchmarkDataset:
     @classmethod
     def from_pair_embeddings(
         cls,
+        *,
+        identity: DatasetIdentity,
         pair_embeddings: Any = None,
         labels: Any = None,
         pairs: Any = None,
@@ -865,6 +917,7 @@ class BenchmarkDataset:
         return cls.from_embeddings(
             matrix,
             labels,
+            identity=identity,
             metadata=merged_metadata,
             label_names=label_names,
             target_type=target_type,
@@ -874,6 +927,8 @@ class BenchmarkDataset:
     @classmethod
     def from_triplet_embeddings(
         cls,
+        *,
+        identity: DatasetIdentity,
         triplet_embeddings: Any = None,
         labels: Any = None,
         triplets: Any = None,
@@ -935,6 +990,7 @@ class BenchmarkDataset:
         return cls.from_embeddings(
             matrix,
             labels,
+            identity=identity,
             metadata=merged_metadata,
             label_names=label_names,
             target_type=target_type,
@@ -949,6 +1005,8 @@ class BenchmarkDataset:
                 classes are present, or a class has fewer than two samples.
         """
 
+        if not isinstance(self.identity, DatasetIdentity):
+            raise TypeError("identity must be a DatasetIdentity.")
         label_names = self.metadata.get("label_names")
         requested_target_type = self.metadata.get("target_type", "auto")
         target_names = self.metadata.get("target_names")
@@ -1028,6 +1086,7 @@ class BenchmarkDataset:
             X=self.X,
             y=coerce_label_input(self.y),
             modality=self.modality,
+            identity=self._derive_identity("with_label_hierarchy", hierarchy_metadata),
             input_col=self.input_col,
             label_col=self.label_col,
             metadata=metadata,
@@ -1055,6 +1114,7 @@ class BenchmarkDataset:
             X=self.X,
             y=labels,
             modality=self.modality,
+            identity=self._derive_identity("label_view", view_metadata),
             input_col=self.input_col,
             label_col=self.label_col,
             metadata=metadata,
@@ -1085,6 +1145,7 @@ class BenchmarkDataset:
             label_col=self.label_col,
             base_metadata=self.metadata,
             dataset_type=type(self),
+            identity=self.identity,
         )
         metadata = dict(self.metadata)
         metadata["target_views"] = resolved
@@ -1092,6 +1153,7 @@ class BenchmarkDataset:
             X=self.X,
             y=coerce_label_input(self.y),
             modality=self.modality,
+            identity=self._derive_identity("with_target_views", resolved),
             input_col=self.input_col,
             label_col=self.label_col,
             metadata=metadata,
@@ -1139,6 +1201,7 @@ class BenchmarkDataset:
             X=self.X,
             y=labels,
             modality=self.modality,
+            identity=self._derive_identity("target_view", {"name": str(name), "view": view}),
             input_col=self.input_col,
             label_col=self.label_col,
             metadata=metadata,
@@ -1182,6 +1245,10 @@ class BenchmarkDataset:
             X=self.X,
             y=coerce_label_input(self.y),
             modality=self.modality,
+            identity=self._derive_identity(
+                "with_unit_annotations",
+                {"annotations": resolved, "unit_type": unit_type, "task_family": task_family},
+            ),
             input_col=self.input_col,
             label_col=self.label_col,
             metadata=metadata,
@@ -1220,6 +1287,9 @@ class BenchmarkDataset:
             X=self.X,
             y=coerce_label_input(self.y),
             modality=self.modality,
+            identity=self._derive_identity(
+                "with_groups", {"groups": group_array, "name": str(name)}
+            ),
             input_col=self.input_col,
             label_col=self.label_col,
             metadata=metadata,
@@ -1371,6 +1441,7 @@ class BenchmarkDataset:
                     label_col=self.label_col,
                     base_metadata=merged_metadata,
                     dataset_type=type(self),
+                    identity=self.identity,
                 )
             merged_metadata["target_views"] = subset_views
         unit_annotations = merged_metadata.get("unit_annotations")
@@ -1383,6 +1454,9 @@ class BenchmarkDataset:
             X=_take_samples(self.X, index_array),
             y=self.y[index_array],
             modality=self.modality,
+            identity=self._derive_identity(
+                "subset", {"indices": index_array, "metadata": metadata or {}}
+            ),
             input_col=self.input_col,
             label_col=self.label_col,
             metadata=merged_metadata,
@@ -1423,6 +1497,7 @@ class BenchmarkDataset:
             "label_col": self.label_col,
             "label_view": self.active_label_view(),
             "target_view": self.active_target_view(),
+            "identity": self.identity.descriptor(self.identity_key()),
             "metadata": report_metadata,
         }
         if target_views is not None:
@@ -1482,23 +1557,29 @@ class BenchmarkDataset:
                 summary[key] = labels[key]
         return summary
 
-    def fingerprint(self) -> str:
-        """Compute a conservative dataset fingerprint for caching.
+    def identity_key(self) -> str:
+        """Resolve and memoize the dataset's explicit identity key.
 
-        Returns:
-            Stable hash string derived from inputs, labels, modality, and metadata.
+        Treat the dataset and its identity-bearing values as immutable after this
+        method is called.
         """
 
-        return fingerprint_array_like(
-            {
-                "X": self.X,
-                "y": self.y,
-                "modality": self.modality,
-                "input_col": self.input_col,
-                "label_col": self.label_col,
-                "metadata": self.metadata,
-            }
-        )
+        if self._identity_key_cache is None:
+            self._identity_key_cache = self.identity.resolve(self._identity_payload())
+        return self._identity_key_cache
+
+    def _identity_payload(self) -> Dict[str, Any]:
+        return {
+            "X": self.X,
+            "y": self.y,
+            "modality": self.modality,
+            "input_col": self.input_col,
+            "label_col": self.label_col,
+            "metadata": self.metadata,
+        }
+
+    def _derive_identity(self, operation: str, recipe: Any) -> DatasetIdentity:
+        return DatasetIdentity.derived(self.identity_key(), operation, recipe)
 
 
 class EmbeddingUnitDataset(BenchmarkDataset):
@@ -1510,6 +1591,8 @@ class EmbeddingUnitDataset(BenchmarkDataset):
         embeddings: Any,
         labels: Any,
         unit_ids: Any,
+        *,
+        identity: DatasetIdentity,
         parent_ids: Any = None,
         unit_type: str = "unit",
         positions: Any = None,
@@ -1555,6 +1638,7 @@ class EmbeddingUnitDataset(BenchmarkDataset):
             cls.from_embeddings(
                 matrix,
                 labels,
+                identity=identity,
                 metadata=merged_metadata,
                 label_names=label_names,
                 target_type=target_type,
@@ -1650,6 +1734,7 @@ def _normalize_target_views(
     label_col: Optional[Union[str, list[str]]],
     base_metadata: Dict[str, Any],
     dataset_type: type[BenchmarkDataset],
+    identity: DatasetIdentity,
 ) -> Dict[str, Dict[str, Any]]:
     resolved: Dict[str, Dict[str, Any]] = {}
     for view in target_views:
@@ -1672,6 +1757,7 @@ def _normalize_target_views(
             label_col=label_col,
             base_metadata=base_metadata,
             dataset_type=dataset_type,
+            identity=identity,
         )
         if (
             len(
@@ -1703,6 +1789,7 @@ def _target_view_entry(
     label_col: Optional[Union[str, list[str]]],
     base_metadata: Dict[str, Any],
     dataset_type: type[BenchmarkDataset],
+    identity: DatasetIdentity,
 ) -> Dict[str, Any]:
     view_metadata = _metadata_with_target_metadata(
         {
@@ -1725,6 +1812,7 @@ def _target_view_entry(
         X=X,
         y=coerce_label_input(targets),
         modality=modality,
+        identity=identity,
         input_col=input_col,
         label_col=label_col,
         metadata=view_metadata,

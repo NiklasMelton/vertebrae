@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
-from vertebrae.cache.fingerprint import fingerprint_array_like
+from vertebrae.datasets.identity import DatasetIdentity
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -19,11 +19,13 @@ class RetrievalDataset:
     query_ids: Sequence[Any]
     gallery_ids: Sequence[Any]
     relevance: Any
+    identity: DatasetIdentity
     query_modality: str = "embeddings"
     gallery_modality: str = "embeddings"
     exclusions: Optional[Iterable[Tuple[Any, Any]]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     _normalized: bool = field(default=False, init=False, repr=False)
+    _identity_key_cache: Optional[str] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.validated()
@@ -35,6 +37,7 @@ class RetrievalDataset:
         gallery: Any,
         relevance: Any,
         *,
+        identity: DatasetIdentity,
         query_ids: Optional[Sequence[Any]] = None,
         gallery_ids: Optional[Sequence[Any]] = None,
         exclusions: Optional[Iterable[Tuple[Any, Any]]] = None,
@@ -52,6 +55,7 @@ class RetrievalDataset:
             if gallery_ids is not None
             else list(range(gallery_matrix.shape[0])),
             relevance=relevance,
+            identity=identity,
             exclusions=exclusions,
             metadata={"precomputed_embeddings": True, **(metadata or {})},
         )
@@ -63,6 +67,7 @@ class RetrievalDataset:
         gallery: Any,
         relevance: Any,
         *,
+        identity: DatasetIdentity,
         query_modality: str,
         gallery_modality: str,
         query_ids: Optional[Sequence[Any]] = None,
@@ -77,6 +82,7 @@ class RetrievalDataset:
             query_ids=list(query_ids) if query_ids is not None else list(range(n_queries)),
             gallery_ids=list(gallery_ids) if gallery_ids is not None else list(range(n_gallery)),
             relevance=relevance,
+            identity=identity,
             query_modality=query_modality,
             gallery_modality=gallery_modality,
             exclusions=exclusions,
@@ -91,6 +97,8 @@ class RetrievalDataset:
         return cls.from_arrays(queries, gallery, np.asarray(relevance), **kwargs)
 
     def validated(self) -> "RetrievalDataset":
+        if not isinstance(self.identity, DatasetIdentity):
+            raise TypeError("identity must be a DatasetIdentity.")
         if self._normalized:
             return self
         self._validate_ids(self.query_ids, "query_ids")
@@ -214,19 +222,23 @@ class RetrievalDataset:
             "n_gallery": len(self.gallery_ids),
             "n_relevance_pairs": sum(len(values) for values in relevance.values()),
             "n_exclusions": sum(1 for _ in (self.exclusions or ())),
+            "identity": self.identity.descriptor(self.identity_key()),
             "metadata": make_json_safe(self.metadata),
         }
 
-    def fingerprint(self) -> str:
-        return fingerprint_array_like(
-            {
-                "query_ids": list(self.query_ids),
-                "gallery_ids": list(self.gallery_ids),
-                "queries": self.queries,
-                "gallery": self.gallery,
-                "relevance": self.relevance,
-                "exclusions": sorted(self.exclusions or ()),
-                "query_modality": self.query_modality,
-                "gallery_modality": self.gallery_modality,
-            }
-        )
+    def identity_key(self) -> str:
+        if self._identity_key_cache is None:
+            self._identity_key_cache = self.identity.resolve(
+                {
+                    "query_ids": list(self.query_ids),
+                    "gallery_ids": list(self.gallery_ids),
+                    "queries": self.queries,
+                    "gallery": self.gallery,
+                    "relevance": self.relevance,
+                    "exclusions": sorted(self.exclusions or ()),
+                    "query_modality": self.query_modality,
+                    "gallery_modality": self.gallery_modality,
+                    "metadata": self.metadata,
+                }
+            )
+        return self._identity_key_cache

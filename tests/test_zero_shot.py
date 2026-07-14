@@ -15,6 +15,7 @@ import pytest
 from vertebrae import (
     BenchmarkDataset,
     CacheConfig,
+    DatasetIdentity,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
     OverlapScoringConfig,
@@ -131,7 +132,10 @@ class _UnsupportedLabel:
 
 def test_zero_shot_dataset_requires_explicit_complete_prompts():
     dataset = BenchmarkDataset.from_arrays(
-        ["a0", "a1", "b0", "b1"], ["left", "left", "right", "right"], modality="image"
+        ["a0", "a1", "b0", "b1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     with pytest.raises(ValueError, match="exactly"):
         ZeroShotDataset.from_dataset(dataset, {"left": "left label"})
@@ -152,6 +156,7 @@ def test_zero_shot_protocol_and_evaluation_identities_hash_complete_content():
         ["a0", "a1", "b0", "b1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     left_prompts = [f"left prompt {index}" for index in range(101)]
     right_prompts = [f"right prompt {index}" for index in range(101)]
@@ -164,7 +169,7 @@ def test_zero_shot_protocol_and_evaluation_identities_hash_complete_content():
     extractor = CallableRetrievalExtractor(
         "aligned", _cli_query, _cli_gallery, query_modality="image", gallery_modality="text"
     )
-    assert first.fingerprint() != second.fingerprint()
+    assert first.protocol_fingerprint() != second.protocol_fingerprint()
     assert zero_shot_embedding_artifact_key(first, extractor, "prompts", "gallery") != (
         zero_shot_embedding_artifact_key(second, extractor, "prompts", "gallery")
     )
@@ -239,6 +244,7 @@ def test_zero_shot_supports_uuid_labels_through_protocol_artifacts_and_scoring(t
         ["left-0", "left-1", "right-0", "right-1"],
         [left, left, right, right],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(
         dataset,
@@ -247,8 +253,10 @@ def test_zero_shot_supports_uuid_labels_through_protocol_artifacts_and_scoring(t
     )
     store = LocalArtifactStore(str(tmp_path))
     artifact = materialize_zero_shot_protocol(protocol, store, "uuid-protocol")
-    assert artifact["protocol_fingerprint"] == protocol.fingerprint()
-    assert store.get_json("uuid-protocol")["protocol_fingerprint"] == protocol.fingerprint()
+    assert artifact["protocol_fingerprint"] == protocol.protocol_fingerprint()
+    assert (
+        store.get_json("uuid-protocol")["protocol_fingerprint"] == protocol.protocol_fingerprint()
+    )
     result = ZeroShotScorer().score(
         np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]]),
         np.asarray([[1.0, 0.0], [0.0, 1.0]]),
@@ -267,6 +275,7 @@ def test_zero_shot_rejects_custom_labels_without_stable_exact_identity():
         ["left-0", "left-1", "right-0", "right-1"],
         [left, left, right, right],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     with pytest.raises(ValueError, match="stable exact identity"):
         ZeroShotDataset.from_dataset(dataset, {left: "left", right: "right"})
@@ -282,6 +291,7 @@ def test_zero_shot_typed_label_collisions_survive_local_and_artifact_reports(
         [uuid_label, uuid_label, string_label, string_label],
         modality="image",
         metadata={"sample_indices": [UUID(int=index + 1) for index in range(4)]},
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(
         dataset,
@@ -351,6 +361,7 @@ def test_typed_protocol_recipe_and_score_result_are_strict_json():
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(
         dataset,
@@ -381,6 +392,7 @@ def test_zero_shot_protocol_artifact_tampering_is_rejected(tmp_path, fake_overla
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     store = LocalArtifactStore(str(tmp_path))
@@ -420,6 +432,7 @@ def test_zero_shot_protocol_requires_current_label_encoding(tmp_path, fake_overl
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     store = LocalArtifactStore(str(tmp_path))
@@ -484,6 +497,7 @@ def test_zero_shot_benchmark_caches_compresses_and_reports_overlap(tmp_path, fak
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
 
@@ -549,6 +563,7 @@ def test_zero_shot_rejects_multilabel_and_zero_embeddings():
         ["a", "b", "c", "d"],
         [("x",), ("x",), ("y",), ("y",)],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     with pytest.raises(ValueError, match="single-label"):
         ZeroShotDataset.from_dataset(dataset, {"x": "x", "y": "y"})
@@ -575,6 +590,7 @@ def test_zero_shot_artifact_round_trip(tmp_path, fake_overlapindex):
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     extractor = CallableRetrievalExtractor(
@@ -650,6 +666,7 @@ def test_zero_shot_cli_round_trip(tmp_path, fake_overlapindex):
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     extractor = CallableRetrievalExtractor(
@@ -786,6 +803,7 @@ def test_zero_shot_planning_caps_endpoint_shards_and_cli_uses_plan(tmp_path):
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     extractor = CallableRetrievalExtractor(
@@ -858,6 +876,7 @@ def test_zero_shot_callable_cache_identity_and_candidate_branches(tmp_path, fake
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     first = CallableRetrievalExtractor(
@@ -939,6 +958,7 @@ def test_zero_shot_protocol_provenance_variants_and_sample_ids(tmp_path, fake_ov
         ["left", "left", "right", "right"],
         modality="image",
         metadata={"sample_indices": [10, 11, 20, 21]},
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["look at {label}"])
     extractor = CallableRetrievalExtractor(
@@ -991,6 +1011,7 @@ def test_zero_shot_sample_artifacts_are_reusable_across_prompt_protocols(tmp_pat
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     first = ZeroShotDataset.from_templates(dataset, ["a {label}"])
     second = ZeroShotDataset.from_templates(dataset, ["a photo of {label}"])
@@ -1023,6 +1044,7 @@ def test_zero_shot_rejects_mismatched_compression_pairs(tmp_path, fake_overlapin
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     extractor = CallableRetrievalExtractor(
@@ -1098,6 +1120,7 @@ def test_zero_shot_score_keys_and_reconstruction_require_one_evaluation_recipe(
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     extractor = CallableRetrievalExtractor(
@@ -1147,6 +1170,7 @@ def test_zero_shot_local_compression_skip_and_callable_portability(
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
     extractor = CallableRetrievalExtractor(

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from vertebrae import BenchmarkDataset, EmbeddingUnitDataset, TargetView
+from vertebrae import BenchmarkDataset, DatasetIdentity, EmbeddingUnitDataset, TargetView
 
 COARSE_TARGETS = [
     "mammal",
@@ -18,7 +18,12 @@ COARSE_TARGETS = [
 
 def test_from_arrays_validates_lengths():
     with pytest.raises(ValueError, match="same length"):
-        BenchmarkDataset.from_arrays(np.zeros((3, 2)), np.array(["a", "b"]), modality="tabular")
+        BenchmarkDataset.from_arrays(
+            np.zeros((3, 2)),
+            np.array(["a", "b"]),
+            modality="tabular",
+            identity=DatasetIdentity.ephemeral(),
+        )
 
 
 def test_from_arrays_rejects_single_class():
@@ -27,6 +32,7 @@ def test_from_arrays_rejects_single_class():
             np.zeros((3, 2)),
             np.array(["a", "a", "a"]),
             modality="tabular",
+            identity=DatasetIdentity.ephemeral(),
         )
 
 
@@ -36,6 +42,7 @@ def test_from_arrays_rejects_missing_labels():
             np.zeros((4, 2)),
             np.array(["a", "a", None, "b"], dtype=object),
             modality="tabular",
+            identity=DatasetIdentity.ephemeral(),
         )
 
 
@@ -46,6 +53,7 @@ def test_from_graphs_preserves_modality_and_metadata():
         graphs,
         ["a", "a", "b", "b"],
         metadata={"split": "train"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "graph"
@@ -63,6 +71,7 @@ def test_from_node_embeddings_preserves_node_provenance_and_subsets():
         labels,
         node_ids=["n0", "n1", "n2", "n3", "n4", "n5"],
         edge_index=[["n0", "n1"], ["n2", "n3"]],
+        identity=DatasetIdentity.ephemeral(),
     )
     subset = dataset.subset([1, 2, 4, 5])
 
@@ -82,6 +91,7 @@ def test_from_entity_embeddings_supports_regression_targets():
         entity_type="user",
         target_type="regression",
         target_names=["retention"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.metadata["relational_unit"] == "entity"
@@ -106,6 +116,7 @@ def test_from_edge_embeddings_composes_node_pairs():
         node_embeddings=node_embeddings,
         node_ids=["a", "b", "c", "d"],
         composition="hadamard",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.metadata["relational_unit"] == "edge"
@@ -129,6 +140,7 @@ def test_from_pair_embeddings_composes_entity_pairs_with_abs_diff():
         pairs=[["q0", "d0"], ["q0", "d1"], ["q1", "d0"], ["d1", "d0"]],
         entity_embeddings=entity_embeddings,
         entity_ids=["q0", "d0", "q1", "d1"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.metadata["relational_unit"] == "pair"
@@ -151,6 +163,7 @@ def test_from_triplet_embeddings_composes_positive_and_negative_pairs():
         triplets=[[0, 1, 2], [0, 3, 2], [2, 1, 0], [2, 3, 0]],
         entity_embeddings=entity_embeddings,
         composition="abs_diff",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.metadata["relational_unit"] == "triplet"
@@ -164,6 +177,7 @@ def test_relational_constructors_validate_alignment():
             np.zeros((4, 2)),
             ["a", "a", "b", "b"],
             node_ids=["n0"],
+            identity=DatasetIdentity.ephemeral(),
         )
     with pytest.raises(ValueError, match="unknown ids"):
         BenchmarkDataset.from_pair_embeddings(
@@ -176,6 +190,7 @@ def test_relational_constructors_validate_alignment():
             ],
             entity_embeddings=np.zeros((2, 2)),
             entity_ids=["known", "other"],
+            identity=DatasetIdentity.ephemeral(),
         )
 
 
@@ -187,6 +202,7 @@ def test_from_dataframe_preserves_columns_and_counts():
         input_col="text",
         label_col="label",
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.input_col == "text"
@@ -209,6 +225,7 @@ def test_from_dataframe_accepts_tabular_column_list():
         input_col=["age", "income", "state"],
         label_col="target",
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert list(dataset.X.columns) == ["age", "income", "state"]
@@ -229,6 +246,7 @@ def test_from_arrays_accepts_multilabel_sequences_and_summarizes_targets():
         np.arange(12).reshape(6, 2),
         labels,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     summary = dataset.summary()
 
@@ -259,6 +277,7 @@ def test_from_arrays_accepts_indicator_multilabel_targets_with_names():
         indicator,
         modality="tabular",
         label_names=["red", "round", "sweet"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.y.tolist() == [
@@ -287,6 +306,7 @@ def test_from_dataframe_accepts_multilabel_indicator_columns():
         input_col="x",
         label_col=["red", "round", "sweet"],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.label_col == ["red", "round", "sweet"]
@@ -302,18 +322,21 @@ def test_multilabel_validation_rejects_invalid_targets():
             X,
             [("a",), ("a",), ("b",), ("b",), ("a", "b"), ()],
             modality="tabular",
+            identity=DatasetIdentity.ephemeral(),
         )
     with pytest.raises(ValueError, match="missing label"):
         BenchmarkDataset.from_arrays(
             X,
             [("a",), ("a",), ("b",), ("b",), ("a", "b"), (None,)],
             modality="tabular",
+            identity=DatasetIdentity.ephemeral(),
         )
     with pytest.raises(ValueError, match="duplicate labels"):
         BenchmarkDataset.from_arrays(
             X,
             [("a",), ("a",), ("b",), ("b",), ("a", "b"), ("a", "a")],
             modality="tabular",
+            identity=DatasetIdentity.ephemeral(),
         )
     with pytest.raises(ValueError, match="0/1"):
         BenchmarkDataset.from_arrays(
@@ -321,6 +344,7 @@ def test_multilabel_validation_rejects_invalid_targets():
             np.array([[1, 0], [1, 0], [0, 1], [0, 1], [2, 0], [0, 1]]),
             modality="tabular",
             label_names=["a", "b"],
+            identity=DatasetIdentity.ephemeral(),
         )
     with pytest.raises(ValueError, match="label_names length"):
         BenchmarkDataset.from_arrays(
@@ -328,6 +352,7 @@ def test_multilabel_validation_rejects_invalid_targets():
             np.ones((6, 3), dtype=int),
             modality="tabular",
             label_names=["a", "b"],
+            identity=DatasetIdentity.ephemeral(),
         )
 
 
@@ -338,6 +363,7 @@ def test_from_arrays_supports_explicit_regression_targets():
         modality="tabular",
         target_type="regression",
         target_names=["score"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     summary = dataset.summary()
@@ -364,6 +390,7 @@ def test_from_dataframe_supports_multitarget_regression_columns():
         label_col=["y1", "y2"],
         modality="tabular",
         target_type="regression",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.metadata["target_type"] == "regression"
@@ -380,6 +407,7 @@ def test_regression_validation_rejects_constant_and_too_small_targets():
             np.array([0.0, 1.0]),
             modality="tabular",
             target_type="regression",
+            identity=DatasetIdentity.ephemeral(),
         )
     with pytest.raises(ValueError, match="non-constant target"):
         BenchmarkDataset.from_arrays(
@@ -387,6 +415,7 @@ def test_regression_validation_rejects_constant_and_too_small_targets():
             np.array([1.0, 1.0, 1.0]),
             modality="tabular",
             target_type="regression",
+            identity=DatasetIdentity.ephemeral(),
         )
 
 
@@ -402,6 +431,7 @@ def test_regression_subsetting_and_roundtrip_summary_preserve_target_metadata():
         modality="embeddings",
         target_type="regression",
         target_names=["a", "b"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     subset = dataset.subset([0, 2, 4])
@@ -414,6 +444,7 @@ def test_from_image_paths_sets_image_modality():
     dataset = BenchmarkDataset.from_image_paths(
         ["a.png", "b.png", "c.png", "d.png"],
         ["cat", "cat", "dog", "dog"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "image"
@@ -430,6 +461,7 @@ def test_from_audio_arrays_preserves_sampling_rate():
         ],
         ["speech", "speech", "music", "music"],
         sampling_rate=16_000,
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "audio"
@@ -441,6 +473,7 @@ def test_from_audio_paths_sets_audio_modality():
     dataset = BenchmarkDataset.from_audio_paths(
         ["a.wav", "b.wav", "c.wav", "d.wav"],
         ["speech", "speech", "music", "music"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "audio"
@@ -452,6 +485,7 @@ def test_from_video_paths_sets_video_modality():
     dataset = BenchmarkDataset.from_video_paths(
         ["a.mp4", "b.mp4", "c.mp4", "d.mp4"],
         ["cat", "cat", "dog", "dog"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "video"
@@ -471,6 +505,7 @@ def test_from_video_arrays_preserves_frame_rate():
         clips,
         ["left", "left", "right", "right"],
         frame_rate=24.0,
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "video"
@@ -489,6 +524,7 @@ def test_from_time_series_preserves_structured_inputs():
         labels=["a", "a", "b", "b"],
         observed_mask=observed_mask,
         time_features=time_features,
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "time_series"
@@ -506,6 +542,7 @@ def test_from_multimodal_preserves_fields_and_modalities():
         },
         labels=["left", "left", "right", "right"],
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert dataset.modality == "multimodal"
@@ -521,6 +558,7 @@ def test_from_multimodal_rejects_invalid_fields():
             inputs={},
             labels=["a", "a", "b", "b"],
             modalities={},
+            identity=DatasetIdentity.ephemeral(),
         )
 
     with pytest.raises(ValueError, match="same field names"):
@@ -528,6 +566,7 @@ def test_from_multimodal_rejects_invalid_fields():
             inputs={"image": ["a.png", "b.png", "c.png", "d.png"]},
             labels=["a", "a", "b", "b"],
             modalities={"caption": "text"},
+            identity=DatasetIdentity.ephemeral(),
         )
 
     with pytest.raises(ValueError, match="must have 4 samples"):
@@ -538,6 +577,7 @@ def test_from_multimodal_rejects_invalid_fields():
             },
             labels=["a", "a", "b", "b"],
             modalities={"image": "image", "caption": "text"},
+            identity=DatasetIdentity.ephemeral(),
         )
 
     with pytest.raises(ValueError, match="contains missing values"):
@@ -548,10 +588,11 @@ def test_from_multimodal_rejects_invalid_fields():
             },
             labels=["a", "a", "b", "b"],
             modalities={"image": "image", "caption": "text"},
+            identity=DatasetIdentity.ephemeral(),
         )
 
 
-def test_multimodal_subset_batches_and_fingerprint_are_stable():
+def test_multimodal_subset_batches_and_content_identity_are_stable():
     dataset = BenchmarkDataset.from_multimodal(
         inputs={
             "image": ["a.png", "b.png", "c.png", "d.png", "e.png", "f.png"],
@@ -559,6 +600,7 @@ def test_multimodal_subset_batches_and_fingerprint_are_stable():
         },
         labels=["a", "a", "a", "b", "b", "b"],
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.from_content(),
     )
 
     subset = dataset.subset([1, 2, 4, 5])
@@ -570,12 +612,13 @@ def test_multimodal_subset_batches_and_fingerprint_are_stable():
         },
         labels=["a", "a", "a", "b", "b", "b"],
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.from_content(),
     )
 
     assert subset.metadata["sample_indices"] == [1, 2, 4, 5]
     assert batches[0].X["image"].tolist() == ["b.png", "c.png"]
     assert batches[1].X["caption"].tolist() == ["five", "six"]
-    assert dataset.fingerprint() != changed.fingerprint()
+    assert dataset.identity_key() != changed.identity_key()
 
 
 def test_stratified_subsample_indices_preserve_classes():
@@ -583,6 +626,7 @@ def test_stratified_subsample_indices_preserve_classes():
         np.arange(24).reshape(12, 2),
         ["a"] * 6 + ["b"] * 4 + ["c"] * 2,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     indices = dataset.stratified_subsample_indices(rate=0.5, random_state=1)
@@ -611,6 +655,7 @@ def test_multilabel_stratified_subsample_indices_preserve_label_counts():
             ("b", "c"),
         ],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     indices = dataset.stratified_subsample_indices(rate=0.4, random_state=1)
@@ -626,6 +671,7 @@ def test_nested_subset_preserves_original_sample_indices():
         np.arange(24).reshape(12, 2),
         ["a"] * 6 + ["b"] * 6,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     first = dataset.subset([1, 2, 3, 7, 8, 9])
@@ -640,6 +686,7 @@ def test_structured_dataset_subset_and_batches_align_fields():
         labels=["a", "a", "a", "b", "b", "b"],
         observed_mask=np.ones((6, 4, 2), dtype=float),
         time_features=np.arange(48, dtype=float).reshape(6, 4, 2),
+        identity=DatasetIdentity.ephemeral(),
     )
 
     subset = dataset.subset([1, 2, 4, 5])
@@ -656,6 +703,7 @@ def test_video_dataset_subset_and_batches_align_fields():
         [np.full((3, 2, 2, 3), fill_value=index, dtype=np.uint8) for index in range(6)],
         labels=["a", "a", "a", "b", "b", "b"],
         frame_rate=12.0,
+        identity=DatasetIdentity.ephemeral(),
     )
 
     subset = dataset.subset([1, 2, 4, 5])
@@ -673,6 +721,7 @@ def test_with_label_hierarchy_preserves_primary_labels_and_summary():
         np.arange(24).reshape(8, 3),
         ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     ).with_label_hierarchy(
         [
             ("animal", "dog", "husky"),
@@ -697,6 +746,7 @@ def test_label_view_projects_named_hierarchy_level():
         np.arange(24).reshape(8, 3),
         ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     ).with_label_hierarchy(
         [
             ("animal", "dog", "husky"),
@@ -723,6 +773,7 @@ def test_label_view_subset_preserves_hierarchy_alignment():
         np.arange(24).reshape(8, 3),
         ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     ).with_label_hierarchy(
         [
             ("animal", "dog", "husky"),
@@ -753,6 +804,7 @@ def test_target_views_materialize_and_subset_preserve_alignment():
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24, dtype=float).reshape(8, 3),
         ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+        identity=DatasetIdentity.ephemeral(),
     ).with_target_views(
         [
             TargetView(
@@ -803,6 +855,7 @@ def test_from_embedding_units_preserves_unit_metadata_groups_and_target_views():
                 target_names=["quality"],
             )
         ],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert isinstance(dataset, EmbeddingUnitDataset)
@@ -828,6 +881,7 @@ def test_with_label_hierarchy_validates_alignment():
         np.arange(12).reshape(4, 3),
         ["a", "a", "b", "b"],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     with pytest.raises(ValueError, match="same length as the dataset"):

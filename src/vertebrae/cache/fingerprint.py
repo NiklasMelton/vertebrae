@@ -8,7 +8,7 @@ from decimal import Decimal
 from enum import Enum
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import numpy as np
@@ -60,19 +60,6 @@ def hash_exact_json_value(value: Any) -> str:
 
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def fingerprint_array_like(value: Any) -> str:
-    """Fingerprint an array-like or sparse-matrix value.
-
-    Args:
-        value: Value to fingerprint.
-
-    Returns:
-        SHA-256 hash string.
-    """
-
-    return hash_json(value)
 
 
 def fingerprint_extractor_recipe(recipe: dict) -> str:
@@ -157,24 +144,32 @@ def _exact_fingerprintable(value: Any) -> Any:
             return {
                 "type": "object_ndarray",
                 "shape": list(value.shape),
-                "values": _exact_fingerprintable(value.tolist()),
+                "values_sha256": _hash_object_array(value),
             }
         return {
             "type": "ndarray",
             "shape": list(value.shape),
             "dtype": str(value.dtype),
-            "sha256": hashlib.sha256(np.ascontiguousarray(value).tobytes()).hexdigest(),
+            "sha256": _hash_array_bytes(value),
         }
     if _is_sparse_matrix(value):
-        matrix = value.tocsr()
-        return {
+        matrix = value
+        result = {
             "type": "sparse_matrix",
+            "format": matrix.getformat(),
             "shape": list(matrix.shape),
             "dtype": str(matrix.dtype),
-            "data_sha256": hashlib.sha256(matrix.data.tobytes()).hexdigest(),
-            "indices_sha256": hashlib.sha256(matrix.indices.tobytes()).hexdigest(),
-            "indptr_sha256": hashlib.sha256(matrix.indptr.tobytes()).hexdigest(),
         }
+        for name in ("data", "indices", "indptr", "row", "col", "offsets"):
+            component = getattr(matrix, name, None)
+            if component is not None:
+                result[f"{name}_sha256"] = _hash_array_bytes(np.asarray(component))
+        if matrix.getformat() == "dok":
+            result["values"] = _exact_fingerprintable(dict(matrix.items()))
+        elif matrix.getformat() == "lil":
+            result["rows"] = _exact_fingerprintable(matrix.rows)
+            result["values"] = _exact_fingerprintable(matrix.data)
+        return result
     if isinstance(value, np.generic):
         return _exact_fingerprintable(value.item())
     if isinstance(value, UUID):
@@ -248,6 +243,42 @@ def _array_sample(arr: np.ndarray) -> Any:
         return flat.tolist()
     positions = np.linspace(0, flat.size - 1, num=50, dtype=int)
     return flat[positions].tolist()
+
+
+def _hash_array_bytes(value: np.ndarray, chunk_bytes: int = 1024 * 1024) -> str:
+    """Hash an array in C order without materializing a full contiguous copy."""
+
+    array = np.asarray(value)
+    digest = hashlib.sha256()
+    if array.size == 0:
+        return digest.hexdigest()
+    if array.flags.c_contiguous:
+        view = memoryview(cast(Any, array)).cast("B")
+        for start in range(0, len(view), chunk_bytes):
+            digest.update(view[start : start + chunk_bytes])
+        return digest.hexdigest()
+    iterator = np.nditer(
+        array,
+        flags=["external_loop", "buffered", "zerosize_ok"],  # type: ignore[list-item]
+        op_flags=[["readonly"]],
+        order="C",
+        buffersize=max(1, chunk_bytes // max(1, array.dtype.itemsize)),
+    )
+    for chunk in iterator:
+        digest.update(np.asarray(chunk).tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _hash_object_array(value: np.ndarray) -> str:
+    """Hash object-array entries incrementally with unambiguous framing."""
+
+    array = np.asarray(value, dtype=object)
+    digest = hashlib.sha256()
+    for index in np.ndindex(array.shape):
+        payload = _exact_json(_exact_fingerprintable(array[index])).encode("utf-8")
+        digest.update(len(payload).to_bytes(8, byteorder="big", signed=False))
+        digest.update(payload)
+    return digest.hexdigest()
 
 
 def _is_sparse_matrix(value: Any) -> bool:

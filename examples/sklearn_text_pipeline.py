@@ -7,7 +7,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Normalizer
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import SklearnExtractor
 
@@ -22,6 +22,7 @@ def main() -> None:
         label_col="team",
         modality="text",
         metadata={"example": "sklearn_text_pipeline"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     pipeline = Pipeline(

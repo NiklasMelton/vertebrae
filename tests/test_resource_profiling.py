@@ -9,6 +9,7 @@ from vertebrae import (
     Benchmark,
     BenchmarkDataset,
     CallableMetric,
+    DatasetIdentity,
     EmbeddingCompressionConfig,
     EmbeddingOutputSpec,
     ResourceProfilingConfig,
@@ -122,6 +123,7 @@ def _dataset():
         np.arange(24, dtype=np.float32).reshape(8, 3),
         np.asarray(["a"] * 4 + ["b"] * 4),
         modality="tabular",
+        identity=DatasetIdentity.declared("resource-profiling-test", "1"),
     )
 
 

@@ -2,7 +2,13 @@ import numpy as np
 from scipy import sparse
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from vertebrae import Benchmark, BenchmarkDataset, EmbeddingCompressionConfig, Evaluator
+from vertebrae import (
+    Benchmark,
+    BenchmarkDataset,
+    DatasetIdentity,
+    EmbeddingCompressionConfig,
+    Evaluator,
+)
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.execution import (
@@ -19,7 +25,9 @@ def test_pca_compression_reduces_dense_embeddings(fake_overlapindex):
     rng = np.random.default_rng(0)
     embeddings = rng.normal(size=(12, 8))
     labels = np.array(["a"] * 6 + ["b"] * 6)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -44,7 +52,9 @@ def test_pca_compression_reduces_dense_embeddings(fake_overlapindex):
 def test_truncated_svd_accepts_sparse_embeddings(tmp_path, fake_overlapindex):
     texts = ["alpha beta", "alpha gamma", "delta epsilon", "delta zeta"]
     labels = np.array(["left", "left", "right", "right"])
-    dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
+    dataset = BenchmarkDataset.from_arrays(
+        texts, labels, modality="text", identity=DatasetIdentity.ephemeral()
+    )
     extractor = SklearnExtractor("tfidf_sparse", TfidfVectorizer(), allow_sparse=True)
 
     result = Evaluator(
@@ -69,7 +79,9 @@ def test_truncated_svd_accepts_sparse_embeddings(tmp_path, fake_overlapindex):
 def test_prefix_truncate_dense_embeddings_preserves_prefix(fake_overlapindex):
     embeddings = np.arange(48, dtype=float).reshape(8, 6)
     labels = np.array(["a"] * 4 + ["b"] * 4)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -93,7 +105,9 @@ def test_prefix_truncate_dense_embeddings_preserves_prefix(fake_overlapindex):
 def test_prefix_truncate_sparse_embeddings_warns_without_matryoshka(fake_overlapindex):
     embeddings = sparse.csr_matrix(np.eye(6))
     labels = np.array(["a", "a", "a", "b", "b", "b"])
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -116,7 +130,9 @@ def test_prefix_truncate_sparse_embeddings_warns_without_matryoshka(fake_overlap
 def test_pca_rejects_sparse_embeddings(fake_overlapindex):
     embeddings = sparse.csr_matrix(np.eye(6))
     labels = np.array(["a", "a", "a", "b", "b", "b"])
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     evaluator = Evaluator(
         dataset=dataset,
@@ -141,7 +157,9 @@ def test_pca_rejects_sparse_embeddings(fake_overlapindex):
 def test_multi_compression_configs_expand_results(fake_overlapindex):
     X = np.arange(60, dtype=float).reshape(20, 3)
     y = np.array(["a"] * 10 + ["b"] * 10)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    dataset = BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    )
 
     benchmark = Benchmark(
         dataset,
@@ -163,7 +181,9 @@ def test_multi_compression_configs_expand_results(fake_overlapindex):
 def test_skipped_compression_variants_keep_requested_dimensions_in_names(fake_overlapindex):
     X = np.arange(60, dtype=float).reshape(20, 3)
     y = np.array(["a"] * 10 + ["b"] * 10)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    dataset = BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    )
     benchmark = Benchmark(
         dataset,
         compression_configs=[
@@ -187,7 +207,9 @@ def test_quantize_float16_changes_precision(fake_overlapindex):
     rng = np.random.default_rng(4)
     embeddings = rng.normal(size=(12, 6)).astype(np.float32)
     labels = np.array(["a"] * 6 + ["b"] * 6)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -211,7 +233,9 @@ def test_quantize_int8_round_trip_records_calibration(fake_overlapindex):
     rng = np.random.default_rng(5)
     embeddings = rng.normal(size=(12, 6)).astype(np.float32)
     labels = np.array(["a"] * 6 + ["b"] * 6)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -237,7 +261,9 @@ def test_compressed_embeddings_are_reused_from_cache(tmp_path, fake_overlapindex
     rng = np.random.default_rng(1)
     embeddings = rng.normal(size=(12, 6))
     labels = np.array(["a"] * 6 + ["b"] * 6)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
     config = EmbeddingCompressionConfig(enabled=True, method="pca", n_components=3)
 
     kwargs = dict(
@@ -258,6 +284,7 @@ def test_compress_embedding_artifact_round_trip(tmp_path, fake_overlapindex):
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24, dtype=float).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
     )
     store = LocalArtifactStore(str(tmp_path))
     embedding_key = "embeddings/raw"
@@ -271,7 +298,7 @@ def test_compress_embedding_artifact_round_trip(tmp_path, fake_overlapindex):
             "extractor_name": "artifact",
             "extractor_type": "precomputed",
             "extractor_recipe": {"name": "artifact", "extractor_type": "precomputed"},
-            "dataset_fingerprint": dataset.fingerprint(),
+            "dataset_identity_key": dataset.identity_key(),
             "n_samples": int(len(dataset.y)),
             "embedding_dim": int(embeddings.shape[1]),
             "shape": list(embeddings.shape),
@@ -284,7 +311,7 @@ def test_compress_embedding_artifact_round_trip(tmp_path, fake_overlapindex):
     store.put_json(
         labels_key,
         {
-            "dataset_fingerprint": dataset.fingerprint(),
+            "dataset_identity_key": dataset.identity_key(),
             "n_samples": int(len(dataset.y)),
             "class_counts": dataset.class_counts(),
         },
@@ -314,7 +341,9 @@ def test_markdown_report_includes_compression_columns(tmp_path, fake_overlapinde
     rng = np.random.default_rng(2)
     embeddings = rng.normal(size=(12, 6))
     labels = np.array(["a"] * 6 + ["b"] * 6)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -339,7 +368,9 @@ def test_markdown_report_includes_compression_columns(tmp_path, fake_overlapinde
 def test_quantize_sparse_int8_rejects_sparse_input(fake_overlapindex):
     embeddings = sparse.csr_matrix(np.eye(6))
     labels = np.array(["a", "a", "a", "b", "b", "b"])
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     evaluator = Evaluator(
         dataset=dataset,

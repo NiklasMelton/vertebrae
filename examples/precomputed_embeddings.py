@@ -2,7 +2,7 @@
 
 from _common import ensure_output_dir, make_separated_blobs, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
@@ -15,6 +15,7 @@ def main() -> None:
         embeddings=embeddings,
         labels=labels,
         metadata={"example": "precomputed_embeddings"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     result = Evaluator(

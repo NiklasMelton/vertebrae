@@ -123,10 +123,10 @@ pip install "vertebrae[cloud]"
 ### Precomputed embeddings
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import PrecomputedExtractor
 
-dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y)
+dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y, identity=DatasetIdentity.declared("example-dataset", "1"))
 extractor = PrecomputedExtractor(name="baseline_embeddings")
 
 result = Evaluator(dataset=dataset, extractor=extractor).run()
@@ -135,6 +135,14 @@ print(result.to_dataframe())
 result.save_json("result.json")
 result.save_markdown("report.md")
 ```
+
+Every root dataset requires an explicit `DatasetIdentity`. A declared identity is the
+recommended production choice; change its revision whenever the dataset content,
+ordering, targets, groups, or annotations change. Manifest identity hashes only a
+caller-provided source manifest. Full content hashing and ephemeral UUID identity are
+available only through the explicit `DatasetIdentity.from_content()` and
+`DatasetIdentity.ephemeral()` constructors. Path-based datasets are never scanned or
+hashed automatically. See [Dataset identity](docs/datasets.md#dataset-identity).
 
 Sparse matrices are supported as embedding inputs as well.
 
@@ -147,6 +155,7 @@ Multi-label classification datasets are supported through the same constructors.
 Use per-sample label sequences or a binary indicator matrix with `label_names`:
 
 ```python
+from vertebrae import DatasetIdentity
 dataset = BenchmarkDataset.from_embeddings(
     embeddings=Z,
     labels=[
@@ -157,6 +166,7 @@ dataset = BenchmarkDataset.from_embeddings(
         ("outdoor", "animal"),
         ("animal",),
     ],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 
 result = Evaluator(dataset=dataset, extractor=PrecomputedExtractor()).run()
@@ -169,12 +179,14 @@ Regression targets are supported when explicitly requested so numeric class
 identifiers are not accidentally interpreted as continuous targets:
 
 ```python
+from vertebrae import DatasetIdentity
 dataset = BenchmarkDataset.from_arrays(
     X=samples,
     y=targets,
     modality="tabular",
     target_type="regression",
     target_names=["quality_score"],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 
 result = Evaluator(dataset=dataset, extractor=extractor).run()
@@ -191,9 +203,9 @@ classification, multi-label, or regression targets; each is reported as a
 separate result variant.
 
 ```python
-from vertebrae import Benchmark, BenchmarkDataset, TargetView, TargetViewConfig
+from vertebrae import Benchmark, BenchmarkDataset, TargetView, TargetViewConfig, DatasetIdentity
 
-dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=leaf_labels)
+dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=leaf_labels, identity=DatasetIdentity.declared("example-dataset", "1"))
 dataset = dataset.with_target_views(
     [
         TargetView(name="coarse", targets=coarse_labels),
@@ -215,10 +227,10 @@ extractor outputs to the target or hierarchy view that they should evaluate.
 ### Optional embedding compression
 
 ```python
-from vertebrae import BenchmarkDataset, EmbeddingCompressionConfig, Evaluator
+from vertebrae import BenchmarkDataset, EmbeddingCompressionConfig, Evaluator, DatasetIdentity
 from vertebrae.extractors import PrecomputedExtractor
 
-dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y)
+dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y, identity=DatasetIdentity.declared("example-dataset", "1"))
 extractor = PrecomputedExtractor(name="baseline_embeddings")
 
 compression = EmbeddingCompressionConfig(
@@ -246,7 +258,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Normalizer
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import SklearnExtractor
 
 pipeline = Pipeline(
@@ -257,7 +269,7 @@ pipeline = Pipeline(
     ]
 )
 
-dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
+dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text", identity=DatasetIdentity.declared("example-dataset", "1"))
 extractor = SklearnExtractor(name="tfidf_svd", pipeline=pipeline)
 
 result = Evaluator(dataset=dataset, extractor=extractor).run()
@@ -269,7 +281,7 @@ result = Evaluator(dataset=dataset, extractor=extractor).run()
 import numpy as np
 import torch
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import TorchExtractor
 
 model = torch.load("/path/to/local_model.pt", map_location="cpu")
@@ -284,7 +296,7 @@ def output_fn(raw_output):
     return raw_output if isinstance(raw_output, torch.Tensor) else raw_output["embeddings"]
 
 
-dataset = BenchmarkDataset.from_arrays(features, labels, modality="tabular")
+dataset = BenchmarkDataset.from_arrays(features, labels, modality="tabular", identity=DatasetIdentity.declared("example-dataset", "1"))
 extractor = TorchExtractor(
     name="local_torch",
     model=model,
@@ -302,7 +314,7 @@ result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```python
 import numpy as np
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import KerasExtractor
 
 
@@ -310,7 +322,7 @@ def collate_fn(batch):
     return np.asarray(batch, dtype=np.float32)
 
 
-dataset = BenchmarkDataset.from_arrays(features, labels, modality="tabular")
+dataset = BenchmarkDataset.from_arrays(features, labels, modality="tabular", identity=DatasetIdentity.declared("example-dataset", "1"))
 extractor = KerasExtractor(
     name="local_keras",
     model=model,
@@ -325,13 +337,14 @@ result = Evaluator(dataset=dataset, extractor=extractor).run()
 ### Hugging Face audio backbones
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFAudioExtractor
 
 dataset = BenchmarkDataset.from_audio_arrays(
     audio=waveforms,
     labels=labels,
     sampling_rate=16_000,
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 extractor = HFAudioExtractor(
     name="wav2vec2_base",
@@ -345,13 +358,14 @@ result = Evaluator(dataset=dataset, extractor=extractor).run()
 ### Hugging Face multi-modal models
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFMultimodalExtractor
 
 dataset = BenchmarkDataset.from_multimodal(
     inputs={"image": images, "caption": captions},
     labels=labels,
     modalities={"image": "image", "caption": "text"},
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 
 extractor = HFMultimodalExtractor(
@@ -371,12 +385,13 @@ result = Evaluator(dataset=dataset, extractor=extractor).run()
 ### Hugging Face time-series backbones
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFTimeSeriesExtractor
 
 dataset = BenchmarkDataset.from_time_series(
     series=series,
     labels=labels,
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 extractor = HFTimeSeriesExtractor(
     name="patchtst",
@@ -390,13 +405,14 @@ result = Evaluator(dataset=dataset, extractor=extractor).run()
 ### Hugging Face video backbones
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFVideoExtractor
 
 dataset = BenchmarkDataset.from_video_arrays(
     frames=clips,
     labels=labels,
     frame_rate=24.0,
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 extractor = HFVideoExtractor(
     name="videomae_base",
@@ -475,7 +491,7 @@ and graded relevance judgments. It is an exact, training-free ranking protocol a
 is separate from ordinary labeled OverlapIndex benchmarking.
 
 ```python
-from vertebrae import RetrievalBenchmark, RetrievalConfig, RetrievalDataset
+from vertebrae import RetrievalBenchmark, RetrievalConfig, RetrievalDataset, DatasetIdentity
 from vertebrae.extractors import PrecomputedExtractor
 
 dataset = RetrievalDataset.from_embeddings(
@@ -484,6 +500,7 @@ dataset = RetrievalDataset.from_embeddings(
     relevance=[("query-1", "document-9", 2.0)],
     query_ids=["query-1"],
     gallery_ids=["document-9"],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 
 result = RetrievalBenchmark(
@@ -565,6 +582,7 @@ from vertebrae import (
 dataset = SegmentationDataset.from_arrays(
     images=images,
     semantic_masks=masks,
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 
 extractor = CallableSpatialExtractor(
@@ -597,10 +615,10 @@ and latent slots. It does not substitute task-native metrics such as mAP, IoU,
 WER/CER, OKS, depth error, or reconstruction quality.
 
 ```python
-from vertebrae import Benchmark, BenchmarkDataset, UnitAnnotation
+from vertebrae import Benchmark, BenchmarkDataset, UnitAnnotation, DatasetIdentity
 from vertebrae.extractors import CallableStructuredExtractor, StructuredOutputSpec
 
-dataset = BenchmarkDataset.from_arrays(X=pages, y=document_labels, modality="image")
+dataset = BenchmarkDataset.from_arrays(X=pages, y=document_labels, modality="image", identity=DatasetIdentity.declared("example-dataset", "1"))
 dataset = dataset.with_unit_annotations(
     [
         UnitAnnotation(labels=["heading", "body"]),

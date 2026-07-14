@@ -234,7 +234,7 @@ class ZeroShotDataset:
         sample_ids = portable_json(_source_sample_ids(self.dataset, len(self.labels)))
         recipe = {
             "label_encoding": LABEL_ENCODING,
-            "source_dataset_fingerprint": self.dataset.fingerprint(),
+            "source_dataset_identity_key": self.dataset.identity_key(),
             "class_specs": [
                 {
                     "label": class_keys[index],
@@ -258,7 +258,7 @@ class ZeroShotDataset:
         strict_json_dumps(recipe)
         return recipe
 
-    def fingerprint(self) -> str:
+    def protocol_fingerprint(self) -> str:
         return str(self.protocol_recipe()["protocol_fingerprint"])
 
 

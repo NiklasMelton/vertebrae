@@ -2,7 +2,13 @@
 
 import numpy as np
 
-from vertebrae import BenchmarkDataset, CacheConfig, ZeroShotBenchmark, ZeroShotDataset
+from vertebrae import (
+    BenchmarkDataset,
+    CacheConfig,
+    DatasetIdentity,
+    ZeroShotBenchmark,
+    ZeroShotDataset,
+)
 from vertebrae.extractors import CallableRetrievalExtractor
 
 
@@ -20,6 +26,7 @@ dataset = BenchmarkDataset.from_arrays(
     ["cat-0", "cat-1", "dog-0", "dog-1"],
     ["cat", "cat", "dog", "dog"],
     modality="image",
+    identity=DatasetIdentity.ephemeral(),
 )
 protocol = ZeroShotDataset.from_templates(dataset, templates=("{label}",))
 extractor = CallableRetrievalExtractor(

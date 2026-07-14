@@ -81,7 +81,7 @@ class EmbeddingJob:
     """Description of a future distributed embedding job.
 
     Attributes:
-        dataset_id: Dataset identifier or fingerprint.
+        dataset_id: Dataset identity key.
         extractor_id: Extractor identifier or fingerprint.
         recipe_hash: Hash of the extractor recipe.
         shard: Deterministic shard assignment.

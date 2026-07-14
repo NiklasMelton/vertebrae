@@ -10,7 +10,7 @@ Requires optional dependencies:
 import numpy as np
 from _common import ensure_output_dir, make_separated_blobs, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import KerasExtractor
 
@@ -47,6 +47,7 @@ def main() -> None:
         labels,
         modality="tabular",
         metadata={"example": "keras_local_model"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     checkpoint_path = output_dir / "keras_local_model.keras"

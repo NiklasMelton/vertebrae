@@ -24,6 +24,7 @@ dataset = SegmentationDataset.from_arrays(
         1: {"is_thing": True},
         2: {"is_thing": False},
     },
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 
 extractor = CallableSpatialExtractor(
@@ -69,5 +70,6 @@ Torch and Keras wrappers accept `spatial_output_fn` plus explicit
 geometry; vertebrae does not guess arbitrary processor transforms.
 
 If spatial embeddings are already flattened, use
-`BenchmarkDataset.from_segmentation_embeddings(embeddings, labels, image_ids)`.
+`BenchmarkDataset.from_segmentation_embeddings(embeddings, labels, image_ids,
+identity=...)`.
 This bypasses alignment while retaining image-disjoint diagnostic groups.

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from vertebrae import Benchmark, BenchmarkDataset, CallableMetric, OverlapMetric
+from vertebrae import Benchmark, BenchmarkDataset, CallableMetric, DatasetIdentity, OverlapMetric
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.config import CacheConfig, OverlapScoringConfig, SeparatixConfig, StabilityConfig
 from vertebrae.execution import (
@@ -38,6 +38,7 @@ def test_benchmark_ranks_by_custom_primary_metric(fake_overlapindex):
         np.arange(16, dtype=float).reshape(8, 2),
         np.array(["a"] * 4 + ["b"] * 4),
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     result = Benchmark(
         dataset,
@@ -64,6 +65,7 @@ def test_custom_metrics_always_include_overlap_without_duplicate_serialization()
         np.arange(16, dtype=float).reshape(8, 2),
         np.array(["a"] * 4 + ["b"] * 4),
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     result = Benchmark(
         dataset,
@@ -89,6 +91,7 @@ def test_configured_overlap_metric_replaces_the_default(fake_overlapindex):
         np.arange(16, dtype=float).reshape(8, 2),
         np.array(["a"] * 4 + ["b"] * 4),
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     result = Benchmark(
         dataset,

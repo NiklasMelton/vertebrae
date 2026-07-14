@@ -71,8 +71,8 @@ def _assert_artifact_store_roundtrip(store):
     sparse_matrix = sparse.csr_matrix(np.eye(4))
     labels = np.array(["left", "left", "right", "right"])
     batches = [
-        (np.ones((2, 3), dtype=np.float32), np.array([0, 1])),
-        (np.zeros((2, 3), dtype=np.float32), np.array([2, 3])),
+        (np.array([0, 1]), np.ones((2, 3), dtype=np.float32)),
+        (np.array([2, 3]), np.zeros((2, 3), dtype=np.float32)),
     ]
 
     store.put_json("runs/demo", {"provider": "emulator", "ok": True})

@@ -1107,7 +1107,7 @@ class Benchmark:
             **self.cache_config.storage_options,
         )
         base_key = (
-            f"embeddings/{dataset.fingerprint()}/"
+            f"embeddings/{dataset.identity_key()}/"
             f"{fingerprint_extractor_recipe(extractor.recipe())}"
         )
         if self._supports_transform_many(extractor):
@@ -1151,7 +1151,7 @@ class Benchmark:
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None,
     ) -> Any:
         recipe = extractor.recipe()
-        dataset_key = dataset.fingerprint()
+        dataset_key = dataset.identity_key()
         extractor_key = fingerprint_extractor_recipe(recipe)
         cache_key = f"embeddings/{dataset_key}/{extractor_key}"
         embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
@@ -1225,7 +1225,7 @@ class Benchmark:
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None,
     ) -> List[dict]:
         recipe = extractor.recipe()
-        base_key = f"embeddings/{dataset.fingerprint()}/{fingerprint_extractor_recipe(recipe)}"
+        base_key = f"embeddings/{dataset.identity_key()}/{fingerprint_extractor_recipe(recipe)}"
         specs = self._output_specs(extractor)
         cache_keys = {spec.name: self._output_cache_key(base_key, spec.name) for spec in specs}
         embedding_cache_enabled = self._cache_embeddings_enabled(extractor)

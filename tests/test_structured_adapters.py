@@ -6,6 +6,7 @@ from vertebrae import (
     Benchmark,
     BenchmarkDataset,
     CallableStructuredExtractor,
+    DatasetIdentity,
     DepthAdapter,
     DepthAnnotation,
     DetectionLayoutAdapter,
@@ -33,6 +34,7 @@ def test_detection_layout_adapter_attaches_region_annotations():
         np.array(["page-0", "page-1", "page-2", "page-3"], dtype=object),
         ["invoice", "invoice", "resume", "resume"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     adapted = DetectionLayoutAdapter(unit_type="document_region").attach(
         dataset,
@@ -79,6 +81,7 @@ def test_sequence_and_keypoint_adapters_preserve_typed_metadata():
         np.array(["a", "b", "c", "d"], dtype=object),
         ["intent", "intent", "command", "command"],
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     )
     sequence_dataset = SequenceLabelingAdapter().attach(
         text_dataset,
@@ -97,6 +100,7 @@ def test_sequence_and_keypoint_adapters_preserve_typed_metadata():
         np.array(["f0", "f1", "f2", "f3"], dtype=object),
         ["walk", "walk", "run", "run"],
         modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     keypoint_dataset = KeypointAdapter().attach(
         image_dataset,
@@ -139,6 +143,7 @@ def test_depth_and_latent_slot_adapters_build_structured_unit_datasets():
         modality="image",
         target_type="regression",
         target_names=["scene_depth"],
+        identity=DatasetIdentity.ephemeral(),
     )
     depth_dataset = DepthAdapter().attach(
         image_dataset,
@@ -174,6 +179,7 @@ def test_depth_and_latent_slot_adapters_build_structured_unit_datasets():
         np.array(["z0", "z1", "z2", "z3"], dtype=object),
         ["scene", "scene", "object", "object"],
         modality="embeddings",
+        identity=DatasetIdentity.ephemeral(),
     )
     adapted_latents = LatentSlotAdapter().attach(
         latent_dataset,
@@ -216,6 +222,7 @@ def test_structured_aligner_materializes_explicit_subset_and_records_recipe(
             np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
             ["speech", "speech", "music", "music"],
             modality="audio",
+            identity=DatasetIdentity.ephemeral(),
         ),
         [
             SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
@@ -277,6 +284,7 @@ def test_drop_special_rows_helper_materializes_and_is_pickle_safe():
             np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
             ["speech", "speech", "music", "music"],
             modality="audio",
+            identity=DatasetIdentity.ephemeral(),
         ),
         [
             SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
@@ -322,6 +330,7 @@ def test_keep_row_indices_helper_supports_reordered_annotation_mapping():
             np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
             ["speech", "speech", "music", "music"],
             modality="audio",
+            identity=DatasetIdentity.ephemeral(),
         ),
         [
             SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),
@@ -361,6 +370,7 @@ def test_select_frame_rows_helper_supports_stride_and_metadata_modes():
             np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
             ["speech", "speech", "music", "music"],
             modality="audio",
+            identity=DatasetIdentity.ephemeral(),
         ),
         [
             SequenceAnnotation(
@@ -434,6 +444,7 @@ def test_standard_aligner_helpers_raise_contextual_alignment_errors():
             np.array(["utt-0", "utt-1", "utt-2", "utt-3"], dtype=object),
             ["speech", "speech", "music", "music"],
             modality="audio",
+            identity=DatasetIdentity.ephemeral(),
         ),
         [
             SequenceAnnotation(labels=["a", "b"], tokens=["hello", "world"]),

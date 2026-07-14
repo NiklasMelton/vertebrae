@@ -20,11 +20,11 @@ derived artifact key and report metadata.
 Use `EmbeddingCompressionConfig` with `Evaluator` or `Benchmark`:
 
 ```python
-from vertebrae import BenchmarkDataset, EmbeddingCompressionConfig, Evaluator
+from vertebrae import BenchmarkDataset, EmbeddingCompressionConfig, Evaluator, DatasetIdentity
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
-dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y)
+dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y, identity=DatasetIdentity.declared("example-dataset", "1"))
 
 compression = EmbeddingCompressionConfig(
     enabled=True,

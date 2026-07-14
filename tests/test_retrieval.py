@@ -3,6 +3,7 @@ import pytest
 from scipy import sparse
 
 from vertebrae import (
+    DatasetIdentity,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
     LabelRetrievalMetric,
@@ -40,6 +41,7 @@ def test_retrieval_dataset_accepts_sparse_grades_and_preserves_equal_ids():
         gallery_ids=["same", "g1"],
         query_modality="text",
         gallery_modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     assert dataset.relevance[0] == {0: 2.0}
     assert not dataset.exclusions
@@ -95,6 +97,7 @@ def test_dense_relevance_matrix_and_gallery_compression_benchmark():
         [[2.0, 0.0], [0.0, 1.0]],
         query_modality="embeddings",
         gallery_modality="embeddings",
+        identity=DatasetIdentity.ephemeral(),
     )
     result = RetrievalBenchmark(
         dataset,
@@ -112,6 +115,7 @@ def test_raw_cross_modal_retrieval_uses_explicit_callable_branches():
         [(0, 0, 1.0), (1, 1, 1.0)],
         query_modality="text",
         gallery_modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableRetrievalExtractor(
         "paired",
@@ -151,6 +155,7 @@ def test_retrieval_profiles_endpoints_with_deterministic_batches():
         [(index, index, 1.0) for index in range(3)],
         query_modality="text",
         gallery_modality="image",
+        identity=DatasetIdentity.ephemeral(),
     )
     result = RetrievalBenchmark(
         dataset,
@@ -194,7 +199,7 @@ def test_endpoint_batch_combination_preserves_sparse_output_and_order():
     assert combined.toarray().tolist() == [[3, 4], [1, 2], [2, 3]]
 
 
-def test_dataset_validates_direct_construction_and_fingerprints_endpoints():
+def test_dataset_validates_direct_construction_and_identifies_endpoints():
     with pytest.raises(ValueError, match="Every query"):
         RetrievalDataset(
             queries=["q"],
@@ -202,12 +207,23 @@ def test_dataset_validates_direct_construction_and_fingerprints_endpoints():
             query_ids=["q"],
             gallery_ids=["g"],
             relevance=[],
+            identity=DatasetIdentity.ephemeral(),
             query_modality="text",
             gallery_modality="text",
         )
-    first = RetrievalDataset.from_embeddings(np.asarray([[1.0]]), np.asarray([[1.0]]), [(0, 0, 1)])
-    second = RetrievalDataset.from_embeddings(np.asarray([[2.0]]), np.asarray([[1.0]]), [(0, 0, 1)])
-    assert first.fingerprint() != second.fingerprint()
+    first = RetrievalDataset.from_embeddings(
+        np.asarray([[1.0]]),
+        np.asarray([[1.0]]),
+        [(0, 0, 1)],
+        identity=DatasetIdentity.from_content(),
+    )
+    second = RetrievalDataset.from_embeddings(
+        np.asarray([[2.0]]),
+        np.asarray([[1.0]]),
+        [(0, 0, 1)],
+        identity=DatasetIdentity.from_content(),
+    )
+    assert first.identity_key() != second.identity_key()
 
 
 def test_bidirectional_requires_every_gallery_to_have_relevance():
@@ -215,6 +231,7 @@ def test_bidirectional_requires_every_gallery_to_have_relevance():
         np.eye(2),
         np.asarray([[1.0, 0.0], [0.0, 1.0], [0.5, 0.5]]),
         [(0, 0, 1), (1, 1, 1)],
+        identity=DatasetIdentity.ephemeral(),
     )
     with pytest.raises(ValueError, match="bidirectional"):
         RetrievalBenchmark(
@@ -239,14 +256,14 @@ def test_retrieval_artifact_scoring_round_trip(tmp_path):
     store = LocalArtifactStore(str(tmp_path))
     store.put_array("q", np.eye(2))
     store.put_json(
-        "q", {"n_samples": 2, "side": "query", "dataset_fingerprint": "d", "recipe_hash": "e"}
+        "q", {"n_samples": 2, "side": "query", "dataset_identity_key": "d", "recipe_hash": "e"}
     )
     store.put_array("g", np.eye(2))
     store.put_json(
-        "g", {"n_samples": 2, "side": "gallery", "dataset_fingerprint": "d", "recipe_hash": "e"}
+        "g", {"n_samples": 2, "side": "gallery", "dataset_identity_key": "d", "recipe_hash": "e"}
     )
     store.put_json(
-        "r", {"relevance": {"0": {"0": 1.0}, "1": {"1": 2.0}}, "dataset_fingerprint": "d"}
+        "r", {"relevance": {"0": {"0": 1.0}, "1": {"1": 2.0}}, "dataset_identity_key": "d"}
     )
     artifact = score_retrieval_artifact(
         RetrievalScoringJob(
@@ -265,18 +282,18 @@ def test_retrieval_artifact_rejects_misaligned_ids(tmp_path):
     store = LocalArtifactStore(str(tmp_path))
     store.put_array("q", np.eye(2))
     store.put_json(
-        "q", {"n_samples": 2, "side": "query", "dataset_fingerprint": "d", "recipe_hash": "e"}
+        "q", {"n_samples": 2, "side": "query", "dataset_identity_key": "d", "recipe_hash": "e"}
     )
     store.put_array("g", np.eye(2))
     store.put_json(
-        "g", {"n_samples": 2, "side": "gallery", "dataset_fingerprint": "d", "recipe_hash": "e"}
+        "g", {"n_samples": 2, "side": "gallery", "dataset_identity_key": "d", "recipe_hash": "e"}
     )
     store.put_json(
         "r",
         {
             "relevance": {"0": {"0": 1.0}, "1": {"1": 1.0}},
             "query_ids": ["one"],
-            "dataset_fingerprint": "d",
+            "dataset_identity_key": "d",
         },
     )
     with pytest.raises(ValueError, match="query IDs"):
@@ -289,7 +306,10 @@ def test_retrieval_artifact_rejects_misaligned_ids(tmp_path):
 def test_retrieval_endpoint_shards_merge_and_paired_compression(tmp_path):
     store = LocalArtifactStore(str(tmp_path))
     dataset = RetrievalDataset.from_embeddings(
-        np.eye(4), np.eye(4), [(index, index, 1.0) for index in range(4)]
+        np.eye(4),
+        np.eye(4),
+        [(index, index, 1.0) for index in range(4)],
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = PrecomputedExtractor()
     query_shards = []
@@ -342,7 +362,9 @@ def test_retrieval_endpoint_shards_merge_and_paired_compression(tmp_path):
 
 
 def test_retrieval_branch_keys_are_distinct_and_wrong_provenance_is_rejected(tmp_path):
-    dataset = RetrievalDataset.from_embeddings(np.eye(2), np.eye(2), [(0, 0, 1), (1, 1, 1)])
+    dataset = RetrievalDataset.from_embeddings(
+        np.eye(2), np.eye(2), [(0, 0, 1), (1, 1, 1)], identity=DatasetIdentity.ephemeral()
+    )
     extractor = PrecomputedExtractor()
     assert retrieval_embedding_artifact_key(
         dataset, extractor, "query", "first"
@@ -351,11 +373,13 @@ def test_retrieval_branch_keys_are_distinct_and_wrong_provenance_is_rejected(tmp
     store.put_array("q", np.eye(2))
     store.put_array("g", np.eye(2))
     store.put_json(
-        "q", {"n_samples": 2, "side": "query", "dataset_fingerprint": "one", "recipe_hash": "e"}
+        "q", {"n_samples": 2, "side": "query", "dataset_identity_key": "one", "recipe_hash": "e"}
     )
     store.put_json(
-        "g", {"n_samples": 2, "side": "gallery", "dataset_fingerprint": "two", "recipe_hash": "e"}
+        "g", {"n_samples": 2, "side": "gallery", "dataset_identity_key": "two", "recipe_hash": "e"}
     )
-    store.put_json("r", {"relevance": {"0": {"0": 1}, "1": {"1": 1}}, "dataset_fingerprint": "one"})
-    with pytest.raises(ValueError, match="dataset fingerprints"):
+    store.put_json(
+        "r", {"relevance": {"0": {"0": 1}, "1": {"1": 1}}, "dataset_identity_key": "one"}
+    )
+    with pytest.raises(ValueError, match="dataset identities"):
         score_retrieval_artifact(RetrievalScoringJob("q", "g", "r", "out"), store)

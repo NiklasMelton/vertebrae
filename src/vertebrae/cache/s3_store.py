@@ -2,17 +2,22 @@
 
 import json
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple
 from urllib.parse import urlparse
 
 import numpy as np
 
-from vertebrae.cache.artifact_store import ArtifactStat, ArtifactStoreConfig
+from vertebrae.cache.artifact_store import (
+    ARRAY_MANIFEST_FILENAME,
+    ArrayArtifactManifest,
+    ArtifactStat,
+    ArtifactStoreConfig,
+)
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
-from vertebrae.utils.validation import is_sparse_matrix
 
 
 class S3ArtifactStore:
@@ -76,19 +81,20 @@ class S3ArtifactStore:
     def exists(self, key: str) -> bool:
         """Return whether an embedding artifact exists for `key`."""
 
-        return self._object_exists(self._artifact_object_key(key, "embeddings.npy")) or (
-            self._object_exists(self._artifact_object_key(key, "embeddings.npz"))
-        )
+        manifest_key = self._artifact_object_key(key, ARRAY_MANIFEST_FILENAME)
+        if not self._object_exists(manifest_key):
+            return False
+        manifest = self._read_array_manifest(key)
+        return self._object_exists(self._artifact_object_key(key, manifest.filename))
 
     def put_array(self, key: str, arr: Any) -> str:
         """Store a dense or sparse embedding matrix."""
 
-        filename = "embeddings.npz" if is_sparse_matrix(arr) else "embeddings.npy"
         with tempfile.TemporaryDirectory() as tmpdir:
             local = LocalArtifactStore(tmpdir)
             local_path = Path(local.put_array(key, arr))
-            object_key = self._artifact_object_key(key, filename)
-            self._upload_file(local_path, object_key)
+            manifest = local._read_array_manifest(local._path(key))
+            object_key = self._publish_local_array(key, local_path, manifest)
         return self._uri_for(object_key)
 
     def put_array_batches(
@@ -110,24 +116,23 @@ class S3ArtifactStore:
                     require_complete=require_complete,
                 )
             )
-            self._upload_file(local_path, self._artifact_object_key(key, local_path.name))
-        return self._uri_for(self._artifact_object_key(key, local_path.name))
+            manifest = local._read_array_manifest(local._path(key))
+            object_key = self._publish_local_array(key, local_path, manifest)
+        return self._uri_for(object_key)
 
     def get_array(self, key: str) -> Any:
         """Load a dense or sparse embedding matrix."""
 
-        candidates = ("embeddings.npz", "embeddings.npy")
+        manifest = self._read_array_manifest(key)
+        object_key = self._artifact_object_key(key, manifest.filename)
+        if not self._object_exists(object_key):
+            raise FileNotFoundError(
+                f"Array manifest for key {key} references missing file {manifest.filename}."
+            )
         with tempfile.TemporaryDirectory() as tmpdir:
-            local_path = None
-            for filename in candidates:
-                object_key = self._artifact_object_key(key, filename)
-                if self._object_exists(object_key):
-                    local_path = Path(tmpdir) / filename
-                    self._download_file(object_key, local_path)
-                    break
-            if local_path is None:
-                raise FileNotFoundError(f"No array artifact found for key {key}.")
-            if local_path.suffix == ".npz":
+            local_path = Path(tmpdir) / manifest.filename
+            self._download_file(object_key, local_path)
+            if manifest.storage_format == "npz":
                 from scipy import sparse
 
                 return sparse.load_npz(local_path)
@@ -136,25 +141,23 @@ class S3ArtifactStore:
     def stat_array(self, key: str) -> ArtifactStat:
         """Return object size using S3 metadata without downloading it."""
 
-        for filename, storage_format in (("embeddings.npz", "npz"), ("embeddings.npy", "npy")):
-            object_key = self._artifact_object_key(key, filename)
-            try:
-                response = self._client_or_raise().head_object(
-                    Bucket=self.bucket,
-                    Key=object_key,
-                )
-            except Exception as exc:
-                error = getattr(exc, "response", {})
-                code = error.get("Error", {}).get("Code") if isinstance(error, dict) else None
-                if code in {"404", "NoSuchKey", "NotFound"}:
-                    continue
-                raise
-            return ArtifactStat(
-                uri=self._uri_for(object_key),
-                size_bytes=int(response["ContentLength"]),
-                storage_format=storage_format,
-            )
-        raise FileNotFoundError(f"No array artifact found for key {key}.")
+        manifest = self._read_array_manifest(key)
+        object_key = self._artifact_object_key(key, manifest.filename)
+        try:
+            response = self._client_or_raise().head_object(Bucket=self.bucket, Key=object_key)
+        except Exception as exc:
+            error = getattr(exc, "response", {})
+            code = error.get("Error", {}).get("Code") if isinstance(error, dict) else None
+            if code in {"404", "NoSuchKey", "NotFound"}:
+                raise FileNotFoundError(
+                    f"Array manifest for key {key} references missing file {manifest.filename}."
+                ) from exc
+            raise
+        return ArtifactStat(
+            uri=self._uri_for(object_key),
+            size_bytes=int(response["ContentLength"]),
+            storage_format=manifest.storage_format,
+        )
 
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as JSON."""
@@ -202,6 +205,44 @@ class S3ArtifactStore:
 
         payload = self._get_bytes(self._artifact_object_key(key, "metadata.json"))
         return json.loads(payload.decode("utf-8"))
+
+    def _read_array_manifest(self, key: str) -> ArrayArtifactManifest:
+        manifest_key = self._artifact_object_key(key, ARRAY_MANIFEST_FILENAME)
+        if not self._object_exists(manifest_key):
+            raise FileNotFoundError(f"No committed array manifest found for key {key}.")
+        payload = self._get_bytes(manifest_key)
+        try:
+            value = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Array manifest for key {key} is not valid JSON.") from exc
+        return ArrayArtifactManifest.from_dict(value)
+
+    def _publish_local_array(
+        self,
+        key: str,
+        local_path: Path,
+        manifest: ArrayArtifactManifest,
+    ) -> str:
+        object_key = self._artifact_object_key(key, manifest.filename)
+        self._upload_file(local_path, object_key)
+        manifest_key = self._artifact_object_key(key, ARRAY_MANIFEST_FILENAME)
+        self._put_bytes(
+            manifest_key,
+            json.dumps(manifest.to_dict(), indent=2, sort_keys=True).encode("utf-8"),
+        )
+        stale_name = "embeddings.npy" if manifest.storage_format == "npz" else "embeddings.npz"
+        stale_key = self._artifact_object_key(key, stale_name)
+        if self._object_exists(stale_key):
+            try:
+                self._client_or_raise().delete_object(Bucket=self.bucket, Key=stale_key)
+            except Exception as exc:
+                warnings.warn(
+                    f"Committed {self._uri_for(object_key)} but could not remove stale "
+                    f"{self._uri_for(stale_key)}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        return object_key
 
     def _artifact_object_key(self, key: str, filename: str) -> str:
         clean_key = key.strip("/").replace("..", "__")

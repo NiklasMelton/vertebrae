@@ -5,6 +5,7 @@ from vertebrae import (
     BenchmarkDataset,
     CacheConfig,
     CallableSpatialExtractor,
+    DatasetIdentity,
     ResourceProfilingConfig,
     SegmentationConfig,
     SegmentationDataset,
@@ -34,6 +35,7 @@ def _dataset():
             1: {"is_thing": True},
             2: {"is_thing": False},
         },
+        identity=DatasetIdentity.ephemeral(),
     )
 
 
@@ -74,12 +76,14 @@ def test_precomputed_segmentation_embeddings_use_image_groups():
     dataset = SegmentationDataset.from_arrays(
         np.zeros((2, 2, 2, 3)),
         np.array([[[1, 1], [2, 2]], [[1, 1], [2, 2]]]),
+        identity=DatasetIdentity.ephemeral(),
     )
     grouped = dataset  # keep the constructor smoke test close to segmentation fixtures
     token_dataset = BenchmarkDataset.from_segmentation_embeddings(
         np.eye(4),
         [1, 1, 2, 2],
         ["image-a", "image-a", "image-b", "image-b"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     assert grouped.summary()["n_images"] == 2

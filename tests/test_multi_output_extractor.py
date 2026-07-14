@@ -1,6 +1,6 @@
 import numpy as np
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import MultiOutputExtractor
 from vertebrae.extractors.base import EmbeddingOutputSpec
@@ -9,7 +9,9 @@ from vertebrae.extractors.base import EmbeddingOutputSpec
 def test_multi_output_extractor_expands_to_multiple_results(fake_overlapindex):
     X = np.arange(60, dtype=float).reshape(20, 3)
     y = np.array(["a"] * 10 + ["b"] * 10)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    dataset = BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    )
     extractor = MultiOutputExtractor(
         name="callable_multi",
         output_specs=[

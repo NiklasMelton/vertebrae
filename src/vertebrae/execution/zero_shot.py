@@ -45,7 +45,9 @@ def zero_shot_embedding_artifact_key(dataset: Any, extractor: Any, side: str, br
 
     if side not in {"samples", "prompts"}:
         raise ValueError("side must be 'samples' or 'prompts'.")
-    identity = dataset.dataset.fingerprint() if side == "samples" else dataset.fingerprint()
+    identity = (
+        dataset.dataset.identity_key() if side == "samples" else dataset.protocol_fingerprint()
+    )
     recipe = extractor.recipe()
     if recipe.get("cache_safe") is False:
         raise ValueError(
@@ -59,7 +61,7 @@ def zero_shot_embedding_artifact_key(dataset: Any, extractor: Any, side: str, br
 def zero_shot_protocol_artifact_key(dataset: Any) -> str:
     """Build the canonical serialized prompt-protocol artifact key."""
 
-    return f"zero_shot/protocols/{dataset.fingerprint()}"
+    return f"zero_shot/protocols/{dataset.protocol_fingerprint()}"
 
 
 def zero_shot_compression_artifact_key(
@@ -118,9 +120,9 @@ def materialize_zero_shot_protocol(
         "artifact_type": "zero_shot_protocol",
         "vertebrae_version": __version__,
         "output_key": output_key,
-        "dataset_fingerprint": dataset.fingerprint(),
-        "protocol_fingerprint": dataset.fingerprint(),
-        "source_dataset_fingerprint": dataset.dataset.fingerprint(),
+        "dataset_identity_key": dataset.protocol_fingerprint(),
+        "protocol_fingerprint": dataset.protocol_fingerprint(),
+        "source_dataset_identity_key": dataset.dataset.identity_key(),
         "sample_modality": dataset.modality,
         "label_encoding": LABEL_ENCODING,
         "label_catalog": protocol_recipe["label_catalog"],
@@ -148,11 +150,11 @@ def materialize_zero_shot_embedding_shard(
     dataset.validated()
     if job.side == "samples":
         values, modality = dataset.samples, dataset.modality
-        identity = dataset.dataset.fingerprint()
+        identity = dataset.dataset.identity_key()
     else:
         values, _prompt_labels, _template_ids = dataset.prompt_rows()
         modality = "text"
-        identity = dataset.fingerprint()
+        identity = dataset.protocol_fingerprint()
     indices = job.shard.indices(len(values))
     if not len(indices):
         raise ValueError("Zero-shot embedding shard contains no rows.")
@@ -199,8 +201,8 @@ def materialize_zero_shot_embedding_shard(
         "vertebrae_version": __version__,
         "output_key": job.output_key,
         "artifact_path": path,
-        "source_dataset_fingerprint": dataset.dataset.fingerprint(),
-        "protocol_fingerprint": dataset.fingerprint() if job.side == "prompts" else None,
+        "source_dataset_identity_key": dataset.dataset.identity_key(),
+        "protocol_fingerprint": dataset.protocol_fingerprint() if job.side == "prompts" else None,
         "endpoint_identity": identity,
         "extractor_recipe": job.extractor.recipe(),
         "recipe_hash": fingerprint_extractor_recipe(job.extractor.recipe()),
@@ -254,7 +256,7 @@ def merge_zero_shot_embedding_shards(job: EmbeddingMergeJob, store: ArtifactStor
         "shape": list(embeddings.shape),
         "dtype": str(embeddings.dtype),
         "sparse": is_sparse_matrix(embeddings),
-        "source_dataset_fingerprint": first["source_dataset_fingerprint"],
+        "source_dataset_identity_key": first["source_dataset_identity_key"],
         "protocol_fingerprint": first.get("protocol_fingerprint"),
         "endpoint_identity": first["endpoint_identity"],
         "extractor_recipe": first["extractor_recipe"],
@@ -371,7 +373,7 @@ def compress_zero_shot_embedding_artifacts(
         "sample_output_key": job.sample_output_key,
         "prompt_output_key": job.prompt_output_key,
         "compression_metadata": metadata,
-        "source_dataset_fingerprint": sample_metadata["source_dataset_fingerprint"],
+        "source_dataset_identity_key": sample_metadata["source_dataset_identity_key"],
         "protocol_fingerprint": prompt_metadata.get("protocol_fingerprint"),
         "sample_endpoint": job.sample_embedding_key,
         "prompt_endpoint": job.prompt_embedding_key,
@@ -389,8 +391,8 @@ def score_zero_shot_artifact(job: ZeroShotScoringJob, store: ArtifactStore) -> d
     protocol = store.get_json(job.protocol_key)
     _validate_protocol_artifact(protocol)
     _validate_pair(sample_metadata, prompt_metadata)
-    if protocol.get("source_dataset_fingerprint") != sample_metadata.get(
-        "source_dataset_fingerprint"
+    if protocol.get("source_dataset_identity_key") != sample_metadata.get(
+        "source_dataset_identity_key"
     ):
         raise ValueError("Zero-shot protocol and sample artifact have different source datasets.")
     protocol_fingerprint = protocol["protocol_fingerprint"]
@@ -430,7 +432,7 @@ def score_zero_shot_artifact(job: ZeroShotScoringJob, store: ArtifactStore) -> d
         "sample_embedding_key": job.sample_embedding_key,
         "prompt_embedding_key": job.prompt_embedding_key,
         "protocol_key": job.protocol_key,
-        "source_dataset_fingerprint": sample_metadata["source_dataset_fingerprint"],
+        "source_dataset_identity_key": sample_metadata["source_dataset_identity_key"],
         "protocol_fingerprint": protocol_fingerprint,
         "label_encoding": protocol["label_encoding"],
         "sample_endpoint": sample_metadata,
@@ -513,7 +515,7 @@ def _validate_pair(samples: dict, prompts: dict) -> None:
         raise ValueError("Zero-shot artifacts must pair samples with prompts.")
     if samples.get("recipe_hash") != prompts.get("recipe_hash"):
         raise ValueError("Zero-shot endpoint artifacts have different extractor recipes.")
-    if samples.get("source_dataset_fingerprint") != prompts.get("source_dataset_fingerprint"):
+    if samples.get("source_dataset_identity_key") != prompts.get("source_dataset_identity_key"):
         raise ValueError("Zero-shot endpoint artifacts have different source datasets.")
     if samples.get("embedding_dim") != prompts.get("embedding_dim"):
         raise ValueError("Zero-shot endpoint artifacts have incompatible embedding dimensions.")
@@ -549,7 +551,7 @@ def _validate_endpoint_array(values: Any, metadata: dict) -> None:
 def _validate_shards(manifests: list[dict], n_samples: int) -> None:
     required = {
         "artifact_type",
-        "source_dataset_fingerprint",
+        "source_dataset_identity_key",
         "recipe_hash",
         "side",
         "branch",
@@ -640,7 +642,7 @@ def zero_shot_benchmark_result_from_artifacts(
                 embedding_metadata={
                     "sample_branch": sample_endpoint["branch"],
                     "text_branch": prompt_endpoint["branch"],
-                    "source_dataset_fingerprint": artifact["source_dataset_fingerprint"],
+                    "source_dataset_identity_key": artifact["source_dataset_identity_key"],
                     "protocol_fingerprint": artifact["protocol_fingerprint"],
                     "sample_embedding_dim": sample_endpoint["embedding_dim"],
                     "prompt_embedding_dim": prompt_endpoint["embedding_dim"],
@@ -671,7 +673,7 @@ def zero_shot_benchmark_result_from_artifacts(
                 "n_classes": len(protocol["class_labels"]),
                 "n_prompts": protocol["n_prompts"],
                 "protocol": protocol.get("protocol"),
-                "source_dataset_fingerprint": protocol["source_dataset_fingerprint"],
+                "source_dataset_identity_key": protocol["source_dataset_identity_key"],
             },
         )
     )
@@ -744,7 +746,7 @@ def _validate_protocol_artifact(protocol: dict) -> None:
         raise ValueError("Zero-shot protocol recipe fingerprint does not match its content.")
     if (
         protocol.get("protocol_fingerprint") != computed_fingerprint
-        or protocol.get("dataset_fingerprint") != computed_fingerprint
+        or protocol.get("dataset_identity_key") != computed_fingerprint
     ):
         raise ValueError("Zero-shot protocol manifest fingerprint does not match its recipe.")
     expected = {
@@ -758,7 +760,7 @@ def _validate_protocol_artifact(protocol: dict) -> None:
         "template_ids": recipe.get("template_ids"),
         "n_samples": recipe.get("n_samples"),
         "n_prompts": recipe.get("n_prompts"),
-        "source_dataset_fingerprint": recipe.get("source_dataset_fingerprint"),
+        "source_dataset_identity_key": recipe.get("source_dataset_identity_key"),
     }
     for field, value in expected.items():
         if protocol.get(field) != value:

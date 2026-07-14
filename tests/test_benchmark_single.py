@@ -2,7 +2,7 @@ import json
 
 import numpy as np
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
@@ -15,7 +15,9 @@ def test_precomputed_single_extractor_workflow_writes_reports(tmp_path, fake_ove
         ]
     )
     labels = np.array(["left"] * 8 + ["right"] * 8)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -38,7 +40,9 @@ def test_precomputed_single_extractor_workflow_writes_reports(tmp_path, fake_ove
 def test_benchmark_metadata_excludes_probe_config(fake_overlapindex):
     embeddings = np.arange(48, dtype=float).reshape(16, 3)
     labels = np.array(["left"] * 8 + ["right"] * 8)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -64,6 +68,7 @@ def test_node_embedding_dataset_runs_through_existing_benchmark(tmp_path, fake_o
         embeddings,
         labels,
         node_ids=[f"node-{idx}" for idx in range(12)],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     result = Evaluator(

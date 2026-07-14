@@ -44,7 +44,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
@@ -136,6 +136,7 @@ def main() -> None:
             "label_rule": "Caltech-101 object-category directory",
             "default_slice": "moderate related-category pairs for a laptop run",
         },
+        identity=DatasetIdentity.ephemeral(),
     )
 
     benchmark = Benchmark(

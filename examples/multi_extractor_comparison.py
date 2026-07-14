@@ -6,7 +6,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor, SklearnExtractor
 
@@ -19,6 +19,7 @@ def main() -> None:
         labels,
         modality="tabular",
         metadata={"example": "multi_extractor_comparison"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     benchmark = Benchmark(

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.extractors import HFAudioExtractor
 
 
@@ -21,6 +21,7 @@ def main() -> None:
         labels=labels,
         sampling_rate=16_000,
         metadata={"dataset": "synthetic_audio"},
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFAudioExtractor(
         name="wav2vec2_base",

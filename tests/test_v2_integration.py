@@ -5,7 +5,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor, PrecomputedExtractor, SklearnExtractor
 
@@ -21,7 +21,7 @@ def test_full_benchmark_multiple_extractor_families_generates_reports(
         ]
     )
     y = np.array(["left"] * 10 + ["right"] * 10)
-    dataset = BenchmarkDataset.from_embeddings(X, y)
+    dataset = BenchmarkDataset.from_embeddings(X, y, identity=DatasetIdentity.ephemeral())
     benchmark = Benchmark(
         dataset,
         stability_config=StabilityConfig(repeats=2),

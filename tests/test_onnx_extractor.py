@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, EmbeddingConfig, Evaluator
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import ONNXExtractor
 
@@ -131,6 +131,7 @@ def test_onnx_extractor_works_in_streaming_evaluator(fake_onnxruntime, fake_over
         np.arange(24, dtype=float).reshape(6, 4),
         ["a"] * 3 + ["b"] * 3,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = ONNXExtractor(
         "onnx",
