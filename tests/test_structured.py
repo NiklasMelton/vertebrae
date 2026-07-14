@@ -229,9 +229,7 @@ def test_unit_annotations_support_indicator_and_labelset_multilabel_targets():
     ]
     indicator = materialize_structured_outputs(
         _dataset_with_annotations(indicator_annotations),
-        _two_row_extractor(
-            lambda batch: [np.eye(2, dtype=float) for _ in range(len(batch))]
-        ),
+        _two_row_extractor(lambda batch: [np.eye(2, dtype=float) for _ in range(len(batch))]),
     )[0]
 
     assert indicator.dataset.metadata["target_type"] == "multi_label"
@@ -262,9 +260,7 @@ def test_unit_annotations_support_multi_target_and_canonical_single_target_regre
     ]
     multi_target = materialize_structured_outputs(
         _dataset_with_annotations(multi_target_annotations),
-        _two_row_extractor(
-            lambda batch: [np.eye(2, dtype=float) for _ in range(len(batch))]
-        ),
+        _two_row_extractor(lambda batch: [np.eye(2, dtype=float) for _ in range(len(batch))]),
     )[0]
 
     assert multi_target.dataset.y.shape == (8, 2)
@@ -289,9 +285,7 @@ def test_unit_annotations_support_multi_target_and_canonical_single_target_regre
     [
         (
             UnitAnnotation(labels=["a", "b"]),
-            UnitAnnotation(
-                labels=[1.0, 2.0], target_type="regression", target_names=["score"]
-            ),
+            UnitAnnotation(labels=[1.0, 2.0], target_type="regression", target_names=["score"]),
             "target_type for sample 1",
         ),
         (
@@ -308,9 +302,7 @@ def test_unit_annotations_support_multi_target_and_canonical_single_target_regre
             "label_names for sample 1",
         ),
         (
-            UnitAnnotation(
-                labels=[1.0, 2.0], target_type="regression", target_names=["score"]
-            ),
+            UnitAnnotation(labels=[1.0, 2.0], target_type="regression", target_names=["score"]),
             UnitAnnotation(
                 labels=[[1.0, 2.0], [3.0, 4.0]],
                 target_type="regression",
@@ -406,9 +398,7 @@ def test_sparse_structured_artifacts_and_binary_regression_labels_round_trip(tmp
         for _ in range(4)
     ]
     dataset = _dataset_with_annotations(annotations)
-    extractor = _two_row_extractor(
-        lambda _batch: sparse.csr_matrix(np.eye(2, dtype=float))
-    )
+    extractor = _two_row_extractor(lambda _batch: sparse.csr_matrix(np.eye(2, dtype=float)))
     store = LocalArtifactStore(tmp_path)
 
     bundle = materialize_structured_artifacts(
@@ -444,9 +434,7 @@ def test_multilabel_structured_artifacts_preserve_ordered_label_names(tmp_path):
     store = LocalArtifactStore(tmp_path)
     bundle = materialize_structured_artifacts(
         _dataset_with_annotations(annotations),
-        _two_row_extractor(
-            lambda batch: [np.eye(2, dtype=float) for _ in range(len(batch))]
-        ),
+        _two_row_extractor(lambda batch: [np.eye(2, dtype=float) for _ in range(len(batch))]),
         store,
     )
     output = bundle["outputs"][0]
