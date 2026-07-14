@@ -15,6 +15,7 @@ from vertebrae.cache.artifact_store import (
     ArtifactStat,
     ArtifactStoreConfig,
 )
+from vertebrae.cache.keys import validate_artifact_key
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import json_dumps_strict
@@ -90,6 +91,7 @@ class S3ArtifactStore:
     def put_array(self, key: str, arr: Any) -> str:
         """Store a dense or sparse embedding matrix."""
 
+        validate_artifact_key(key)
         with tempfile.TemporaryDirectory() as tmpdir:
             local = LocalArtifactStore(tmpdir)
             local_path = Path(local.put_array(key, arr))
@@ -106,6 +108,7 @@ class S3ArtifactStore:
     ) -> str:
         """Store embeddings from deterministic batches."""
 
+        validate_artifact_key(key)
         with tempfile.TemporaryDirectory() as tmpdir:
             local = LocalArtifactStore(tmpdir)
             local_path = Path(
@@ -207,9 +210,9 @@ class S3ArtifactStore:
     def delete_prefix(self, prefix: str) -> None:
         """Delete every S3 object beneath an artifact key prefix."""
 
-        clean = prefix.strip("/").replace("..", "__")
-        if not clean:
+        if prefix == "":
             raise ValueError("Refusing to delete the artifact-store root.")
+        clean = validate_artifact_key(prefix)
         object_prefix = "/".join(part for part in (self.prefix, clean) if part) + "/"
         client = self._client_or_raise()
         continuation = None
@@ -264,8 +267,8 @@ class S3ArtifactStore:
         return object_key
 
     def _artifact_object_key(self, key: str, filename: str) -> str:
-        clean_key = key.strip("/").replace("..", "__")
-        return "/".join(part for part in (self.prefix, clean_key, filename) if part)
+        validated_key = validate_artifact_key(key)
+        return "/".join(part for part in (self.prefix, validated_key, filename) if part)
 
     def _uri_for(self, object_key: str) -> str:
         return f"s3://{self.bucket}/{object_key}"

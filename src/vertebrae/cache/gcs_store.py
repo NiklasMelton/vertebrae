@@ -16,6 +16,7 @@ from vertebrae.cache.artifact_store import (
     ArtifactStat,
     ArtifactStoreConfig,
 )
+from vertebrae.cache.keys import validate_artifact_key
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import json_dumps_strict
@@ -85,6 +86,7 @@ class GCSArtifactStore:
     def put_array(self, key: str, arr: Any) -> str:
         """Store a dense or sparse embedding matrix."""
 
+        validate_artifact_key(key)
         with tempfile.TemporaryDirectory() as tmpdir:
             local = LocalArtifactStore(tmpdir)
             local_path = Path(local.put_array(key, arr))
@@ -101,6 +103,7 @@ class GCSArtifactStore:
     ) -> str:
         """Store embeddings from deterministic batches."""
 
+        validate_artifact_key(key)
         with tempfile.TemporaryDirectory() as tmpdir:
             local = LocalArtifactStore(tmpdir)
             local_path = Path(
@@ -198,9 +201,9 @@ class GCSArtifactStore:
     def delete_prefix(self, prefix: str) -> None:
         """Delete every GCS blob beneath an artifact key prefix."""
 
-        clean = prefix.strip("/").replace("..", "__")
-        if not clean:
+        if prefix == "":
             raise ValueError("Refusing to delete the artifact-store root.")
+        clean = validate_artifact_key(prefix)
         blob_prefix = "/".join(part for part in (self.prefix, clean) if part) + "/"
         bucket = self._bucket_or_raise()
         for blob in list(bucket.list_blobs(prefix=blob_prefix)):
@@ -246,8 +249,8 @@ class GCSArtifactStore:
         return blob_name
 
     def _artifact_blob_name(self, key: str, filename: str) -> str:
-        clean_key = key.strip("/").replace("..", "__")
-        return "/".join(part for part in (self.prefix, clean_key, filename) if part)
+        validated_key = validate_artifact_key(key)
+        return "/".join(part for part in (self.prefix, validated_key, filename) if part)
 
     def _uri_for(self, blob_name: str) -> str:
         return f"gs://{self.bucket}/{blob_name}"

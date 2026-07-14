@@ -13,6 +13,7 @@ from vertebrae.cache import (
     create_artifact_store_from_config,
 )
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json
+from vertebrae.cache.keys import named_output_artifact_key, named_output_artifact_keys
 from vertebrae.compression import (
     compress_embedding_artifact_key,
     compress_embeddings,
@@ -108,15 +109,13 @@ def embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
 def embedding_output_key(base_key: str, output_name: str) -> str:
     """Build an artifact key for one named embedding output."""
 
-    safe_name = str(output_name).replace("/", "_")
-    return f"{base_key}/outputs/{safe_name}"
+    return named_output_artifact_key(base_key, output_name)
 
 
 def embedding_output_shard_key(shard_key: str, output_name: str) -> str:
     """Build an artifact key for one named embedding shard output."""
 
-    safe_name = str(output_name).replace("/", "_")
-    return f"{shard_key}/outputs/{safe_name}"
+    return named_output_artifact_key(shard_key, output_name)
 
 
 def labels_artifact_key(dataset: Any) -> str:
@@ -217,9 +216,11 @@ def materialize_segmentation_artifacts(
         )
     )
     shared_profile = profiler.finish() if resource_config.enabled else None
+    output_keys = named_output_artifact_keys(
+        base_key, (materialization.name for materialization in materializations)
+    )
     for materialization in materializations:
-        safe_name = materialization.name.replace("/", "_")
-        output_key = f"{base_key}/outputs/{safe_name}"
+        output_key = output_keys[materialization.name]
         labels_key = f"{output_key}/labels"
         groups_key = f"{output_key}/groups"
         provenance_key = f"{output_key}/provenance"
@@ -350,9 +351,11 @@ def materialize_structured_artifacts(
         )
     )
     shared_profile = profiler.finish() if resource_config.enabled else None
+    output_keys = named_output_artifact_keys(
+        base_key, (materialization.name for materialization in materializations)
+    )
     for materialization in materializations:
-        safe_name = materialization.name.replace("/", "_")
-        output_key = f"{base_key}/outputs/{safe_name}"
+        output_key = output_keys[materialization.name]
         labels_key = f"{output_key}/labels"
         groups_key = f"{output_key}/groups"
         provenance_key = f"{output_key}/provenance"
@@ -2033,9 +2036,12 @@ def _materialize_multi_output_embedding_shard(
 
     manifests = []
     base_profile = profiler.finish() if job.resource_profiling_config.enabled else None
+    output_keys = named_output_artifact_keys(
+        job.output_key, (spec["name"] for spec in output_specs)
+    )
     for spec in output_specs:
         output_name = spec["name"]
-        output_key = embedding_output_shard_key(job.output_key, output_name)
+        output_key = output_keys[output_name]
         artifact_path = store.put_array_batches(
             output_key,
             output_batches[output_name],
@@ -2123,13 +2129,14 @@ def _merge_multi_output_embedding_shards(
     manifests: list[dict[str, Any]],
 ) -> dict[str, Any]:
     output_names = _validate_multi_output_shard_manifests(manifests)
+    output_keys = named_output_artifact_keys(job.output_key, output_names)
     output_manifests = []
     for output_name in output_names:
         shard_keys = []
         for manifest in manifests:
             output = _find_output_manifest_entry(manifest, output_name)
             shard_keys.append(output["output_key"])
-        output_key = embedding_output_key(job.output_key, output_name)
+        output_key = output_keys[output_name]
         merged = merge_embedding_shards(
             EmbeddingMergeJob(
                 shard_keys=tuple(shard_keys),

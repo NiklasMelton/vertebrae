@@ -16,6 +16,7 @@ from vertebrae.cache.artifact_store import (
     ArtifactStat,
     ArtifactStoreConfig,
 )
+from vertebrae.cache.keys import validate_artifact_key
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import json_dumps_strict
 from vertebrae.utils.validation import is_sparse_matrix
@@ -291,15 +292,24 @@ class LocalArtifactStore:
     def delete_prefix(self, prefix: str) -> None:
         """Delete every local artifact beneath a key prefix."""
 
-        path = self._path(prefix)
-        if path == self.root:
+        if prefix == "":
             raise ValueError("Refusing to delete the artifact-store root.")
+        path = self._path(prefix)
         if path.exists():
             shutil.rmtree(path)
 
     def _path(self, key: str) -> Path:
-        clean_key = key.strip("/").replace("..", "__")
-        return self.root / clean_key
+        validated_key = validate_artifact_key(key)
+        path = self.root.joinpath(*validated_key.split("/"))
+        resolved_root = self.root.resolve(strict=False)
+        resolved_path = path.resolve(strict=False)
+        try:
+            relative = resolved_path.relative_to(resolved_root)
+        except ValueError as exc:
+            raise ValueError("Artifact key resolves outside the artifact-store root.") from exc
+        if not relative.parts:
+            raise ValueError("Artifact key resolves to the artifact-store root.")
+        return path
 
     def _read_array_manifest(self, path: Path) -> ArrayArtifactManifest:
         manifest_path = path / ARRAY_MANIFEST_FILENAME

@@ -122,7 +122,11 @@ class ArrayArtifactManifest:
 
 
 class ArtifactStore(Protocol):
-    """Protocol for embedding and metadata artifact stores."""
+    """Protocol for embedding and metadata artifact stores.
+
+    Keys are non-empty relative forward-slash paths. Implementations reject
+    noncanonical or unsafe components rather than rewriting them.
+    """
 
     def config(self) -> ArtifactStoreConfig:
         """Return a serializable configuration for this store."""

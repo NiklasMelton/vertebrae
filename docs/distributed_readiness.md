@@ -17,6 +17,20 @@ Distributed artifact materialization now supports multi-output extractors by
 writing one embedding artifact per named output. Each output remains a normal 2D
 embedding artifact for downstream scoring and compression.
 
+Artifact keys form a lossless relative namespace shared by local, S3, and GCS stores.
+Keys must be non-empty forward-slash paths without absolute, empty, `.`, `..`,
+backslash, NUL, or control-character components. Stores reject invalid keys rather
+than rewriting them; benign names such as `a..b` and `a__b` are distinct. Named
+embedding, structured, and segmentation outputs use
+`output-v1-<bounded-slug>--<full-sha256>`. The 40-character slug is derived from an
+NFKD-normalized lowercase ASCII display form, but identity comes from the full digest
+of the exact, unnormalized UTF-8 output name retained in the manifest.
+
+This key layout intentionally does not read pre-layout named-output, structured, or
+segmentation caches. The package is pre-release, so no legacy fallback or migration is
+provided; rerunning materialization creates canonical artifacts. Single-output,
+retrieval, zero-shot, label, group, scoring, and compression layouts are unchanged.
+
 Retrieval uses paired endpoint artifacts. `plan-retrieval` produces JSON-native,
 deterministic query and gallery shard plans; `embed-retrieval-shard` materializes one
 endpoint shard; and `merge-retrieval-embeddings --plan-json ... --side ...` produces

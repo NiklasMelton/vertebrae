@@ -40,6 +40,8 @@ def test_s3_artifact_store_roundtrip_with_fake_boto3(monkeypatch):
         "runs/demo",
         {"ok": True, "path": Path("models/demo"), "values": np.asarray([1, 2]), "tags": {"b", "a"}},
     )
+    store.put_json("runs/a..b", {"identity": "dots"})
+    store.put_json("runs/a__b", {"identity": "underscores"})
     store.put_labels("labels/demo", np.array(["a", "b"]))
     store.put_array("arrays/dense", np.arange(6).reshape(2, 3))
     store.put_array("arrays/sparse", sparse.csr_matrix(np.eye(3)))
@@ -49,6 +51,8 @@ def test_s3_artifact_store_roundtrip_with_fake_boto3(monkeypatch):
     recreated = create_artifact_store_from_config(store.config())
     assert recreated.get_json("runs/demo")["ok"] is True
     assert recreated.get_json("runs/demo")["tags"] == ["a", "b"]
+    assert recreated.get_json("runs/a..b") == {"identity": "dots"}
+    assert recreated.get_json("runs/a__b") == {"identity": "underscores"}
     assert np.array_equal(recreated.get_labels("labels/demo"), np.array(["a", "b"]))
     assert np.array_equal(recreated.get_array("arrays/dense"), np.arange(6).reshape(2, 3))
     assert np.array_equal(recreated.get_array("arrays/sparse").toarray(), np.eye(3))
@@ -85,6 +89,8 @@ def test_gcs_artifact_store_roundtrip_with_fake_client(monkeypatch):
         "runs/demo",
         {"ok": True, "path": Path("models/demo"), "values": np.asarray([1, 2]), "tags": {"b", "a"}},
     )
+    store.put_json("runs/a..b", {"identity": "dots"})
+    store.put_json("runs/a__b", {"identity": "underscores"})
     store.put_array("arrays/dense", np.arange(6).reshape(2, 3))
     store.put_array("arrays/rewrite", np.eye(3))
     store.put_array("arrays/rewrite", sparse.csr_matrix(np.full((3, 3), 2)))
@@ -92,6 +98,8 @@ def test_gcs_artifact_store_roundtrip_with_fake_client(monkeypatch):
     recreated = create_artifact_store_from_config(store.config())
     assert recreated.get_json("runs/demo")["ok"] is True
     assert recreated.get_json("runs/demo")["tags"] == ["a", "b"]
+    assert recreated.get_json("runs/a..b") == {"identity": "dots"}
+    assert recreated.get_json("runs/a__b") == {"identity": "underscores"}
     assert np.array_equal(recreated.get_array("arrays/dense"), np.arange(6).reshape(2, 3))
     assert np.array_equal(recreated.get_array("arrays/rewrite").toarray(), np.full((3, 3), 2))
     stat = recreated.stat_array("arrays/dense")
@@ -114,6 +122,54 @@ def test_local_json_rejects_invalid_metadata_without_overwriting_previous_value(
         store.put_json("runs/demo", {"metadata": {"model": object()}})
 
     assert store.get_json("runs/demo") == {"ok": True}
+
+
+def test_local_store_preserves_benign_double_dot_identity(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    store.put_json("runs/a..b", {"identity": "dots"})
+    store.put_json("runs/a__b", {"identity": "underscores"})
+
+    assert store.get_json("runs/a..b") == {"identity": "dots"}
+    assert store.get_json("runs/a__b") == {"identity": "underscores"}
+
+
+@pytest.mark.parametrize(
+    "invalid_key",
+    ["", "/absolute", "trailing/", "double//part", "a/../b", "a/./b", "a\\b", "a\x00b"],
+)
+def test_artifact_stores_reject_invalid_keys_before_io(tmp_path, invalid_key):
+    stores = [
+        LocalArtifactStore(str(tmp_path / "local")),
+        S3ArtifactStore("bucket"),
+        GCSArtifactStore("bucket"),
+    ]
+
+    for store in stores:
+        with pytest.raises(ValueError):
+            store.put_json(invalid_key, {"ok": True})
+        with pytest.raises(ValueError):
+            store.put_array(invalid_key, np.eye(2))
+        with pytest.raises(ValueError):
+            store.exists(invalid_key)
+        with pytest.raises(ValueError):
+            store.delete_prefix(invalid_key)
+
+
+def test_local_store_rejects_symlink_escape(tmp_path):
+    root = tmp_path / "cache"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    try:
+        (root / "escape").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlinks are unavailable on this platform.")
+
+    store = LocalArtifactStore(str(root))
+    with pytest.raises(ValueError, match="outside"):
+        store.put_json("escape/result", {"ok": True})
+
+    assert not (outside / "result").exists()
 
 
 def test_local_delete_prefix_removes_only_selected_artifacts(tmp_path):

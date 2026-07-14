@@ -174,3 +174,26 @@ def test_structured_artifacts_have_independent_output_boundaries(tmp_path):
     assert output["task_family"] == "sequence"
     assert output["alignment_mode"] == "strict"
     assert output["alignment_recipe"] is None
+
+
+def test_structured_artifacts_keep_formerly_colliding_names_independent(tmp_path):
+    values = _extractor().transform_fn(_dataset().X)
+    extractor = CallableStructuredExtractor(
+        "structured-collisions",
+        transform_fn=lambda batch: {
+            "a/b": values[: len(batch)],
+            "a_b": [value + 10 for value in values[: len(batch)]],
+        },
+        output_specs=[
+            StructuredOutputSpec(name="a/b", unit_type="token"),
+            StructuredOutputSpec(name="a_b", unit_type="token"),
+        ],
+    )
+    store = LocalArtifactStore(tmp_path)
+
+    bundle = materialize_structured_artifacts(_dataset(), extractor, store)
+
+    assert [output["output_name"] for output in bundle["outputs"]] == ["a/b", "a_b"]
+    keys = [output["output_key"] for output in bundle["outputs"]]
+    assert len(set(keys)) == 2
+    assert np.array_equal(store.get_array(keys[1]), store.get_array(keys[0]) + 10)

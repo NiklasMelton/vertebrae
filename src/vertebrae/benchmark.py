@@ -10,6 +10,7 @@ import numpy as np
 from vertebrae._version import __version__
 from vertebrae.cache import ArtifactStore, create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
+from vertebrae.cache.keys import named_output_artifact_keys
 from vertebrae.compression import (
     compress_embedding_artifact_key,
     compress_embeddings,
@@ -1123,10 +1124,9 @@ class Benchmark:
             f"{fingerprint_extractor_recipe(extractor.recipe())}"
         )
         if self._supports_transform_many(extractor):
-            return all(
-                store.exists(self._output_cache_key(base_key, spec.name))
-                for spec in self._output_specs(extractor)
-            )
+            specs = self._output_specs(extractor)
+            cache_keys = named_output_artifact_keys(base_key, (spec.name for spec in specs))
+            return all(store.exists(cache_keys[spec.name]) for spec in specs)
         return store.exists(base_key)
 
     def _get_or_compute_embedding_variants(
@@ -1239,7 +1239,7 @@ class Benchmark:
         recipe = extractor.recipe()
         base_key = f"embeddings/{dataset.identity_key()}/{fingerprint_extractor_recipe(recipe)}"
         specs = self._output_specs(extractor)
-        cache_keys = {spec.name: self._output_cache_key(base_key, spec.name) for spec in specs}
+        cache_keys = named_output_artifact_keys(base_key, (spec.name for spec in specs))
         embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
         if embedding_cache_enabled and not self.cache_config.force_recompute:
             if all(store.exists(cache_key) for cache_key in cache_keys.values()):
@@ -1258,7 +1258,7 @@ class Benchmark:
                 extractor=extractor,
                 dataset=dataset,
                 store=store,
-                base_key=base_key,
+                cache_keys=cache_keys,
                 recipe=recipe,
                 probe_plan=probe_plan,
             )
@@ -1430,7 +1430,7 @@ class Benchmark:
         extractor: Any,
         dataset: Any,
         store: ArtifactStore,
-        base_key: str,
+        cache_keys: dict[str, str],
         recipe: dict,
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None,
     ) -> List[dict]:
@@ -1486,7 +1486,7 @@ class Benchmark:
         variants = []
         for output_name, batches in collected.items():
             embeddings = _combine_embedding_batches(batches, n_samples=n_samples)
-            cache_key = self._output_cache_key(base_key, output_name)
+            cache_key = cache_keys[output_name]
             metadata = self._embedding_metadata(
                 extractor=extractor,
                 dataset=dataset,
@@ -1879,10 +1879,6 @@ class Benchmark:
 
     def _cache_embeddings_enabled(self, extractor: Any) -> bool:
         return self.cache_config.enabled and bool(getattr(extractor, "cache_embeddings", True))
-
-    def _output_cache_key(self, base_key: str, output_name: str) -> str:
-        safe_name = str(output_name).replace("/", "_")
-        return f"{base_key}/outputs/{safe_name}"
 
     def _qualified_output_recipe(self, recipe: dict, output: EmbeddingOutput) -> dict:
         qualified = dict(recipe)
