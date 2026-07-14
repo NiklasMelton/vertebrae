@@ -558,15 +558,15 @@ def test_zero_shot_memory_budget_allows_block_but_rejects_full_matrix():
         "prompt_labels": [0, 1, 2, 3],
     }
 
-    blocked = ZeroShotScorer(
-        ZeroShotConfig(sample_batch_size=2, max_dense_bytes=2_500)
-    ).score(samples, prompts, labels, **kwargs)
+    blocked = ZeroShotScorer(ZeroShotConfig(sample_batch_size=2, max_dense_bytes=2_500)).score(
+        samples, prompts, labels, **kwargs
+    )
     assert blocked.metrics["accuracy"] == pytest.approx(1.0)
 
     with pytest.raises(MemoryError, match="sample_batch_size"):
-        ZeroShotScorer(
-            ZeroShotConfig(sample_batch_size=len(samples), max_dense_bytes=2_500)
-        ).score(samples, prompts, labels, **kwargs)
+        ZeroShotScorer(ZeroShotConfig(sample_batch_size=len(samples), max_dense_bytes=2_500)).score(
+            samples, prompts, labels, **kwargs
+        )
 
 
 @pytest.mark.parametrize("as_sparse", [False, True])

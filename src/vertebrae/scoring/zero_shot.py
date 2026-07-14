@@ -367,9 +367,7 @@ def _score_blockwise(
         local_correct = scores[local_rows, local_targets]
         correct[start:stop] = local_correct
         better = scores > local_correct[:, None]
-        tied_before = (scores == local_correct[:, None]) & (
-            class_indices < local_targets[:, None]
-        )
+        tied_before = (scores == local_correct[:, None]) & (class_indices < local_targets[:, None])
         ranks = 1 + np.sum(better | tied_before, axis=1)
         for k in valid_top_k:
             top_k_hits[k] += int(np.count_nonzero(ranks <= k))
