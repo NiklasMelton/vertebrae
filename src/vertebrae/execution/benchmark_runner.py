@@ -235,9 +235,7 @@ def _score_output_manifest(
         if compression_config.enabled and compression_config.method != "none":
             compression_job = plan_compression_job(raw_key, compression_config)
             if not benchmark.cache_config.enabled:
-                compression_hash = hash_json(
-                    _compression_identity(raw_key, compression_config)
-                )
+                compression_hash = hash_json(_compression_identity(raw_key, compression_config))
                 compression_job = type(compression_job)(
                     embedding_key=raw_key,
                     output_key=f"{run_prefix}/compressed/{compression_hash}",

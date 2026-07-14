@@ -123,9 +123,7 @@ def test_execution_config_requires_explicit_backend(tmp_path):
         )
 
 
-def test_explicit_backend_runs_artifact_pipeline_and_matches_direct(
-    tmp_path, fake_overlapindex
-):
+def test_explicit_backend_runs_artifact_pipeline_and_matches_direct(tmp_path, fake_overlapindex):
     dataset = _dataset()
     direct = Benchmark(
         dataset,
@@ -270,14 +268,11 @@ def test_dispatched_multi_output_compression_and_stability(tmp_path, fake_overla
     ]
     assert all(item.stability["repeats"] == 2 for item in result.extractor_results)
     assert all(
-        item.compression_metadata["compressed_dim"] == 1
-        for item in result.extractor_results
+        item.compression_metadata["compressed_dim"] == 1 for item in result.extractor_results
     )
 
 
-def test_dispatched_output_views_preserve_declared_row_alignment(
-    tmp_path, fake_overlapindex
-):
+def test_dispatched_output_views_preserve_declared_row_alignment(tmp_path, fake_overlapindex):
     dataset = BenchmarkDataset.from_arrays(
         np.arange(24, dtype=float).reshape(8, 3),
         ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
@@ -310,9 +305,7 @@ def test_dispatched_output_views_preserve_declared_row_alignment(
         [extractor],
         execution=LocalBackend(),
         execution_config=ExecutionConfig(total_shards=2),
-        label_view_config=LabelViewConfig(
-            output_levels={"coarse": "domain", "fine": "leaf"}
-        ),
+        label_view_config=LabelViewConfig(output_levels={"coarse": "domain", "fine": "leaf"}),
         **_kwargs(tmp_path),
     ).run()
 
