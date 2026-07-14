@@ -16,6 +16,9 @@ extractors, and explicit branch encoders through `CallableRetrievalExtractor` or
 retrieval-capable OpenCLIP, SigLIP, and compatible Hugging Face multimodal adapters.
 The default is exact cosine ranking with NDCG@10 as the primary score. Reports include
 NDCG, precision, recall, hit rate, MRR, mAP, and positive/negative similarity margins.
+Cosine retrieval requires every query and gallery embedding to have a nonzero L2 norm;
+scoring fails with the affected endpoint and row identities when this requirement is
+violated. Zero vectors remain valid for dot-product and squared-L2 retrieval.
 
 Optional paired compression is fitted on gallery embeddings and applied to query
 embeddings with the same transform. Requests whose `n_components` is greater than or

@@ -91,6 +91,10 @@ first-class configurable primary metrics. Reports always include all three, vali
 Top-K accuracy values, per-class precision/recall/F1, a confusion matrix, prompt
 coherence, correct-class margins, and deterministic tie warnings.
 
+`ZeroShotConfig.similarity="squared_l2"` ranks prototypes by negative squared
+Euclidean distance, so larger scores correspond to closer prototypes just as larger
+cosine and dot-product scores correspond to better matches.
+
 | zero-shot | overlap | interpretation |
 | --- | --- | --- |
 | strong | strong | Text-addressable and well-structured frozen representation. |
