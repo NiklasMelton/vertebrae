@@ -16,7 +16,7 @@ from vertebrae.cache.artifact_store import (
     ArtifactStoreConfig,
 )
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
-from vertebrae.utils.serialization import make_json_safe
+from vertebrae.utils.serialization import json_dumps_strict
 from vertebrae.utils.validation import is_sparse_matrix
 
 
@@ -116,6 +116,13 @@ class LocalArtifactStore:
                 incomplete coverage when `require_complete` is true.
         """
 
+        if (
+            isinstance(n_samples, (bool, np.bool_))
+            or not isinstance(n_samples, (int, np.integer))
+            or int(n_samples) < 1
+        ):
+            raise ValueError("n_samples must be an integer >= 1.")
+        n_samples = int(n_samples)
         path = self._path(key)
         path.mkdir(parents=True, exist_ok=True)
         iterator = iter(batches)
@@ -214,13 +221,9 @@ class LocalArtifactStore:
         path = self._path(key)
         path.mkdir(parents=True, exist_ok=True)
         target = path / "labels.json"
+        payload = json_dumps_strict(labels_to_jsonable(labels), indent=2, sort_keys=True)
         with target.open("w", encoding="utf-8") as f:
-            json.dump(
-                make_json_safe(labels_to_jsonable(labels)),
-                f,
-                indent=2,
-                sort_keys=True,
-            )
+            f.write(payload)
         return str(target)
 
     def get_labels(self, key: str) -> np.ndarray:
@@ -263,11 +266,12 @@ class LocalArtifactStore:
             Filesystem path to the saved metadata file.
         """
 
+        payload = json_dumps_strict(obj, indent=2, sort_keys=True)
         path = self._path(key)
         path.mkdir(parents=True, exist_ok=True)
         target = path / "metadata.json"
         with target.open("w", encoding="utf-8") as f:
-            json.dump(obj, f, indent=2, sort_keys=True, default=str)
+            f.write(payload)
         return str(target)
 
     def get_json(self, key: str) -> dict:
@@ -395,14 +399,23 @@ class LocalArtifactStore:
         indices: np.ndarray,
         batch: np.ndarray,
     ) -> None:
-        indices = np.asarray(indices, dtype=int)
         if batch.ndim != 2:
             raise ValueError(f"Embedding batches must be 2D; got shape {batch.shape}.")
-        if len(indices) != batch.shape[0]:
-            raise ValueError("Batch index count must match embedding row count.")
-        if np.any(written[indices]):
-            duplicates = indices[written[indices]]
-            raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
+        if batch.shape[1] != mmap.shape[1]:
+            raise ValueError(
+                "Dense embedding batches must have a consistent column count; "
+                f"expected {mmap.shape[1]}, got {batch.shape[1]}."
+            )
+        if batch.dtype != mmap.dtype:
+            raise ValueError(
+                "Dense embedding batches must have a consistent dtype; "
+                f"expected {mmap.dtype}, got {batch.dtype}."
+            )
+        indices = self._validate_batch_indices(
+            indices,
+            n_rows=int(batch.shape[0]),
+            written=written,
+        )
         mmap[indices] = batch
         written[indices] = True
 
@@ -420,19 +433,27 @@ class LocalArtifactStore:
         data_parts = []
         n_features = None
         written = np.zeros(n_samples, dtype=bool)
+        expected_dtype = None
         for indices, batch in batches:
             if not is_sparse_matrix(batch):
                 raise ValueError("Cannot mix sparse and dense embedding batches.")
-            indices = np.asarray(indices, dtype=int)
-            if len(indices) != batch.shape[0]:
-                raise ValueError("Batch index count must match embedding row count.")
+            if getattr(batch, "ndim", None) != 2:
+                raise ValueError(f"Embedding batches must be 2D; got shape {batch.shape}.")
             if n_features is None:
                 n_features = int(batch.shape[1])
+                expected_dtype = batch.dtype
             elif int(batch.shape[1]) != n_features:
                 raise ValueError("Sparse embedding batches must have a consistent column count.")
-            if np.any(written[indices]):
-                duplicates = indices[written[indices]]
-                raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
+            if batch.dtype != expected_dtype:
+                raise ValueError(
+                    "Sparse embedding batches must have a consistent dtype; "
+                    f"expected {expected_dtype}, got {batch.dtype}."
+                )
+            indices = self._validate_batch_indices(
+                indices,
+                n_rows=int(batch.shape[0]),
+                written=written,
+            )
             coo = batch.tocoo()
             row_parts.append(indices[coo.row])
             col_parts.append(coo.col)
@@ -457,3 +478,39 @@ class LocalArtifactStore:
         target = path / "embeddings.npz"
         sparse.save_npz(target, matrix)
         return str(target)
+
+    def _validate_batch_indices(
+        self,
+        indices: Any,
+        *,
+        n_rows: int,
+        written: np.ndarray,
+    ) -> np.ndarray:
+        raw = np.asarray(indices)
+        if raw.ndim != 1:
+            raise ValueError(f"Batch indices must be 1D; got shape {raw.shape}.")
+        if raw.dtype.kind not in {"i", "u"}:
+            raise ValueError("Batch indices must contain integers, not booleans or floats.")
+        if len(raw) != n_rows:
+            raise ValueError("Batch index count must match embedding row count.")
+        if np.any(raw < 0) or np.any(raw >= len(written)):
+            invalid = raw[(raw < 0) | (raw >= len(written))]
+            raise ValueError(
+                "Batch indices must be between 0 and n_samples - 1; "
+                f"invalid indices {invalid[:10]}."
+            )
+        normalized = raw.astype(np.intp, copy=False)
+        unique, counts = np.unique(normalized, return_counts=True)
+        within_batch = unique[counts > 1]
+        if within_batch.size:
+            raise ValueError(
+                "Duplicate embedding rows within one batch for sample indices "
+                f"{within_batch[:10]}."
+            )
+        across_batches = normalized[written[normalized]]
+        if across_batches.size:
+            raise ValueError(
+                "Duplicate embedding rows across batches for sample indices "
+                f"{across_batches[:10]}."
+            )
+        return normalized

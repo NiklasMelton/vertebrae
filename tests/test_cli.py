@@ -1078,6 +1078,9 @@ def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
         )
         == 0
     )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["groups_key"] = "groups/example"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
     assert (
         main(
             [
@@ -1103,7 +1106,81 @@ def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
     assert "#SBATCH --array=0-2" in script
     assert "python -m vertebrae.cli score" in script
     assert "--seed ${SEED}" in script
+    assert "--groups-key groups/example" in script
     assert "collect-scores" in script
+
+
+def test_cli_score_and_repeats_resolve_explicit_and_planned_groups(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "output_key": "embeddings/example",
+                "labels_key": "labels/example",
+                "groups_key": "groups/planned",
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = []
+
+    def fake_score(job, _store):
+        captured.append(job)
+        return {
+            "artifact_type": "metric_evaluation",
+            "output_key": job.output_key,
+            "metadata": {"path": Path("models/example"), "tags": {"b", "a"}},
+        }
+
+    def fake_scores(jobs, _store, _backend):
+        captured.extend(jobs)
+        return [{"output_key": job.output_key} for job in jobs]
+
+    monkeypatch.setattr("vertebrae.cli.score_embedding_artifact", fake_score)
+    monkeypatch.setattr("vertebrae.cli.score_embedding_artifacts", fake_scores)
+
+    assert main(["score", "--plan-json", str(plan_path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert captured[-1].groups_key == "groups/planned"
+    assert payload["metadata"]["path"] == "models/example"
+    assert payload["metadata"]["tags"] == ["a", "b"]
+
+    assert (
+        main(
+            [
+                "score",
+                "--plan-json",
+                str(plan_path),
+                "--groups-key",
+                "groups/explicit",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert captured[-1].groups_key == "groups/explicit"
+
+    assert (
+        main(
+            [
+                "score-repeats",
+                "--plan-json",
+                str(plan_path),
+                "--seed",
+                "3",
+                "--seed",
+                "5",
+            ]
+        )
+        == 0
+    )
+    repeat_plan = json.loads(capsys.readouterr().out)
+    assert repeat_plan["groups_key"] == "groups/planned"
+    assert [job.groups_key for job in captured[-2:]] == ["groups/planned"] * 2
 
 
 def test_cli_run_embedding_shards_local_backend(tmp_path, capsys):

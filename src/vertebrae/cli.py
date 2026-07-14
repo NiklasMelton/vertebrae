@@ -81,6 +81,7 @@ from vertebrae.structured import (
     keep_row_indices,
     select_frame_rows,
 )
+from vertebrae.utils.serialization import json_dumps_strict
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -283,6 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(score)
     score.add_argument("--embedding-key")
     score.add_argument("--labels-key")
+    score.add_argument("--groups-key")
     score.add_argument("--output-key")
     score.add_argument("--plan-json")
     score.add_argument("--scoring-config-pickle")
@@ -438,6 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(repeats)
     repeats.add_argument("--embedding-key")
     repeats.add_argument("--labels-key")
+    repeats.add_argument("--groups-key")
     repeats.add_argument("--plan-json")
     repeats.add_argument("--seed", action="append", type=int, default=[])
     repeats.add_argument("--repeats", type=int)
@@ -499,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(slurm_score)
     slurm_score.add_argument("--embedding-key")
     slurm_score.add_argument("--labels-key")
+    slurm_score.add_argument("--groups-key")
     slurm_score.add_argument("--plan-json")
     slurm_score.add_argument("--repeats", type=int, required=True)
     slurm_score.add_argument("--random-state", type=int, default=42)
@@ -922,17 +926,7 @@ def _cmd_materialize_structured(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
-    plan = _load_json(args.plan_json) if args.plan_json else {}
-    embedding_key = args.embedding_key or _resolve_embedding_key_from_plan(plan)
-    labels_key = args.labels_key or _resolve_related_key_from_plan(
-        plan,
-        embedding_key,
-        "labels_key",
-    )
-    if embedding_key is None:
-        raise ValueError("score requires --embedding-key or --plan-json.")
-    if labels_key is None:
-        raise ValueError("score requires --labels-key or --plan-json.")
+    embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
     output_key = args.output_key or scoring_artifact_key(embedding_key, seed=args.seed)
     scoring_config = (
         _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
@@ -943,6 +937,7 @@ def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
             embedding_key=embedding_key,
             labels_key=labels_key,
             output_key=output_key,
+            groups_key=groups_key,
             scoring_config=scoring_config,
             metrics=metrics,
             primary_metric=args.primary_metric,
@@ -1177,7 +1172,7 @@ def _cmd_compress(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
-    embedding_key, labels_key = _embedding_and_labels_from_args(args)
+    embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
     seeds = args.seed or _repeat_seeds(args.repeats, args.random_state)
     scoring_config = (
         _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
@@ -1185,6 +1180,7 @@ def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
     jobs = plan_scoring_jobs(
         embedding_key=embedding_key,
         labels_key=labels_key,
+        groups_key=groups_key,
         seeds=seeds,
         scoring_config=scoring_config,
         metrics=_metrics_from_args(args),
@@ -1199,6 +1195,7 @@ def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
         "storage_options": _artifact_store_options_from_args(args),
         "embedding_key": embedding_key,
         "labels_key": labels_key,
+        "groups_key": groups_key,
         "score_keys": [artifact["output_key"] for artifact in artifacts],
         "seeds": seeds,
         "primary_metric": args.primary_metric,
@@ -1301,7 +1298,7 @@ def _cmd_run_embedding_shards(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _cmd_slurm_score_array(args: argparse.Namespace) -> dict[str, Any]:
-    embedding_key, labels_key = _embedding_and_labels_from_args(args)
+    embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
     seeds = _repeat_seeds(args.repeats, args.random_state)
     script = _render_slurm_score_array_script(args=args, seeds=seeds)
     target = Path(args.script_output)
@@ -1311,6 +1308,7 @@ def _cmd_slurm_score_array(args: argparse.Namespace) -> dict[str, Any]:
         "script_path": str(target),
         "embedding_key": embedding_key,
         "labels_key": labels_key,
+        "groups_key": groups_key,
         "score_keys": [scoring_artifact_key(embedding_key, seed=seed) for seed in seeds],
         "seeds": seeds,
     }
@@ -1394,7 +1392,7 @@ def _render_slurm_array_script(
 
 
 def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int]) -> str:
-    embedding_key, labels_key = _embedding_and_labels_from_args(args)
+    embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
     lines = [
         "#!/usr/bin/env bash",
         f"#SBATCH --job-name={args.job_name}",
@@ -1417,6 +1415,12 @@ def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int])
             *_cache_flag_lines(args),
             f"  --embedding-key {embedding_key} \\",
             f"  --labels-key {labels_key} \\",
+        ]
+    )
+    if groups_key is not None:
+        lines.append(f"  --groups-key {groups_key} \\")
+    lines.extend(
+        [
             "  --seed ${SEED}",
             "",
             "# After the array completes, collect scores with:",
@@ -1539,7 +1543,7 @@ def _cache_flag_lines(args: argparse.Namespace, indent: bool = True) -> list[str
     return flags
 
 
-def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]:
+def _scoring_inputs_from_args(args: argparse.Namespace) -> tuple[str, str, Optional[str]]:
     plan = _load_json(args.plan_json) if getattr(args, "plan_json", None) else {}
     embedding_key = getattr(args, "embedding_key", None) or _resolve_embedding_key_from_plan(plan)
     labels_key = getattr(args, "labels_key", None) or _resolve_related_key_from_plan(
@@ -1547,11 +1551,16 @@ def _embedding_and_labels_from_args(args: argparse.Namespace) -> tuple[str, str]
         embedding_key,
         "labels_key",
     )
+    groups_key = getattr(args, "groups_key", None) or _resolve_related_key_from_plan(
+        plan,
+        embedding_key,
+        "groups_key",
+    )
     if embedding_key is None:
         raise ValueError("An embedding key or plan JSON is required.")
     if labels_key is None:
         raise ValueError("A labels key or plan JSON is required.")
-    return embedding_key, labels_key
+    return embedding_key, labels_key, groups_key
 
 
 def _resolve_embedding_key_from_plan(plan: dict[str, Any]) -> Optional[str]:
@@ -1649,7 +1658,7 @@ def _build_structured_aligner(helper_name: str, params: dict[str, Any]) -> Any:
 def _write_json_file(payload: dict[str, Any], path: str) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
+    target.write_text(json_dumps_strict(payload, indent=2, sort_keys=True) + "\n")
 
 
 def _benchmark_result_from_dict(
@@ -1743,7 +1752,7 @@ def _resolve_plan_output(
 
 
 def _write_json_payload(payload: dict[str, Any], output_json: Optional[str]) -> None:
-    text = json.dumps(payload, indent=2, sort_keys=True, default=str)
+    text = json_dumps_strict(payload, indent=2, sort_keys=True)
     if output_json:
         target = Path(output_json)
         target.parent.mkdir(parents=True, exist_ok=True)

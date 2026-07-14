@@ -76,6 +76,7 @@ def test_group_artifact_and_separatix_job_preserve_group_safety(
         ScoringJob(
             embedding_key=embedding_manifest["output_key"],
             labels_key=labels["output_key"],
+            groups_key=groups["output_key"],
             output_key=scoring_artifact_key(embedding_manifest["output_key"]),
         ),
         store,
@@ -91,6 +92,7 @@ def test_group_artifact_and_separatix_job_preserve_group_safety(
         ),
         store,
     )
+    result = benchmark_result_from_artifacts(score["output_key"], store)
 
     assert groups["output_key"] == groups_artifact_key(dataset)
     assert groups["n_groups"] == 4
@@ -98,6 +100,11 @@ def test_group_artifact_and_separatix_job_preserve_group_safety(
         dataset.groups().tolist()
     )
     assert diagnostic["diagnostic"]["metadata"]["grouped"] is True
+    assert score["groups_key"] == groups["output_key"]
+    assert result["dataset_summary"]["grouped"] is True
+    assert result["dataset_summary"]["group_name"] == "image_id"
+    assert result["dataset_summary"]["n_groups"] == 4
+    assert result["metadata"]["source_groups_key"] == groups["output_key"]
 
 
 def test_local_backend_submit_gather_status():
@@ -548,7 +555,7 @@ def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overl
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         identity=DatasetIdentity.ephemeral(),
-    )
+    ).with_groups(np.repeat(np.arange(4), 2), name="source")
     extractor = CallableExtractor(
         "repeat_score_artifact",
         lambda batch: np.asarray(batch),
@@ -564,9 +571,11 @@ def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overl
         batch_size=2,
     )
     label_manifest = materialize_label_artifact(dataset, store)
+    group_manifest = materialize_group_artifact(dataset, store)
     jobs = plan_scoring_jobs(
         embedding_key=embedding_manifest["output_key"],
         labels_key=label_manifest["output_key"],
+        groups_key=group_manifest["output_key"],
         seeds=[3, 5, 7],
     )
 
@@ -584,8 +593,31 @@ def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overl
 
     assert collection["artifact_type"] == "score_collection"
     assert collection["seeds"] == [3, 5, 7]
+    assert collection["groups_key"] == group_manifest["output_key"]
+    assert all(job.groups_key == group_manifest["output_key"] for job in jobs)
     assert result["metadata"]["distributed_artifacts"] is True
     assert result["extractor_results"][0]["stability"]["summary"]["mean"] > 0.0
+
+
+def test_collect_score_artifacts_rejects_mixed_group_protocols(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    for index, groups_key in enumerate(("groups/a", "groups/b")):
+        store.put_json(
+            f"scores/{index}",
+            {
+                "groups_key": groups_key,
+                "primary_metric": "overlap",
+                "metrics": {"overlap": {"score": 0.5, "warnings": []}},
+                "seed": index,
+            },
+        )
+
+    with pytest.raises(ValueError, match="share one groups protocol"):
+        collect_score_artifacts(
+            ["scores/0", "scores/1"],
+            store,
+            output_key="scores/collection",
+        )
 
 
 def test_benchmark_from_artifacts_carries_label_view_metadata(tmp_path, fake_overlapindex):

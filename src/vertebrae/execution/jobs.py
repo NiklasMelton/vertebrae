@@ -214,6 +214,7 @@ class ScoringJob:
     Attributes:
         embedding_key: Artifact-store key for embeddings.
         labels_key: Artifact-store key or URI for labels.
+        groups_key: Optional artifact-store key for aligned independence groups.
         output_key: Artifact-store key for scoring results.
         scoring_config: Optional OverlapIndex scoring configuration.
         metrics: Optional custom embedding metrics. OverlapIndex is always included.
@@ -225,6 +226,7 @@ class ScoringJob:
     embedding_key: str
     labels_key: str
     output_key: str
+    groups_key: Optional[str] = None
     scoring_config: Any = None
     metrics: Any = None
     primary_metric: str = "overlap"
