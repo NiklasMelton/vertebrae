@@ -149,13 +149,38 @@ slices. Sparse matrices are densified only inside the overlap scoring adapter, w
 `OverlapScoringConfig.max_dense_bytes` remains the admission limit.
 
 Subsample stability is also available when requested through `StabilityConfig`.
+It is target-aware by definition:
+
+- single-label targets are sampled per class;
+- multi-label targets are sampled to preserve every active label;
+- regression targets use constrained random samples containing at least one
+  non-constant target.
+
+Categorical repeats retain at least two occurrences of every original class or
+active label, while regression repeats retain at least three rows. The requested
+fraction is applied with `floor(count * subsample_fraction)`. If those minimums
+cannot be met, validation fails before any repeat is scored and recommends either
+a larger fraction or prototype mode; the subset is never silently expanded.
 
 ```python
 from vertebrae import OverlapScoringConfig, StabilityConfig
 
 scoring = OverlapScoringConfig()
 stability = StabilityConfig(mode="prototype", repeats=20, interval_level=0.95)
+subsample_stability = StabilityConfig(
+    mode="subsample",
+    repeats=20,
+    subsample_fraction=0.8,
+    random_state=42,
+)
 ```
+
+Scoring seeds and sampling seeds use independent deterministic streams. Subsample
+results record `sampling_seeds`, `effective_sample_counts`, and
+`effective_subsample_fractions` so the sampling plan can be reproduced and audited.
+`StabilityConfig.stratified` has been removed: categorical subsampling cannot opt
+out of target preservation. Because `vertebrae` is unreleased alpha software, old
+serialized configurations containing that field are intentionally unsupported.
 
 `vertebrae` reports these as stability summaries and stability intervals. They are
 not formal confidence intervals unless a different statistical protocol is added
