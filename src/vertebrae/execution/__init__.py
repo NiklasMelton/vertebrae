@@ -1,12 +1,15 @@
 """Execution backends."""
 
+from vertebrae.execution.base import BenchmarkExecutionError, ExecutionBackend
 from vertebrae.execution.dask_backend import DaskBackend, DaskJobHandle
 from vertebrae.execution.distributed import (
     benchmark_result_from_artifacts,
     collect_score_artifacts,
     compress_embedding_artifact,
+    compress_embedding_artifacts,
     compress_retrieval_embedding_artifacts,
     diagnose_embedding_artifact,
+    diagnose_embedding_artifacts,
     embedding_artifact_key,
     embedding_output_key,
     embedding_output_shard_key,
@@ -32,12 +35,15 @@ from vertebrae.execution.distributed import (
     retrieval_embedding_artifact_key,
     retrieval_embedding_shard_key,
     retrieval_scoring_artifact_key,
+    run_stability_artifact,
+    run_stability_artifacts,
     score_embedding_artifact,
     score_embedding_artifacts,
     score_retrieval_artifact,
     score_retrieval_artifacts,
     scoring_artifact_key,
     separatix_artifact_key,
+    stability_artifact_key,
     validate_embedding_label_artifacts,
 )
 from vertebrae.execution.factory import create_execution_backend
@@ -54,6 +60,7 @@ from vertebrae.execution.jobs import (
     ScoringJob,
     SeparatixJob,
     ShardSpec,
+    StabilityJob,
     ZeroShotCompressionJob,
     ZeroShotEmbeddingShardJob,
     ZeroShotScoringJob,
@@ -76,14 +83,17 @@ from vertebrae.execution.zero_shot import (
 )
 
 __all__ = [
+    "BenchmarkExecutionError",
     "CompressionJob",
     "RetrievalCompressionJob",
     "DaskBackend",
     "DaskJobHandle",
     "diagnose_embedding_artifact",
+    "diagnose_embedding_artifacts",
     "EmbeddingJob",
     "EmbeddingMergeJob",
     "EmbeddingShardJob",
+    "ExecutionBackend",
     "RetrievalEmbeddingShardJob",
     "LocalBackend",
     "LocalJobHandle",
@@ -97,6 +107,7 @@ __all__ = [
     "ZeroShotEmbeddingShardJob",
     "ZeroShotScoringJob",
     "SeparatixJob",
+    "StabilityJob",
     "ShardSpec",
     "embedding_artifact_key",
     "embedding_output_key",
@@ -105,6 +116,7 @@ __all__ = [
     "benchmark_result_from_artifacts",
     "collect_score_artifacts",
     "compress_embedding_artifact",
+    "compress_embedding_artifacts",
     "compress_retrieval_embedding_artifacts",
     "labels_artifact_key",
     "groups_artifact_key",
@@ -124,6 +136,8 @@ __all__ = [
     "plan_scoring_jobs",
     "score_embedding_artifact",
     "score_embedding_artifacts",
+    "run_stability_artifact",
+    "run_stability_artifacts",
     "scoring_artifact_key",
     "retrieval_scoring_artifact_key",
     "retrieval_compression_artifact_key",
@@ -145,6 +159,7 @@ __all__ = [
     "zero_shot_protocol_artifact_key",
     "zero_shot_scoring_artifact_key",
     "separatix_artifact_key",
+    "stability_artifact_key",
     "validate_embedding_label_artifacts",
     "create_execution_backend",
 ]

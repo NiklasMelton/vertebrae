@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import tempfile
 import warnings
 from pathlib import Path
@@ -286,6 +287,15 @@ class LocalArtifactStore:
 
         with (self._path(key) / "metadata.json").open("r", encoding="utf-8") as f:
             return json.load(f)
+
+    def delete_prefix(self, prefix: str) -> None:
+        """Delete every local artifact beneath a key prefix."""
+
+        path = self._path(prefix)
+        if path == self.root:
+            raise ValueError("Refusing to delete the artifact-store root.")
+        if path.exists():
+            shutil.rmtree(path)
 
     def _path(self, key: str) -> Path:
         clean_key = key.strip("/").replace("..", "__")

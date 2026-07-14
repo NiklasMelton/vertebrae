@@ -5,21 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 local docs builds
-    import tomli as tomllib
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 project = "vertebrae"
 copyright = "2026, Niklas Melton"
 author = "Niklas Melton"
 
-with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as pyproject_file:
-    pyproject = tomllib.load(pyproject_file)
+from vertebrae import __version__  # noqa: E402
 
-release = pyproject.get("project", {}).get("version") or pyproject["tool"]["poetry"]["version"]
+release = __version__
 version = release
 
 extensions = [

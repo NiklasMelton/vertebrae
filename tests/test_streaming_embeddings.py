@@ -80,28 +80,9 @@ def test_streaming_benchmark_materializes_embeddings_once_per_sample(tmp_path, f
     assert (tmp_path / metadata["cache_key"] / "embeddings.npy").exists()
 
 
-def test_local_benchmark_rejects_partial_embedding_shards(fake_overlapindex):
-    dataset = BenchmarkDataset.from_arrays(
-        np.arange(12).reshape(4, 3),
-        ["a", "a", "b", "b"],
-        modality="tabular",
-        identity=DatasetIdentity.ephemeral(),
-    )
-    extractor = CallableExtractor(
-        "streaming_callable",
-        lambda batch: np.asarray(batch)[:, :2],
-        streaming_safe=True,
-    )
-
-    with pytest.raises(ValueError, match="complete embedding artifact"):
-        Evaluator(
-            dataset=dataset,
-            extractor=extractor,
-            scoring_config=OverlapScoringConfig(k=1),
-            stability_config=StabilityConfig(enabled=False),
-            cache_config=CacheConfig(enabled=False),
-            embedding_config=EmbeddingConfig(
-                batch_size=2,
-                shard=ShardSpec(total_shards=2, shard_index=0),
-            ),
-        ).run()
+def test_embedding_config_no_longer_accepts_partial_shards():
+    with pytest.raises(TypeError, match="unexpected keyword argument 'shard'"):
+        EmbeddingConfig(
+            batch_size=2,
+            shard=ShardSpec(total_shards=2, shard_index=0),
+        )

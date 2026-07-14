@@ -361,18 +361,53 @@ class EmbeddingConfig:
         batch_size: Number of samples to pass to streaming-safe extractors.
         streaming_enabled: Whether streaming-safe extractors should be embedded
             batch-by-batch instead of in one full transform call.
-        shard: Optional deterministic shard assignment. Local benchmarking requires
-            a complete shard, but this field is available for future distributed
-            embedding jobs.
     """
 
     batch_size: int = 128
     streaming_enabled: bool = True
-    shard: Optional[Any] = None
 
     def __post_init__(self) -> None:
         if self.batch_size < 1:
             raise ValueError("EmbeddingConfig.batch_size must be >= 1.")
+
+
+@dataclass(frozen=True)
+class ExecutionConfig:
+    """Artifact-backed benchmark execution settings.
+
+    Args:
+        total_shards: Requested number of deterministic embedding shards.
+        dispatch_stages: Stages submitted through the configured backend. Omitted
+            stages use the same artifact jobs synchronously on the driver.
+        retain_intermediate_artifacts: Whether to retain shard and run-scoped
+            artifacts after result construction.
+    """
+
+    total_shards: int = 1
+    dispatch_stages: Tuple[str, ...] = (
+        "embedding",
+        "compression",
+        "scoring",
+        "diagnostics",
+    )
+    retain_intermediate_artifacts: bool = False
+
+    def __post_init__(self) -> None:
+        if isinstance(self.total_shards, bool) or not isinstance(self.total_shards, int):
+            raise TypeError("ExecutionConfig.total_shards must be an integer.")
+        if self.total_shards < 1:
+            raise ValueError("ExecutionConfig.total_shards must be >= 1.")
+        allowed = {"embedding", "compression", "scoring", "diagnostics"}
+        stages = tuple(self.dispatch_stages)
+        if any(not isinstance(stage, str) for stage in stages):
+            raise TypeError("ExecutionConfig.dispatch_stages entries must be strings.")
+        if len(stages) != len(set(stages)):
+            raise ValueError("ExecutionConfig.dispatch_stages must not contain duplicates.")
+        unknown = sorted(set(stages) - allowed)
+        if unknown:
+            raise ValueError(
+                "ExecutionConfig.dispatch_stages contains unknown stages: " f"{unknown}."
+            )
 
 
 @dataclass

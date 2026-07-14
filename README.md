@@ -686,7 +686,8 @@ alongside the runnable
 - optional embedding compression and compressed-variant comparisons,
 - local embedding caching and reproducible artifacts,
 - artifact-backed distributed embedding and scoring through the `vertebrae` CLI,
-- optional Ray and Dask backends for distributed execution,
+- artifact-backed `Benchmark.run()` dispatch through explicit local, Ray, and Dask
+  backends,
 - local paths, `s3://...`, and `gs://...` artifact stores.
 
 Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,

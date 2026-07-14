@@ -204,6 +204,27 @@ class S3ArtifactStore:
         payload = self._get_bytes(self._artifact_object_key(key, "metadata.json"))
         return json.loads(payload.decode("utf-8"))
 
+    def delete_prefix(self, prefix: str) -> None:
+        """Delete every S3 object beneath an artifact key prefix."""
+
+        clean = prefix.strip("/").replace("..", "__")
+        if not clean:
+            raise ValueError("Refusing to delete the artifact-store root.")
+        object_prefix = "/".join(part for part in (self.prefix, clean) if part) + "/"
+        client = self._client_or_raise()
+        continuation = None
+        while True:
+            kwargs: dict[str, Any] = {"Bucket": self.bucket, "Prefix": object_prefix}
+            if continuation is not None:
+                kwargs["ContinuationToken"] = continuation
+            response = client.list_objects_v2(**kwargs)
+            objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
+            if objects:
+                client.delete_objects(Bucket=self.bucket, Delete={"Objects": objects})
+            if not response.get("IsTruncated"):
+                break
+            continuation = response.get("NextContinuationToken")
+
     def _read_array_manifest(self, key: str) -> ArrayArtifactManifest:
         manifest_key = self._artifact_object_key(key, ARRAY_MANIFEST_FILENAME)
         if not self._object_exists(manifest_key):

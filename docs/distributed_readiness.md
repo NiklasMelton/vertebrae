@@ -85,6 +85,37 @@ use the same `--labels-key` arguments for every target type.
 
 The concrete local distributed flow is:
 
+For an ordinary labeled benchmark, pass a backend explicitly to make `Benchmark.run()`
+orchestrate the complete artifact-backed pipeline. Omitting `execution` retains the
+direct in-process path.
+
+```python
+from vertebrae import Benchmark, ExecutionConfig, LocalBackend
+
+result = Benchmark(
+    dataset,
+    [extractor],
+    execution=LocalBackend(n_jobs=4),
+    execution_config=ExecutionConfig(total_shards=4),
+).run()
+```
+
+`ExecutionConfig.dispatch_stages` selects which of `embedding`, `compression`,
+`scoring`, and `diagnostics` use the backend; omitted stages execute the same artifact
+jobs on the driver. Extractors are fitted once on the complete selected dataset before
+their fitted state is sent to transform shards. Structured and segmentation workflows
+dispatch one materialization job per extractor because unit and spatial alignment are
+global, then return ordinary benchmark results.
+
+Dispatched runs always require an artifact store. When `CacheConfig.enabled=False`,
+vertebrae uses a unique `runs/<run-id>` namespace and removes it after constructing the
+result. Set `retain_intermediate_artifacts=True` to retain run-scoped data and embedding
+shards for inspection. Backend or serialization failures raise `BenchmarkExecutionError`;
+they never silently rerun locally.
+
+The lower-level equivalent remains available when callers need direct control of every
+job and manifest:
+
 ```python
 from vertebrae import BenchmarkDataset, LocalBackend
 from vertebrae.cache.local_store import LocalArtifactStore
@@ -107,8 +138,8 @@ For HPC schedulers, each array task can run one `EmbeddingShardJob` using
 the label artifact through `score_embedding_artifact(...)`. Ray and Dask backends
 submit the same job objects and use the same manifests.
 
-For Ray or Dask clusters, `cache_dir` may point either to a shared filesystem path or
-to a cloud object-store URI such as `s3://bucket/prefix` or `gs://bucket/prefix`.
+For Ray or Dask clusters, `cache_dir` must point to a filesystem visible to every worker
+or to a cloud object-store URI such as `s3://bucket/prefix` or `gs://bucket/prefix`.
 Workers must be able to authenticate to the selected object store.
 
 Dense and sparse arrays are committed through an `array-manifest.json` stored beside

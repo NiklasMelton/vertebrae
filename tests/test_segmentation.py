@@ -6,6 +6,8 @@ from vertebrae import (
     CacheConfig,
     CallableSpatialExtractor,
     DatasetIdentity,
+    ExecutionConfig,
+    LocalBackend,
     ResourceProfilingConfig,
     SegmentationConfig,
     SegmentationDataset,
@@ -122,6 +124,28 @@ def test_segmentation_benchmark_reuses_standard_scoring_pipeline(
     assert item.resource_profile.inference.status == "measured"
     assert item.resource_profile.context["call_types"] == ["transform_spatial"]
     assert item.resource_profile.embedding.evaluated_bytes == 8 * 3 * 8
+
+
+def test_segmentation_benchmark_dispatches_as_an_extractor_job(tmp_path, fake_overlapindex):
+    result = Benchmark(
+        dataset=_dataset(),
+        extractors=[_extractor()],
+        execution=LocalBackend(),
+        execution_config=ExecutionConfig(total_shards=4),
+        segmentation_config=SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            background_mode="include_excluded",
+        ),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+    ).run()
+
+    assert result.extractor_results[0].name == "spatial:layer"
+    assert result.dataset_summary["segmentation_outputs"][0]["retained_tokens"] == 8
+    assert result.metadata["execution"]["artifact_backed"] is True
+    assert result.metadata["execution"]["effective_total_shards"] == [1]
 
 
 def test_segmentation_artifacts_have_independent_output_boundaries(tmp_path):

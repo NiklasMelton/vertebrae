@@ -179,3 +179,8 @@ class ArtifactStore(Protocol):
         """Load a JSON metadata artifact by key."""
 
         ...
+
+    def delete_prefix(self, prefix: str) -> None:
+        """Delete every artifact stored beneath a key prefix."""
+
+        ...

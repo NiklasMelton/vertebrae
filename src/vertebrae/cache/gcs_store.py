@@ -195,6 +195,17 @@ class GCSArtifactStore:
         payload = self._get_bytes(self._artifact_blob_name(key, "metadata.json"))
         return json.loads(payload.decode("utf-8"))
 
+    def delete_prefix(self, prefix: str) -> None:
+        """Delete every GCS blob beneath an artifact key prefix."""
+
+        clean = prefix.strip("/").replace("..", "__")
+        if not clean:
+            raise ValueError("Refusing to delete the artifact-store root.")
+        blob_prefix = "/".join(part for part in (self.prefix, clean) if part) + "/"
+        bucket = self._bucket_or_raise()
+        for blob in list(bucket.list_blobs(prefix=blob_prefix)):
+            blob.delete()
+
     def _read_array_manifest(self, key: str) -> ArrayArtifactManifest:
         manifest_name = self._artifact_blob_name(key, ARRAY_MANIFEST_FILENAME)
         if not self._blob_exists(manifest_name):

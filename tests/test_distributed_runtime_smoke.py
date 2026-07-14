@@ -4,9 +4,15 @@ import os
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, DatasetIdentity
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.config import OverlapScoringConfig
+from vertebrae.config import (
+    CacheConfig,
+    ExecutionConfig,
+    OverlapScoringConfig,
+    SeparatixConfig,
+    StabilityConfig,
+)
 from vertebrae.execution import (
     DaskBackend,
     RayBackend,
@@ -132,6 +138,26 @@ def _assert_distributed_runtime_roundtrip(backend, tmp_path, extractor_name):
     )
     assert collection["repeats"] == 2
     assert len(collection["scores"]) == 2
+
+    benchmark_result = Benchmark(
+        dataset,
+        [
+            CallableExtractor(
+                f"{extractor_name}_benchmark",
+                transform_fn=distributed_runtime_transform,
+                streaming_safe=True,
+            )
+        ],
+        scoring_config=OverlapScoringConfig(k=1),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(cache_dir=str(tmp_path / f"{extractor_name}_benchmark")),
+        execution=backend,
+        execution_config=ExecutionConfig(total_shards=4),
+    ).run()
+
+    assert benchmark_result.metadata["execution"]["artifact_backed"] is True
+    assert len(benchmark_result.extractor_results) == 1
 
 
 def distributed_runtime_transform(batch):
