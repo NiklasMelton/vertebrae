@@ -220,7 +220,7 @@ class ZeroShotBenchmark:
                 side="samples",
                 branch=candidate.sample_branch,
                 modality=self.dataset.modality,
-                identity=self.dataset.dataset.fingerprint(),
+                identity=self.dataset.dataset.identity_key(),
                 recipe=recipe,
                 profiler=sample_profiler,
             )
@@ -247,7 +247,7 @@ class ZeroShotBenchmark:
                 side="prompts",
                 branch=candidate.text_branch,
                 modality="text",
-                identity=self.dataset.fingerprint(),
+                identity=self.dataset.protocol_fingerprint(),
                 recipe=recipe,
                 profiler=prompt_profiler,
             )
@@ -306,8 +306,8 @@ class ZeroShotBenchmark:
                             "sample_branch": candidate.sample_branch,
                             "text_branch": candidate.text_branch,
                             "sample_modality": self.dataset.modality,
-                            "source_dataset_fingerprint": self.dataset.dataset.fingerprint(),
-                            "protocol_fingerprint": self.dataset.fingerprint(),
+                            "source_dataset_identity_key": self.dataset.dataset.identity_key(),
+                            "protocol_fingerprint": self.dataset.protocol_fingerprint(),
                             "sample_embedding_dim": int(sample_embeddings.shape[1]),
                             "prompt_embedding_dim": int(prompt_embeddings.shape[1]),
                         },

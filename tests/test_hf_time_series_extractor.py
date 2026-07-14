@@ -4,7 +4,7 @@ import types
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import HFTimeSeriesExtractor
 
@@ -128,6 +128,7 @@ def test_hf_time_series_preserves_optional_inputs(fake_time_series_modules):
         labels=["a", "a", "b", "b"],
         observed_mask=np.ones((4, 3, 2), dtype=float),
         time_features=np.arange(24, dtype=float).reshape(4, 3, 2),
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFTimeSeriesExtractor(name="ts", model_id="fake-timeseries", batch_size=2)
 
@@ -191,6 +192,7 @@ def test_hf_time_series_evaluator_workflow(fake_time_series_modules, fake_overla
             dtype=float,
         ),
         labels=["left", "left", "right", "right"],
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFTimeSeriesExtractor(
         name="ts",

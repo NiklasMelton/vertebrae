@@ -4,7 +4,7 @@ import types
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import HFAudioExtractor
 
@@ -188,6 +188,7 @@ def test_hf_audio_uses_dataset_sampling_rate(fake_audio_modules):
         ],
         ["speech", "speech", "music", "music"],
         sampling_rate=22_050,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFAudioExtractor(name="audio", model_id="fake-audio", batch_size=2)
 
@@ -223,6 +224,7 @@ def test_hf_audio_evaluator_workflow(fake_audio_modules, fake_overlapindex):
         ],
         ["left", "left", "right", "right"],
         sampling_rate=16_000,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFAudioExtractor(
         name="audio",

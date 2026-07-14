@@ -8,6 +8,7 @@ from scipy import sparse
 from vertebrae import (
     BenchmarkDataset,
     CacheConfig,
+    DatasetIdentity,
     Evaluator,
     ZeroShotBenchmark,
     ZeroShotDataset,
@@ -232,6 +233,7 @@ def test_openclip_extractor_emits_image_and_text_branches(
             dataset["image"],
             ["left", "left", "right", "right"],
             modality="image",
+            identity=DatasetIdentity.ephemeral(),
         ),
         ["{label}"],
     )
@@ -298,6 +300,7 @@ def test_siglip_extractor_uses_hf_multimodal_delegate(fake_torch, fake_overlapin
             [np.zeros((2, 2, 3), dtype=np.uint8)] * 4,
             ["left", "left", "right", "right"],
             modality="image",
+            identity=DatasetIdentity.ephemeral(),
         ),
         ["{label}"],
     )
@@ -538,6 +541,7 @@ def test_hosted_embedding_extractor_retries_and_skips_cache(tmp_path, fake_overl
         np.asarray(["one", "two", "three", "four"], dtype=object),
         ["a", "a", "b", "b"],
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HostedEmbeddingExtractor(
         "hosted",

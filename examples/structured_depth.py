@@ -7,6 +7,7 @@ from vertebrae import (
     Benchmark,
     BenchmarkDataset,
     CallableStructuredExtractor,
+    DatasetIdentity,
     DepthAdapter,
     DepthAnnotation,
 )
@@ -26,6 +27,7 @@ def main() -> None:
         target_type="regression",
         target_names=["scene_depth"],
         metadata={"example": "structured_depth"},
+        identity=DatasetIdentity.declared("structured-depth-example", "1"),
     )
     dataset = DepthAdapter().attach(
         dataset,

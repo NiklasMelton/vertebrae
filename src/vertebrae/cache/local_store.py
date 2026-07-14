@@ -1,12 +1,20 @@
 """Local filesystem artifact store."""
 
 import json
+import os
+import tempfile
+import warnings
 from pathlib import Path
 from typing import Any, Iterable, Tuple
 
 import numpy as np
 
-from vertebrae.cache.artifact_store import ArtifactStat, ArtifactStoreConfig
+from vertebrae.cache.artifact_store import (
+    ARRAY_MANIFEST_FILENAME,
+    ArrayArtifactManifest,
+    ArtifactStat,
+    ArtifactStoreConfig,
+)
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import is_sparse_matrix
@@ -38,7 +46,11 @@ class LocalArtifactStore:
         """
 
         path = self._path(key)
-        return (path / "embeddings.npy").exists() or (path / "embeddings.npz").exists()
+        manifest_path = path / ARRAY_MANIFEST_FILENAME
+        if not manifest_path.exists():
+            return False
+        manifest = self._read_array_manifest(path)
+        return (path / manifest.filename).exists()
 
     def put_array(self, key: str, arr: Any) -> str:
         """Store a dense or sparse embedding matrix.
@@ -53,15 +65,33 @@ class LocalArtifactStore:
 
         path = self._path(key)
         path.mkdir(parents=True, exist_ok=True)
-        if is_sparse_matrix(arr):
-            from scipy import sparse
+        sparse_value = is_sparse_matrix(arr)
+        filename = "embeddings.npz" if sparse_value else "embeddings.npy"
+        with tempfile.TemporaryDirectory(dir=path) as tmpdir:
+            prepared = Path(tmpdir) / filename
+            if sparse_value:
+                from scipy import sparse
 
-            target = path / "embeddings.npz"
-            sparse.save_npz(target, arr)
-            return str(target)
-        target = path / "embeddings.npy"
-        np.save(target, np.asarray(arr))
-        return str(target)
+                sparse.save_npz(prepared, arr)
+                shape = tuple(int(size) for size in arr.shape)
+                dtype = str(arr.dtype)
+                sparse_format = str(arr.getformat())
+            else:
+                array = np.asarray(arr)
+                with prepared.open("wb") as file:
+                    np.save(file, array)
+                    file.flush()
+                    os.fsync(file.fileno())
+                shape = tuple(int(size) for size in array.shape)
+                dtype = str(array.dtype)
+                sparse_format = None
+            return self._publish_prepared_array(
+                path,
+                prepared,
+                shape=shape,
+                dtype=dtype,
+                sparse_format=sparse_format,
+            )
 
     def put_array_batches(
         self,
@@ -94,21 +124,42 @@ class LocalArtifactStore:
         except StopIteration as exc:
             raise ValueError("At least one embedding batch is required.") from exc
 
-        if is_sparse_matrix(first_batch):
-            return self._put_sparse_batches(
+        with tempfile.TemporaryDirectory(dir=path) as tmpdir:
+            staging = Path(tmpdir)
+            if is_sparse_matrix(first_batch):
+                prepared = Path(
+                    self._put_sparse_batches(
+                        staging,
+                        [(first_indices, first_batch), *list(iterator)],
+                        n_samples=n_samples,
+                        require_complete=require_complete,
+                    )
+                )
+                shape = (int(n_samples), int(first_batch.shape[1]))
+                dtype = str(first_batch.dtype)
+                sparse_format = "csr"
+            else:
+                prepared = Path(
+                    self._put_dense_batches(
+                        staging,
+                        first_indices=first_indices,
+                        first_batch=first_batch,
+                        remaining=iterator,
+                        n_samples=n_samples,
+                        require_complete=require_complete,
+                    )
+                )
+                first = np.asarray(first_batch)
+                shape = (int(n_samples), int(first.shape[1]))
+                dtype = str(first.dtype)
+                sparse_format = None
+            return self._publish_prepared_array(
                 path,
-                [(first_indices, first_batch), *list(iterator)],
-                n_samples=n_samples,
-                require_complete=require_complete,
+                prepared,
+                shape=shape,
+                dtype=dtype,
+                sparse_format=sparse_format,
             )
-        return self._put_dense_batches(
-            path,
-            first_indices=first_indices,
-            first_batch=first_batch,
-            remaining=iterator,
-            n_samples=n_samples,
-            require_complete=require_complete,
-        )
 
     def get_array(self, key: str) -> Any:
         """Load a dense or sparse embedding matrix.
@@ -121,26 +172,33 @@ class LocalArtifactStore:
         """
 
         path = self._path(key)
-        sparse_target = path / "embeddings.npz"
-        if sparse_target.exists():
+        manifest = self._read_array_manifest(path)
+        target = path / manifest.filename
+        if not target.exists():
+            raise FileNotFoundError(
+                f"Array manifest for key {key} references missing file {manifest.filename}."
+            )
+        if manifest.storage_format == "npz":
             from scipy import sparse
 
-            return sparse.load_npz(sparse_target)
-        return np.load(path / "embeddings.npy", allow_pickle=False)
+            return sparse.load_npz(target)
+        return np.load(target, allow_pickle=False)
 
     def stat_array(self, key: str) -> ArtifactStat:
         """Return the persisted array file size without loading it."""
 
         path = self._path(key)
-        for filename, storage_format in (("embeddings.npz", "npz"), ("embeddings.npy", "npy")):
-            target = path / filename
-            if target.exists():
-                return ArtifactStat(
-                    uri=str(target),
-                    size_bytes=int(target.stat().st_size),
-                    storage_format=storage_format,
-                )
-        raise FileNotFoundError(f"No array artifact found for key {key}.")
+        manifest = self._read_array_manifest(path)
+        target = path / manifest.filename
+        if not target.exists():
+            raise FileNotFoundError(
+                f"Array manifest for key {key} references missing file {manifest.filename}."
+            )
+        return ArtifactStat(
+            uri=str(target),
+            size_bytes=int(target.stat().st_size),
+            storage_format=manifest.storage_format,
+        )
 
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as a JSON artifact.
@@ -228,6 +286,73 @@ class LocalArtifactStore:
     def _path(self, key: str) -> Path:
         clean_key = key.strip("/").replace("..", "__")
         return self.root / clean_key
+
+    def _read_array_manifest(self, path: Path) -> ArrayArtifactManifest:
+        manifest_path = path / ARRAY_MANIFEST_FILENAME
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"No committed array manifest found under {path}.")
+        try:
+            with manifest_path.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Array manifest under {path} is not valid JSON.") from exc
+        return ArrayArtifactManifest.from_dict(payload)
+
+    def _publish_prepared_array(
+        self,
+        path: Path,
+        prepared: Path,
+        *,
+        shape: tuple[int, ...],
+        dtype: str,
+        sparse_format: Any,
+    ) -> str:
+        path.mkdir(parents=True, exist_ok=True)
+        target = path / prepared.name
+        with prepared.open("rb") as file:
+            os.fsync(file.fileno())
+        os.replace(prepared, target)
+        manifest = ArrayArtifactManifest(
+            filename=target.name,
+            storage_format="npz" if target.suffix == ".npz" else "npy",
+            shape=shape,
+            dtype=dtype,
+            size_bytes=int(target.stat().st_size),
+            sparse_format=sparse_format,
+        )
+        self._write_array_manifest(path, manifest)
+        stale = path / ("embeddings.npy" if manifest.storage_format == "npz" else "embeddings.npz")
+        if stale.exists():
+            try:
+                stale.unlink()
+            except OSError as exc:
+                warnings.warn(
+                    f"Committed array {target} but could not remove stale {stale}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        return str(target)
+
+    def _write_array_manifest(self, path: Path, manifest: ArrayArtifactManifest) -> None:
+        target = path / ARRAY_MANIFEST_FILENAME
+        descriptor = None
+        temporary_name = None
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{ARRAY_MANIFEST_FILENAME}.", suffix=".tmp", dir=path
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                descriptor = None
+                json.dump(manifest.to_dict(), file, indent=2, sort_keys=True)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_name, target)
+            temporary_name = None
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if temporary_name is not None:
+                Path(temporary_name).unlink(missing_ok=True)
 
     def _put_dense_batches(
         self,

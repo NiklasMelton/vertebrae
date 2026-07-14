@@ -7,7 +7,7 @@ Requires optional dependencies and a model available locally or from Hugging Fac
 
 from _common import CACHE_DIR, ensure_output_dir, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import SentenceTransformerExtractor
 
@@ -23,7 +23,9 @@ def main() -> None:
         "puppy chased a ball outside",
     ]
     labels = ["legal", "legal", "finance", "finance", "animal", "animal"]
-    dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
+    dataset = BenchmarkDataset.from_arrays(
+        texts, labels, modality="text", identity=DatasetIdentity.ephemeral()
+    )
 
     extractor = SentenceTransformerExtractor(
         name="minilm",

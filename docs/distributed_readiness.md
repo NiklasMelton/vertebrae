@@ -111,6 +111,15 @@ For Ray or Dask clusters, `cache_dir` may point either to a shared filesystem pa
 to a cloud object-store URI such as `s3://bucket/prefix` or `gs://bucket/prefix`.
 Workers must be able to authenticate to the selected object store.
 
+Dense and sparse arrays are committed through an `array-manifest.json` stored beside
+the physical `embeddings.npy` or `embeddings.npz` object. Readers use only the
+manifest-selected representation; they do not probe extensions. Local writes publish
+data and the manifest with atomic same-directory replacements, while S3 and GCS
+publish the complete data object before the manifest commit point. Consequently,
+switching a key between dense and sparse formats cannot return a stale representation.
+Array artifacts created before this manifest format are cache misses and may be
+deleted rather than migrated.
+
 The same flow is available from the CLI. First serialize a dataset and extractor with
 `pickle`, then plan, run shards, and merge:
 

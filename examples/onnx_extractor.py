@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 from _common import ensure_output_dir, make_separated_blobs, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import ONNXExtractor
 
@@ -51,6 +51,7 @@ def main() -> None:
         labels,
         modality="tabular",
         metadata={"example": "onnx_extractor"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     def input_fn(batch: np.ndarray) -> dict[str, np.ndarray]:

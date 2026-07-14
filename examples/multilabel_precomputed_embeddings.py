@@ -3,7 +3,7 @@
 import numpy as np
 from _common import ensure_output_dir
 
-from vertebrae import CacheConfig, Evaluator, StabilityConfig
+from vertebrae import CacheConfig, DatasetIdentity, Evaluator, StabilityConfig
 from vertebrae.datasets import BenchmarkDataset
 from vertebrae.extractors import PrecomputedExtractor
 
@@ -37,7 +37,9 @@ def main() -> None:
         ("animal", "vehicle"),
         ("indoor", "animal"),
     ]
-    dataset = BenchmarkDataset.from_embeddings(embeddings=embeddings, labels=labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings=embeddings, labels=labels, identity=DatasetIdentity.ephemeral()
+    )
     result = Evaluator(
         dataset=dataset,
         extractor=PrecomputedExtractor(name="toy_multilabel_embeddings"),

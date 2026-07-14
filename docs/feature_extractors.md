@@ -107,13 +107,14 @@ For paired image-text models, `HFMultimodalExtractor` works with aligned
 structured dataset inputs and explicit named branch or fused outputs:
 
 ```python
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 from vertebrae.extractors import HFMultimodalExtractor
 
 dataset = BenchmarkDataset.from_multimodal(
     inputs={"image": images, "caption": captions},
     labels=labels,
     modalities={"image": "image", "caption": "text"},
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 
 extractor = HFMultimodalExtractor(

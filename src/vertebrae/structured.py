@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 import numpy as np
 
 from vertebrae.datasets.base import BenchmarkDataset, TargetView
+from vertebrae.datasets.identity import DatasetIdentity
 from vertebrae.utils.labels import labels_from_jsonable
 
 
@@ -280,6 +281,16 @@ def materialize_structured_outputs(
             embeddings=np.vstack([row["embedding"] for row in rows]),
             labels=np.asarray([row["label"] for row in rows], dtype=object),
             unit_ids=[row["unit_id"] for row in rows],
+            identity=DatasetIdentity.derived(
+                dataset.identity_key(),
+                "structured_materialization",
+                {
+                    "output_name": output_name,
+                    "output_recipe": bucket["recipe"],
+                    "unit_type": bucket["unit_type"],
+                    "provenance": [_provenance(row) for row in rows],
+                },
+            ),
             parent_ids=[row["parent_id"] for row in rows],
             unit_type=bucket["unit_type"],
             positions=[row["position"] for row in rows],
@@ -293,7 +304,7 @@ def materialize_structured_outputs(
                     "n_units": len(rows),
                 },
                 "structured_output": output_name,
-                "source_dataset_fingerprint": dataset.fingerprint(),
+                "source_dataset_identity_key": dataset.identity_key(),
             },
             label_names=rows[0]["label_names"],
             target_type=rows[0]["target_type"],

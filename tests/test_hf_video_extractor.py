@@ -4,7 +4,7 @@ import types
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import HFVideoExtractor
 
@@ -305,6 +305,7 @@ def test_hf_video_accepts_dataset_frame_arrays(fake_video_modules):
         ],
         ["left", "left", "right", "right"],
         frame_rate=24.0,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFVideoExtractor("video", "fake-video", batch_size=2, num_frames=4)
 
@@ -341,6 +342,7 @@ def test_hf_video_evaluator_workflow(fake_video_modules, fake_overlapindex):
         ],
         ["left", "left", "right", "right"],
         frame_rate=24.0,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFVideoExtractor(
         name="video",

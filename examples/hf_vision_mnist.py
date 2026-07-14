@@ -15,7 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import HFVisionExtractor, SklearnExtractor
 
@@ -62,6 +62,7 @@ def main() -> None:
             "source": DATASET_ID,
             "model_ids": [spec["model_id"] for spec in MODEL_SPECS],
         },
+        identity=DatasetIdentity.ephemeral(),
     )
 
     try:

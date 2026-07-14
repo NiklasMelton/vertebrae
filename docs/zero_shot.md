@@ -15,9 +15,9 @@ Prompts are explicit protocol input. Use fully rendered strings when classes nee
 domain-specific language, or explicitly provide templates:
 
 ```python
-from vertebrae import BenchmarkDataset, ZeroShotBenchmark, ZeroShotDataset
+from vertebrae import BenchmarkDataset, ZeroShotBenchmark, ZeroShotDataset, DatasetIdentity
 
-dataset = BenchmarkDataset.from_arrays(images, labels, modality="image")
+dataset = BenchmarkDataset.from_arrays(images, labels, modality="image", identity=DatasetIdentity.declared("example-dataset", "1"))
 protocol = ZeroShotDataset.from_templates(
     dataset,
     templates=("a photo of {label}", "a close-up of {label}"),
@@ -106,7 +106,7 @@ features for a separately trained downstream model.
 
 Compression variants are supported. Vertebrae fits the label-free compressor on sample
 embeddings and applies the same fitted transform to prompt embeddings before building
-prototypes. Sample embedding cache keys use the source dataset fingerprint, so changing
+prototypes. Sample embedding cache keys use the source dataset identity, so changing
 only prompts can reuse sample embeddings.
 
 For `CallableRetrievalExtractor`, top-level importable callables are recorded in its

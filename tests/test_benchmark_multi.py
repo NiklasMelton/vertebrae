@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import (
     CacheConfig,
     LabelViewConfig,
@@ -28,7 +28,9 @@ COARSE_TARGETS = [
 def test_multi_extractor_benchmark(fake_overlapindex):
     X = np.arange(60, dtype=float).reshape(20, 3)
     y = np.array(["a"] * 10 + ["b"] * 10)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    dataset = BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    )
 
     benchmark = Benchmark(
         dataset,
@@ -50,7 +52,9 @@ def test_multi_extractor_benchmark(fake_overlapindex):
 def test_hierarchy_label_views_produce_separate_result_variants(fake_overlapindex):
     X = np.arange(72, dtype=float).reshape(24, 3)
     y = np.array(["husky"] * 6 + ["pug"] * 6 + ["sedan"] * 6 + ["suv"] * 6)
-    dataset = BenchmarkDataset.from_arrays(X, y, modality="tabular").with_label_hierarchy(
+    dataset = BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    ).with_label_hierarchy(
         [
             ("animal", "dog", "husky"),
             ("animal", "dog", "husky"),
@@ -179,6 +183,7 @@ def test_output_levels_validate_hierarchy_and_output_names(fake_overlapindex):
         np.arange(72, dtype=float).reshape(24, 3),
         np.array(["a"] * 12 + ["b"] * 12),
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     with pytest.raises(ValueError, match="requires dataset label hierarchy"):
         Benchmark(
@@ -268,14 +273,14 @@ def test_output_levels_reuse_base_embedding_cache(tmp_path, fake_overlapindex):
         label_view_config=config,
     ).run()
 
-    family_fingerprint = dataset.label_view("family").fingerprint()
+    family_identity_key = dataset.label_view("family").identity_key()
     assert transform_calls == ["transform_many"]
     assert all(
-        dataset.fingerprint() in item.embedding_metadata["cache_key"]
+        dataset.identity_key() in item.embedding_metadata["cache_key"]
         for item in first.extractor_results
     )
     assert all(
-        family_fingerprint not in item.embedding_metadata["cache_key"]
+        family_identity_key not in item.embedding_metadata["cache_key"]
         for item in first.extractor_results
     )
     assert all(item.embedding_metadata["cache_hit"] for item in second.extractor_results)
@@ -289,6 +294,7 @@ def test_multimodal_dataset_expands_multi_output_results(fake_overlapindex):
         },
         labels=["left", "left", "right", "right"],
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = MultiOutputExtractor(
         name="fusion",
@@ -327,6 +333,7 @@ def test_target_views_produce_separate_result_variants(fake_overlapindex):
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24, dtype=float).reshape(8, 3),
         ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+        identity=DatasetIdentity.ephemeral(),
     ).with_target_views(
         [
             TargetView(
@@ -364,6 +371,7 @@ def test_output_views_route_multi_output_embeddings_to_target_views(fake_overlap
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24, dtype=float).reshape(8, 3),
         ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+        identity=DatasetIdentity.ephemeral(),
     ).with_target_views(
         [
             TargetView(
@@ -420,7 +428,9 @@ def test_output_views_route_multi_output_embeddings_to_target_views(fake_overlap
 def _hierarchical_vehicle_dataset():
     X = np.arange(72, dtype=float).reshape(24, 3)
     y = np.array(["husky"] * 6 + ["pug"] * 6 + ["sedan"] * 6 + ["suv"] * 6)
-    return BenchmarkDataset.from_arrays(X, y, modality="tabular").with_label_hierarchy(
+    return BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    ).with_label_hierarchy(
         [
             ("animal", "dog", "husky"),
             ("animal", "dog", "husky"),

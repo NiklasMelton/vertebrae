@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pytest
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
@@ -45,6 +45,7 @@ def test_public_hf_text_model_smoke(tmp_path):
         ],
         ["business"] * 3 + ["engineering"] * 3,
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     item = _run_public_model_benchmark(
@@ -74,6 +75,7 @@ def test_public_sentence_transformer_model_smoke(tmp_path):
         ],
         ["support"] * 3 + ["billing"] * 3,
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     item = _run_public_model_benchmark(
@@ -94,7 +96,12 @@ def test_public_hf_vision_model_smoke(tmp_path):
         "hf-internal-testing/tiny-random-vit",
     )
     images = [np.full((32, 32, 3), value, dtype=np.uint8) for value in [0, 12, 24, 180, 210, 240]]
-    dataset = BenchmarkDataset.from_arrays(images, ["dark"] * 3 + ["bright"] * 3, modality="image")
+    dataset = BenchmarkDataset.from_arrays(
+        images,
+        ["dark"] * 3 + ["bright"] * 3,
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
 
     item = _run_public_model_benchmark(
         dataset,
@@ -121,6 +128,7 @@ def test_public_hf_audio_model_smoke(tmp_path):
         low + high,
         ["low_tone"] * 3 + ["high_tone"] * 3,
         sampling_rate=16_000,
+        identity=DatasetIdentity.ephemeral(),
     )
 
     item = _run_public_model_benchmark(
@@ -163,6 +171,7 @@ def test_public_hf_multimodal_model_smoke(tmp_path):
         },
         labels=["catalog"] * 3 + ["lifestyle"] * 3,
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     item = _run_public_model_benchmark(

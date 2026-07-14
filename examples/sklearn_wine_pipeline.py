@@ -13,7 +13,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler, QuantileTransformer, StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import SklearnExtractor
 
@@ -33,6 +33,7 @@ def main() -> None:
             "example": "sklearn_wine_pipeline",
             "source": "sklearn.datasets.load_wine",
         },
+        identity=DatasetIdentity.ephemeral(),
     )
 
     benchmark = Benchmark(

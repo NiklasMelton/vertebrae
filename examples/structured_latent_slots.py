@@ -7,6 +7,7 @@ from vertebrae import (
     Benchmark,
     BenchmarkDataset,
     CallableStructuredExtractor,
+    DatasetIdentity,
     LatentSlotAdapter,
     LatentSlotAnnotation,
     drop_special_rows,
@@ -25,6 +26,7 @@ def main() -> None:
         y=["scene", "scene", "object", "object"],
         modality="embeddings",
         metadata={"example": "structured_latent_slots"},
+        identity=DatasetIdentity.declared("structured-latent-slots-example", "1"),
     )
     dataset = LatentSlotAdapter().attach(
         dataset,

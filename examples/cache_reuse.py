@@ -2,7 +2,7 @@
 
 from _common import CACHE_DIR, ensure_output_dir, make_separated_blobs
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor
 
@@ -15,6 +15,7 @@ def main() -> None:
         labels,
         modality="tabular",
         metadata={"example": "cache_reuse"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     cache_config = CacheConfig(cache_dir=str(CACHE_DIR))

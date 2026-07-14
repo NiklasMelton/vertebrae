@@ -7,6 +7,7 @@ import numpy as np
 
 from vertebrae.config import SegmentationConfig
 from vertebrae.datasets.base import BenchmarkDataset
+from vertebrae.datasets.identity import DatasetIdentity
 from vertebrae.datasets.segmentation import SegmentationAnnotation, SegmentationDataset
 from vertebrae.extractors.spatial import SpatialLayout
 
@@ -94,10 +95,20 @@ def materialize_segmentation_outputs(
         benchmark_dataset = BenchmarkDataset.from_embeddings(
             embeddings,
             labels,
+            identity=DatasetIdentity.derived(
+                dataset.identity_key(),
+                "segmentation_materialization",
+                {
+                    "output_name": output_name,
+                    "output_recipe": bucket["recipe"],
+                    "config": resolved,
+                    "provenance": [_provenance(candidate) for candidate in selected],
+                },
+            ),
             metadata={
                 "segmentation": token_metadata,
                 "spatial_output": output_name,
-                "source_dataset_fingerprint": dataset.fingerprint(),
+                "source_dataset_identity_key": dataset.identity_key(),
             },
         ).with_groups(groups, name="image_id")
         materializations.append(

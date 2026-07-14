@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from vertebrae import BenchmarkDataset, Evaluator, SeparatixConfig
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator, SeparatixConfig
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 from vertebrae.scoring.separatix import (
@@ -119,7 +119,9 @@ def test_separatix_scorer_passes_regression_target_mode_and_mlp_settings(fake_se
 def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapindex):
     embeddings = np.arange(48, dtype=float).reshape(16, 3)
     labels = np.array(["a"] * 8 + ["b"] * 8)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     baseline_kwargs = dict(
         dataset=dataset,
@@ -155,7 +157,9 @@ def test_reports_include_separatix_content(tmp_path, fake_overlapindex):
     rng = np.random.default_rng(0)
     embeddings = rng.normal(size=(12, 4))
     labels = np.array(["a"] * 6 + ["b"] * 6)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -196,7 +200,9 @@ def test_dataframe_uses_target_appropriate_separatix_probe_fields(fake_overlapin
         ]
     )
     labels = np.array(["a"] * 10 + ["b"] * 10)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -242,7 +248,9 @@ def test_multilabel_benchmark_runs_separatix(
         ("round", "sweet"),
         ("sweet",),
     ]
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -287,6 +295,7 @@ def test_regression_benchmark_uses_regression_threshold(
         targets,
         target_type="regression",
         target_names=["score"],
+        identity=DatasetIdentity.ephemeral(),
     )
 
     result = Evaluator(
@@ -308,7 +317,9 @@ def test_regression_benchmark_uses_regression_threshold(
 def test_reports_include_separatix_mlp_status(tmp_path, fake_overlapindex):
     embeddings = np.arange(24, dtype=float).reshape(8, 3)
     labels = np.array(["a"] * 4 + ["b"] * 4)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,

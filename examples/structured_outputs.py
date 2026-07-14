@@ -6,6 +6,7 @@ from _common import ensure_cache_dir, ensure_output_dir
 from vertebrae import (
     Benchmark,
     BenchmarkDataset,
+    DatasetIdentity,
     DetectionLayoutAdapter,
     KeypointAdapter,
     KeypointAnnotation,
@@ -69,6 +70,7 @@ def _ocr_layout_workflow():
         y=["invoice", "invoice", "report", "report"],
         modality="image",
         metadata={"example": "structured_ocr_layout"},
+        identity=DatasetIdentity.declared("structured-ocr-layout-example", "1"),
     )
     dataset = DetectionLayoutAdapter(unit_type="document_region").attach(
         dataset,
@@ -146,6 +148,7 @@ def _asr_token_workflow():
         y=["support", "support", "weather", "weather"],
         modality="audio",
         metadata={"example": "structured_asr_tokens"},
+        identity=DatasetIdentity.declared("structured-keypoints-example", "1"),
     )
     dataset = SequenceLabelingAdapter().attach(
         dataset,
@@ -207,6 +210,7 @@ def _pose_keypoint_workflow():
         y=["walk", "walk", "stretch", "stretch"],
         modality="image",
         metadata={"example": "structured_pose_keypoints"},
+        identity=DatasetIdentity.declared("structured-sequence-example", "1"),
     )
     dataset = KeypointAdapter().attach(
         dataset,

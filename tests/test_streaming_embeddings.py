@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, EmbeddingConfig, Evaluator, ShardSpec
+from vertebrae import BenchmarkDataset, DatasetIdentity, EmbeddingConfig, Evaluator, ShardSpec
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor
@@ -12,6 +12,7 @@ def test_dataset_iter_batches_shards_are_disjoint_and_complete():
         np.arange(30).reshape(10, 3),
         ["a"] * 5 + ["b"] * 5,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
 
     shard_0 = list(
@@ -53,6 +54,7 @@ def test_streaming_benchmark_materializes_embeddings_once_per_sample(tmp_path, f
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "streaming_callable",
@@ -83,6 +85,7 @@ def test_local_benchmark_rejects_partial_embedding_shards(fake_overlapindex):
         np.arange(12).reshape(4, 3),
         ["a", "a", "b", "b"],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "streaming_callable",

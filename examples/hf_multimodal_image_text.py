@@ -8,7 +8,7 @@ Requires optional dependencies and a model available locally or from Hugging Fac
 import numpy as np
 from _common import CACHE_DIR, ensure_output_dir, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import HFMultimodalExtractor
 
@@ -30,6 +30,7 @@ def main() -> None:
         labels=labels,
         modalities={"image": "image", "caption": "text"},
         metadata={"example": "hf_multimodal_image_text"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     extractor = HFMultimodalExtractor(

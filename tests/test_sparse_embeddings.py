@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor, SklearnExtractor
@@ -13,7 +13,9 @@ def test_dataset_from_sparse_embeddings_preserves_sparse_matrix():
     embeddings = sparse.csr_matrix(np.eye(6))
     labels = np.array(["a", "a", "a", "b", "b", "b"])
 
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     assert sparse.issparse(dataset.X)
     assert dataset.X.shape == (6, 6)
@@ -55,7 +57,9 @@ def test_overlap_scorer_sparse_densification_memory_limit():
 def test_benchmark_sparse_precomputed_workflow(tmp_path, fake_overlapindex):
     embeddings = sparse.csr_matrix(np.eye(8))
     labels = np.array(["a"] * 4 + ["b"] * 4)
-    dataset = BenchmarkDataset.from_embeddings(embeddings, labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings, labels, identity=DatasetIdentity.ephemeral()
+    )
 
     result = Evaluator(
         dataset=dataset,
@@ -76,7 +80,9 @@ def test_sklearn_sparse_extractor_can_flow_to_benchmark(tmp_path, fake_overlapin
 
     texts = ["alpha beta", "alpha gamma", "delta epsilon", "delta zeta"]
     labels = np.array(["left", "left", "right", "right"])
-    dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
+    dataset = BenchmarkDataset.from_arrays(
+        texts, labels, modality="text", identity=DatasetIdentity.ephemeral()
+    )
     extractor = SklearnExtractor(
         "tfidf_sparse",
         TfidfVectorizer(),

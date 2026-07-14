@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pytest
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
@@ -59,6 +59,7 @@ def _assert_torch_device_benchmark(torch, device, tmp_path):
         ),
         ["left"] * 4 + ["right"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     model = torch.nn.Sequential(
         torch.nn.Linear(4, 8),

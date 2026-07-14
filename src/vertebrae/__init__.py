@@ -42,6 +42,7 @@ from vertebrae.config import (
 )
 from vertebrae.datasets import (
     BenchmarkDataset,
+    DatasetIdentity,
     EmbeddingUnitDataset,
     RetrievalDataset,
     SegmentationAnnotation,
@@ -206,6 +207,7 @@ __all__ = [
     "ArtifactStoreConfig",
     "Benchmark",
     "BenchmarkDataset",
+    "DatasetIdentity",
     "BenchmarkResult",
     "CallableMetric",
     "CacheConfig",

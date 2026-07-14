@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.extractors import HFVideoExtractor
 
 
@@ -21,6 +21,7 @@ def main() -> None:
         labels=labels,
         frame_rate=24.0,
         metadata={"dataset": "synthetic_video"},
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFVideoExtractor(
         name="videomae_base",

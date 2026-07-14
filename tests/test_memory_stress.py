@@ -3,7 +3,7 @@ import os
 import numpy as np
 import pytest
 
-from vertebrae import Benchmark, BenchmarkDataset
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import (
     CacheConfig,
     EmbeddingConfig,
@@ -117,7 +117,9 @@ def _large_classification_dataset(n_per_class, feature_dim):
     right = rng.normal(loc=1.5, scale=0.2, size=(n_per_class, feature_dim))
     X = np.vstack([left, right]).astype(np.float32)
     y = np.array(["left"] * n_per_class + ["right"] * n_per_class)
-    return BenchmarkDataset.from_arrays(X, y, modality="tabular")
+    return BenchmarkDataset.from_arrays(
+        X, y, modality="tabular", identity=DatasetIdentity.ephemeral()
+    )
 
 
 def _wide_projection(batch):

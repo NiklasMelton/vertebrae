@@ -5,6 +5,38 @@
 construction metadata together so extraction, caching, scoring, and reporting can
 share one validated input contract.
 
+## Dataset identity
+
+Every root dataset requires an explicit `DatasetIdentity`. Vertebrae never hashes a
+dataset, generates a UUID, or scans path metadata implicitly. This makes cache reuse
+and its cost visible at construction time.
+
+For production datasets, use a stable ID and a revision that changes whenever sample
+content, ordering, targets, groups, annotations, or identity-bearing metadata changes:
+
+```python
+from vertebrae import BenchmarkDataset, DatasetIdentity
+
+dataset = BenchmarkDataset.from_arrays(
+    X=samples,
+    y=labels,
+    modality="tabular",
+    identity=DatasetIdentity.declared("customer-churn", "snapshot-2026-07-13"),
+)
+```
+
+`DatasetIdentity.from_manifest(dataset_id, manifest)` hashes only a caller-provided
+manifest, such as object keys, ETags, sizes, and label revisions. Path constructors do
+not call `stat()` or read files automatically. `DatasetIdentity.from_content()` is an
+explicit opt-in that lazily reads and hashes every identity-bearing value; use it only
+for manageable datasets that will remain immutable after `identity_key()` is first
+resolved. `DatasetIdentity.ephemeral()` explicitly disables reconstruction-based cache
+reuse while retaining the same UUID through copying and pickling.
+
+Omitting `identity=` is an immediate construction error. Derived subsets, views,
+groups, structured units, and segmentation materializations receive deterministic
+child identities automatically.
+
 ## Supported constructors
 
 Use the constructor that matches the form of your source data:
@@ -48,46 +80,51 @@ Regression datasets are opt-in. Pass `target_type="regression"` so numeric class
 identifiers are not reinterpreted as continuous targets by accident:
 
 ```python
+from vertebrae import DatasetIdentity
 dataset = BenchmarkDataset.from_arrays(
     X=samples,
     y=targets,
     modality="tabular",
     target_type="regression",
     target_names=["score"],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
 Examples:
 
 ```python
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 
 text_dataset = BenchmarkDataset.from_arrays(
     X=texts,
     y=labels,
     modality="text",
     metadata={"source": "support_tickets"},
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
 ```python
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 
 tabular_dataset = BenchmarkDataset.from_dataframe(
     df=dataframe,
     input_col=["age", "income", "region"],
     label_col="segment",
     modality="tabular",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
 ```python
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 
 embedding_dataset = BenchmarkDataset.from_embeddings(
     embeddings=Z,
     labels=y,
     metadata={"backbone": "resnet50"},
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
@@ -109,7 +146,7 @@ tokens, pose/keypoints, dense depth cells, and generative latents as long as the
 workflow can materialize one embedding row per supervised unit.
 
 ```python
-from vertebrae import BenchmarkDataset, TargetView
+from vertebrae import BenchmarkDataset, TargetView, DatasetIdentity
 
 dataset = BenchmarkDataset.from_embedding_units(
     embeddings=unit_embeddings,
@@ -126,17 +163,19 @@ dataset = BenchmarkDataset.from_embedding_units(
             target_names=["quality"],
         ),
     ],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
 ```python
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 
 node_dataset = BenchmarkDataset.from_node_embeddings(
     embeddings=node_z,
     labels=node_labels,
     node_ids=node_ids,
     edge_index=edge_index,
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
@@ -144,12 +183,14 @@ For edge or pair labels, you can either pass precomputed row embeddings or compo
 them from endpoint/entity embeddings:
 
 ```python
+from vertebrae import DatasetIdentity
 edge_dataset = BenchmarkDataset.from_edge_embeddings(
     labels=edge_labels,
     edge_index=edge_index,
     node_embeddings=node_z,
     node_ids=node_ids,
     composition="hadamard",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
@@ -161,6 +202,7 @@ supervised row.
 Multi-label datasets can use per-sample label sequences:
 
 ```python
+from vertebrae import DatasetIdentity
 dataset = BenchmarkDataset.from_embeddings(
     embeddings=Z,
     labels=[
@@ -171,6 +213,7 @@ dataset = BenchmarkDataset.from_embeddings(
         ("outdoor", "animal"),
         ("animal",),
     ],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
@@ -178,11 +221,13 @@ They can also use a binary indicator matrix. Pass `label_names` when you want
 report fields and `k` mappings to use semantic names:
 
 ```python
+from vertebrae import DatasetIdentity
 dataset = BenchmarkDataset.from_arrays(
     X=samples,
     y=indicator_matrix,
     modality="image",
     label_names=["animal", "vehicle", "outdoor"],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
@@ -196,9 +241,9 @@ Datasets can also carry multiple aligned target projections through
 target and can be single-label, multi-label, or explicit regression.
 
 ```python
-from vertebrae import BenchmarkDataset, TargetView
+from vertebrae import BenchmarkDataset, TargetView, DatasetIdentity
 
-dataset = BenchmarkDataset.from_embeddings(embeddings, labels).with_target_views(
+dataset = BenchmarkDataset.from_embeddings(embeddings, labels, identity=DatasetIdentity.declared("example-dataset", "1")).with_target_views(
     [
         TargetView(name="coarse", targets=coarse_labels),
         TargetView(
@@ -227,12 +272,13 @@ annotation describes the aligned supervised unit labels plus optional unit ids,
 positions, spans, coordinates, and provenance.
 
 ```python
-from vertebrae import BenchmarkDataset, UnitAnnotation
+from vertebrae import BenchmarkDataset, UnitAnnotation, DatasetIdentity
 
 dataset = BenchmarkDataset.from_arrays(
     X=texts,
     y=document_labels,
     modality="text",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 ).with_unit_annotations(
     [
         UnitAnnotation(labels=["title", "body"], spans=[[0, 5], [6, 42]]),
@@ -254,10 +300,12 @@ works across several structured domains:
   keypoint.
 
 ```python
+from vertebrae import DatasetIdentity
 layout_dataset = BenchmarkDataset.from_arrays(
     X=page_images,
     y=document_labels,
     modality="image",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 ).with_unit_annotations(
     [
         UnitAnnotation(
@@ -276,10 +324,12 @@ layout_dataset = BenchmarkDataset.from_arrays(
 ```
 
 ```python
+from vertebrae import DatasetIdentity
 asr_dataset = BenchmarkDataset.from_arrays(
     X=waveforms,
     y=utterance_labels,
     modality="audio",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 ).with_unit_annotations(
     [
         UnitAnnotation(
@@ -294,10 +344,12 @@ asr_dataset = BenchmarkDataset.from_arrays(
 ```
 
 ```python
+from vertebrae import DatasetIdentity
 pose_dataset = BenchmarkDataset.from_arrays(
     X=frames,
     y=activity_labels,
     modality="image",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 ).with_unit_annotations(
     [
         UnitAnnotation(
@@ -337,6 +389,7 @@ dataset = DetectionLayoutAdapter(unit_type="document_region").attach(
         X=page_images,
         y=document_labels,
         modality="image",
+        identity=DatasetIdentity.declared("example-dataset", "1"),
     ),
     [
         RegionAnnotation(
@@ -434,7 +487,7 @@ Multi-modal datasets also preserve:
 Example:
 
 ```python
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 
 dataset = BenchmarkDataset.from_multimodal(
     inputs={
@@ -446,6 +499,7 @@ dataset = BenchmarkDataset.from_multimodal(
         "image": "image",
         "caption": "text",
     },
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
 
@@ -470,10 +524,12 @@ When a dataset has a category hierarchy, keep your primary labels in `y` and att
 the hierarchy separately:
 
 ```python
+from vertebrae import DatasetIdentity
 dataset = BenchmarkDataset.from_arrays(
     X=samples,
     y=leaf_labels,
     modality="text",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 ).with_label_hierarchy(
     label_paths=[
         ("support", "billing", "refund"),

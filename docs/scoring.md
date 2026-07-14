@@ -223,7 +223,7 @@ benchmarks. Use it for semantic search, image-text matching, entity lookup, and 
 candidate-ranking use cases.
 
 ```python
-from vertebrae import RetrievalBenchmark, RetrievalConfig, RetrievalDataset
+from vertebrae import RetrievalBenchmark, RetrievalConfig, RetrievalDataset, DatasetIdentity
 from vertebrae.extractors import PrecomputedExtractor
 
 dataset = RetrievalDataset.from_embeddings(
@@ -232,6 +232,7 @@ dataset = RetrievalDataset.from_embeddings(
     relevance=[("query-1", "document-9", 2.0)],
     query_ids=["query-1"],
     gallery_ids=["document-9"],
+    identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 result = RetrievalBenchmark(
     dataset,

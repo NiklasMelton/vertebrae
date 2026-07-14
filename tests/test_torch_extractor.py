@@ -6,6 +6,7 @@ import pytest
 
 from vertebrae import (
     BenchmarkDataset,
+    DatasetIdentity,
     EmbeddingConfig,
     Evaluator,
     SpatialLayout,
@@ -228,6 +229,7 @@ def test_torch_extractor_works_in_streaming_evaluator(fake_torch, fake_overlapin
         np.arange(24, dtype=float).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = TorchExtractor(
         "streaming_local",

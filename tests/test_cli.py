@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset, ResourceProfilingConfig, UnitAnnotation
+from vertebrae import BenchmarkDataset, DatasetIdentity, ResourceProfilingConfig, UnitAnnotation
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.cli import main
 from vertebrae.extractors import (
@@ -1253,6 +1253,7 @@ def _write_pickled_inputs(tmp_path):
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = PrecomputedExtractor()
     dataset_path = tmp_path / "dataset.pkl"
@@ -1268,6 +1269,7 @@ def _write_pickled_multi_output_inputs(tmp_path):
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = MultiOutputExtractor(
         name="multi",
@@ -1302,6 +1304,7 @@ def _write_pickled_multilabel_inputs(tmp_path):
             ("round", "sweet"),
             ("sweet",),
         ],
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = PrecomputedExtractor()
     dataset_path = tmp_path / "multilabel_dataset.pkl"
@@ -1321,6 +1324,7 @@ def _write_pickled_multimodal_multi_output_inputs(tmp_path):
         },
         labels=["a", "a", "b", "b"],
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = MultiOutputExtractor(
         name="fusion",
@@ -1343,6 +1347,7 @@ def _write_pickled_structured_inputs(tmp_path, multi_output):
         np.asarray(["a", "b", "c", "d"], dtype=object),
         ["doc_a", "doc_a", "doc_b", "doc_b"],
         modality="text",
+        identity=DatasetIdentity.ephemeral(),
     ).with_unit_annotations(
         [
             UnitAnnotation(

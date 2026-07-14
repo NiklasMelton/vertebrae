@@ -3,7 +3,7 @@
 import numpy as np
 from _common import ensure_output_dir, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
@@ -25,6 +25,7 @@ def main() -> None:
         node_labels,
         node_ids=node_ids,
         metadata={"example": "relational_node_embeddings"},
+        identity=DatasetIdentity.ephemeral(),
     )
     node_result = Evaluator(
         dataset=node_dataset,
@@ -52,6 +53,7 @@ def main() -> None:
         node_ids=node_ids,
         composition="abs_diff",
         metadata={"example": "relational_edge_embeddings"},
+        identity=DatasetIdentity.ephemeral(),
     )
     edge_result = Evaluator(
         dataset=edge_dataset,

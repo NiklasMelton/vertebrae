@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.config import OverlapScoringConfig
 from vertebrae.execution import (
@@ -84,6 +84,7 @@ def _assert_distributed_runtime_roundtrip(backend, tmp_path, extractor_name):
         ),
         ["left"] * 4 + ["right"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         extractor_name,

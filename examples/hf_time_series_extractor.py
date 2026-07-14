@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.extractors import HFTimeSeriesExtractor
 
 
@@ -22,6 +22,7 @@ def main() -> None:
         series=series,
         labels=labels,
         metadata={"dataset": "synthetic_time_series"},
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = HFTimeSeriesExtractor(
         name="patchtst",

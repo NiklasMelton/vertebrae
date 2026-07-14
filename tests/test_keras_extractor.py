@@ -6,6 +6,7 @@ import pytest
 
 from vertebrae import (
     BenchmarkDataset,
+    DatasetIdentity,
     EmbeddingConfig,
     Evaluator,
     SpatialLayout,
@@ -168,6 +169,7 @@ def test_keras_extractor_works_in_streaming_evaluator(monkeypatch, fake_overlapi
         np.arange(24, dtype=float).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = KerasExtractor(
         "streaming_local",

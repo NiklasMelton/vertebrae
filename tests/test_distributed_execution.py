@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.datasets import TargetView
 from vertebrae.execution import (
@@ -59,6 +59,7 @@ def test_group_artifact_and_separatix_job_preserve_group_safety(
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24, dtype=float).reshape(8, 3),
         np.array(["a"] * 4 + ["b"] * 4),
+        identity=DatasetIdentity.ephemeral(),
     ).with_groups(np.repeat(np.arange(4), 2), name="image_id")
     store = LocalArtifactStore(tmp_path)
     extractor = CallableExtractor("identity", transform_fn=lambda value: value)
@@ -112,6 +113,7 @@ def test_plan_materialize_and_merge_dense_embedding_shards(tmp_path):
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "dense_sharded",
@@ -143,6 +145,7 @@ def test_materialize_and_merge_embeddings_with_local_parallel_backend(tmp_path):
         np.arange(36).reshape(12, 3),
         ["a"] * 6 + ["b"] * 6,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "parallel_dense_sharded",
@@ -170,6 +173,7 @@ def test_materialize_and_merge_sparse_embedding_shards(tmp_path):
         np.arange(30).reshape(10, 3),
         ["a"] * 5 + ["b"] * 5,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "sparse_sharded",
@@ -201,6 +205,7 @@ def test_merge_embedding_shards_rejects_duplicate_sample_indices(tmp_path):
         np.arange(12).reshape(4, 3),
         ["a", "a", "b", "b"],
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "duplicate_shard",
@@ -227,6 +232,7 @@ def test_plan_materialize_and_merge_multi_output_embedding_shards(tmp_path):
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = MultiOutputExtractor(
         name="multi",
@@ -264,6 +270,7 @@ def test_materialize_and_merge_embeddings_supports_multi_output(tmp_path):
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
         modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = MultiOutputExtractor(
         name="multi",
@@ -301,6 +308,7 @@ def test_multimodal_multi_output_shards_preserve_row_order(tmp_path):
         },
         labels=["a", "a", "a", "b", "b", "b"],
         modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = MultiOutputExtractor(
         name="fusion",
@@ -346,6 +354,7 @@ def test_score_embedding_artifact_consumes_persisted_embeddings_and_labels(
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "score_artifact",
@@ -397,7 +406,9 @@ def test_score_embedding_artifact_supports_multilabel_labels(tmp_path, fake_over
         ("round", "sweet"),
         ("sweet",),
     ]
-    dataset = BenchmarkDataset.from_embeddings(np.arange(36).reshape(12, 3), labels)
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(36).reshape(12, 3), labels, identity=DatasetIdentity.ephemeral()
+    )
     extractor = CallableExtractor(
         "score_multilabel_artifact",
         lambda batch: np.asarray(batch),
@@ -439,6 +450,7 @@ def test_score_embedding_artifact_supports_regression_labels(tmp_path, fake_over
         np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0]),
         target_type="regression",
         target_names=["score"],
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "score_regression_artifact",
@@ -481,6 +493,7 @@ def test_label_artifact_preserves_active_label_view_metadata(tmp_path):
         BenchmarkDataset.from_embeddings(
             np.arange(24).reshape(8, 3),
             ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+            identity=DatasetIdentity.ephemeral(),
         )
         .with_label_hierarchy(
             [
@@ -510,6 +523,7 @@ def test_label_artifact_preserves_active_target_view_metadata(tmp_path):
         BenchmarkDataset.from_embeddings(
             np.arange(24).reshape(8, 3),
             ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+            identity=DatasetIdentity.ephemeral(),
         )
         .with_target_views(
             [
@@ -533,6 +547,7 @@ def test_score_repeats_collect_and_benchmark_from_artifacts(tmp_path, fake_overl
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "repeat_score_artifact",
@@ -578,6 +593,7 @@ def test_benchmark_from_artifacts_carries_label_view_metadata(tmp_path, fake_ove
         BenchmarkDataset.from_embeddings(
             np.arange(24).reshape(8, 3),
             ["husky", "husky", "pug", "pug", "sedan", "sedan", "suv", "suv"],
+            identity=DatasetIdentity.ephemeral(),
         )
         .with_label_hierarchy(
             [
@@ -629,6 +645,7 @@ def test_benchmark_from_artifacts_carries_target_view_metadata(tmp_path, fake_ov
         BenchmarkDataset.from_embeddings(
             np.arange(24).reshape(8, 3),
             ["cat", "cat", "dog", "dog", "bird", "bird", "fox", "fox"],
+            identity=DatasetIdentity.ephemeral(),
         )
         .with_target_views(
             [
@@ -677,6 +694,7 @@ def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = CallableExtractor(
         "diagnose_artifact",

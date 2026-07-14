@@ -7,7 +7,7 @@ from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from vertebrae import BenchmarkDataset, Evaluator
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
 from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import SklearnExtractor
 
@@ -21,6 +21,7 @@ def main() -> None:
         label_col="segment",
         modality="tabular",
         metadata={"example": "sklearn_tabular_pipeline"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     pipeline = Pipeline(
