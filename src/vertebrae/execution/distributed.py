@@ -645,6 +645,12 @@ def score_embedding_artifact(
     )
     embeddings = store.get_array(job.embedding_key)
     labels = store.get_labels(job.labels_key)
+    groups, group_metadata = _load_validated_groups(
+        store,
+        groups_key=job.groups_key,
+        embedding_metadata=embedding_metadata,
+        label_metadata=label_metadata,
+    )
     from vertebrae.scoring.metrics import OverlapMetric, as_embedding_metric
 
     configured = [as_embedding_metric(metric) for metric in (job.metrics or [])]
@@ -663,6 +669,7 @@ def score_embedding_artifact(
             embeddings,
             labels,
             target_metadata=label_metadata,
+            groups=groups,
             seed=job.seed,
         )
         result.metadata = {**label_metadata, **result.metadata}
@@ -673,6 +680,8 @@ def score_embedding_artifact(
         "output_key": job.output_key,
         "embedding_key": job.embedding_key,
         "labels_key": job.labels_key,
+        "groups_key": job.groups_key,
+        "group_metadata": group_metadata,
         "seed": job.seed,
         "metrics": metric_results,
         "primary_metric": job.primary_metric,
@@ -793,6 +802,12 @@ def diagnose_embedding_artifact(
         overlap_config.normalize_embeddings = bool(overlap_metadata["normalize_embeddings"])
     separatix_config = job.separatix_config or SeparatixConfig()
     scorer = SeparatixScorer(config=separatix_config, overlap_config=overlap_config)
+    groups, _ = _load_validated_groups(
+        store,
+        groups_key=job.groups_key,
+        embedding_metadata=embedding_metadata,
+        label_metadata=label_metadata,
+    )
 
     target_type = label_metadata.get("target_type", "single_label")
     threshold = (
@@ -813,20 +828,6 @@ def diagnose_embedding_artifact(
     else:
         embeddings = store.get_array(job.embedding_key)
         labels = store.get_labels(job.labels_key)
-        groups = None
-        if job.groups_key:
-            group_metadata = store.get_json(job.groups_key)
-            if int(group_metadata.get("n_samples", -1)) != len(labels):
-                raise ValueError("Group and label artifacts have different row counts.")
-            group_identity_key = group_metadata.get("dataset_identity_key")
-            label_identity_key = label_metadata.get("dataset_identity_key")
-            if (
-                group_identity_key
-                and label_identity_key
-                and group_identity_key != label_identity_key
-            ):
-                raise ValueError("Group and label artifacts have different dataset identities.")
-            groups = store.get_labels(job.groups_key)
         excluded = overlap_metadata.get("exclude_classes", [])
         if excluded and target_type != REGRESSION_TARGET:
             mask = np.asarray(
@@ -1018,6 +1019,41 @@ def validate_embedding_label_artifacts(
     return embedding_metadata, label_metadata
 
 
+def _load_validated_groups(
+    store: ArtifactStore,
+    *,
+    groups_key: Optional[str],
+    embedding_metadata: dict[str, Any],
+    label_metadata: dict[str, Any],
+) -> tuple[Optional[np.ndarray], Optional[dict[str, Any]]]:
+    if groups_key is None:
+        return None, None
+    group_metadata = store.get_json(groups_key)
+    if group_metadata.get("artifact_type") != "groups":
+        raise ValueError("Group artifact metadata must declare artifact_type='groups'.")
+    expected_rows = int(label_metadata.get("n_samples", -1))
+    if int(group_metadata.get("n_samples", -2)) != expected_rows:
+        raise ValueError("Group and label artifacts have different row counts.")
+    identities = {
+        identity
+        for identity in (
+            embedding_metadata.get("dataset_identity_key"),
+            label_metadata.get("dataset_identity_key"),
+            group_metadata.get("dataset_identity_key"),
+        )
+        if identity
+    }
+    if len(identities) > 1:
+        raise ValueError("Embedding, label, and group artifacts have different dataset identities.")
+    groups = store.get_labels(groups_key)
+    if len(groups) != expected_rows:
+        raise ValueError(
+            "Group artifact metadata does not match its labels; "
+            f"expected {expected_rows} rows, loaded {len(groups)}."
+        )
+    return np.asarray(groups), group_metadata
+
+
 def plan_scoring_jobs(
     embedding_key: str,
     labels_key: str,
@@ -1026,6 +1062,7 @@ def plan_scoring_jobs(
     metrics: Any = None,
     primary_metric: str = "overlap",
     metric: Any = None,
+    groups_key: Optional[str] = None,
 ) -> list[ScoringJob]:
     """Create scoring jobs for one embedding and label artifact pair.
 
@@ -1036,6 +1073,7 @@ def plan_scoring_jobs(
         scoring_config: Optional scoring configuration shared by all jobs.
         metrics: Optional generic metrics shared by all jobs.
         primary_metric: Aggregate metric selected for score collection.
+        groups_key: Optional aligned independence-group artifact key.
 
     Returns:
         Scoring jobs with canonical output keys.
@@ -1046,6 +1084,7 @@ def plan_scoring_jobs(
             embedding_key=embedding_key,
             labels_key=labels_key,
             output_key=scoring_artifact_key(embedding_key, seed=seed),
+            groups_key=groups_key,
             scoring_config=scoring_config,
             metrics=metrics,
             primary_metric=primary_metric,
@@ -1075,9 +1114,17 @@ def collect_score_artifacts(
         JSON-compatible score collection artifact.
     """
 
-    artifacts = [store.get_json(key) for key in score_keys]
+    keys = list(score_keys)
+    artifacts = [store.get_json(key) for key in keys]
     if not artifacts:
         raise ValueError("At least one score artifact is required.")
+    groups_keys = {artifact.get("groups_key") for artifact in artifacts}
+    if len(groups_keys) != 1:
+        raise ValueError("Score artifacts must share one groups protocol.")
+    groups_key = next(iter(groups_keys))
+    first_group_metadata = artifacts[0].get("group_metadata")
+    if any(artifact.get("group_metadata") != first_group_metadata for artifact in artifacts[1:]):
+        raise ValueError("Score artifacts must share identical group metadata.")
     metric_name = metric_name or artifacts[0].get("primary_metric", "overlap")
     scores = [float(artifact["metrics"][metric_name]["score"]) for artifact in artifacts]
     warnings = sorted(
@@ -1093,7 +1140,7 @@ def collect_score_artifacts(
         "artifact_type": "score_collection",
         "vertebrae_version": __version__,
         "output_key": output_key,
-        "score_keys": list(score_keys),
+        "score_keys": keys,
         "scores": scores,
         "seeds": seeds,
         "summary": _score_summary(scores, interval_level),
@@ -1101,6 +1148,8 @@ def collect_score_artifacts(
         "warnings": warnings,
         "embedding_key": artifacts[0].get("embedding_key"),
         "labels_key": artifacts[0].get("labels_key"),
+        "groups_key": groups_key,
+        "group_metadata": first_group_metadata,
         "metric_name": metric_name,
     }
     store.put_json(output_key, collection)
@@ -1138,6 +1187,7 @@ def benchmark_result_from_artifacts(
     metrics_data = score_artifact["metrics"]
     embedding_metadata = score_artifact.get("embedding_metadata", {})
     label_metadata = score_artifact.get("label_metadata", {})
+    group_metadata = score_artifact.get("group_metadata") or {}
     stability = store.get_json(stability_key) if stability_key else None
     separatix_artifact = store.get_json(separatix_key) if separatix_key else None
     separatix = None
@@ -1228,6 +1278,9 @@ def benchmark_result_from_artifacts(
             "modality": embedding_metadata.get("modality", "artifact"),
             "target_view": label_metadata.get("target_view"),
             "label_view": label_metadata.get("label_view"),
+            "grouped": bool(group_metadata),
+            "group_name": group_metadata.get("group_name"),
+            "n_groups": group_metadata.get("n_groups"),
         },
         extractor_results=[extractor_result],
         recommendations=recommendations_for_benchmark([extractor_result]),
@@ -1236,6 +1289,7 @@ def benchmark_result_from_artifacts(
             "source_score_key": score_key,
             "source_stability_key": stability_key,
             "source_separatix_key": separatix_key,
+            "source_groups_key": score_artifact.get("groups_key"),
             "distributed_artifacts": True,
             "resource_profiling_config": embedding_metadata.get("resource_profiling_config", {}),
         },

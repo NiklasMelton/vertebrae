@@ -17,7 +17,7 @@ from vertebrae.cache.artifact_store import (
 )
 from vertebrae.cache.local_store import LocalArtifactStore
 from vertebrae.utils.labels import labels_from_jsonable, labels_to_jsonable
-from vertebrae.utils.serialization import make_json_safe
+from vertebrae.utils.serialization import json_dumps_strict
 
 
 class S3ArtifactStore:
@@ -162,11 +162,9 @@ class S3ArtifactStore:
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as JSON."""
 
-        payload = json.dumps(
-            make_json_safe(labels_to_jsonable(labels)),
-            indent=2,
-            sort_keys=True,
-        ).encode("utf-8")
+        payload = json_dumps_strict(labels_to_jsonable(labels), indent=2, sort_keys=True).encode(
+            "utf-8"
+        )
         object_key = self._artifact_object_key(key, "labels.json")
         self._put_bytes(object_key, payload)
         return self._uri_for(object_key)
@@ -195,7 +193,7 @@ class S3ArtifactStore:
     def put_json(self, key: str, obj: dict) -> str:
         """Store JSON metadata for an artifact key."""
 
-        payload = json.dumps(obj, indent=2, sort_keys=True, default=str).encode("utf-8")
+        payload = json_dumps_strict(obj, indent=2, sort_keys=True).encode("utf-8")
         object_key = self._artifact_object_key(key, "metadata.json")
         self._put_bytes(object_key, payload)
         return self._uri_for(object_key)

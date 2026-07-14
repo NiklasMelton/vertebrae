@@ -180,6 +180,12 @@ vertebrae benchmark-from-artifacts \
   --markdown-output report.md
 ```
 
+When a plan declares `groups_key`, both `score` and `score-repeats` load and
+validate that artifact and pass the aligned groups to group-aware custom metrics.
+An explicit `--groups-key` overrides the plan value. Group manifests must match
+the embedding and label row count and dataset identity; the scoring artifact and
+collected repeat summary retain the validated group provenance.
+
 For segmentation datasets, `vertebrae materialize-segmentation` aligns saved
 spatial embedding outputs to raster annotations and writes token-level embedding,
 label, and group artifacts. Those artifacts then follow the same `score`,
@@ -319,8 +325,10 @@ vertebrae score \
 ```
 
 Each scoring artifact is a `metric_evaluation` payload containing every metric
-result and recipe. `collect-scores --metric-name ...` can select a non-primary
-metric when building an interval summary.
+result and recipe. Group-aware callables can accept a `groups` keyword argument;
+callables that omit it remain valid. `collect-scores --metric-name ...` can select
+a non-primary metric when building an interval summary, and rejects repeats that
+mix different group protocols.
 
 Artifact-backed workflows can also attach a Separatix diagnostic artifact after
 overlap scoring. Use the CLI `diagnose-complexity` command with an embedding key,

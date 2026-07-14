@@ -18,7 +18,10 @@ def mean_embedding_metric(embeddings, labels, *, target_metadata=None, groups=No
     return {
         "score": float(np.asarray(embeddings).mean()),
         "diagnostics": {"n_labels": len(labels)},
-        "metadata": {"received_target_type": (target_metadata or {}).get("target_type")},
+        "metadata": {
+            "received_target_type": (target_metadata or {}).get("target_type"),
+            "received_groups": None if groups is None else np.asarray(groups).tolist(),
+        },
     }
 
 
@@ -133,6 +136,121 @@ def test_custom_metric_artifact_round_trip(tmp_path):
     assert artifact["artifact_type"] == "metric_evaluation"
     assert set(artifact["metrics"]) == {"overlap", "mean_embedding"}
     assert artifact["primary_metric"] == "mean_embedding"
+    assert artifact["metrics"]["mean_embedding"]["metadata"]["received_groups"] is None
     assert result["extractor_results"][0]["metrics"]["mean_embedding"]["score"] == 4.0
     assert result["extractor_results"][0]["primary_metric_name"] == "mean_embedding"
     assert "overlap" not in result["extractor_results"][0]
+
+
+def test_custom_metric_artifact_receives_validated_groups(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_key = "embeddings/grouped"
+    labels_key = "labels/grouped"
+    groups_key = "groups/grouped"
+    identity_key = "dataset/example"
+    store.put_array(embedding_key, np.asarray([[1.0], [3.0], [5.0], [7.0]]))
+    store.put_json(
+        embedding_key,
+        {"n_samples": 4, "embedding_dim": 1, "dataset_identity_key": identity_key},
+    )
+    store.put_labels(labels_key, ["a", "a", "b", "b"])
+    store.put_json(
+        labels_key,
+        {
+            "artifact_type": "labels",
+            "n_samples": 4,
+            "target_type": "single_label",
+            "dataset_identity_key": identity_key,
+        },
+    )
+    store.put_labels(groups_key, [10, 10, 20, 20])
+    store.put_json(
+        groups_key,
+        {
+            "artifact_type": "groups",
+            "n_samples": 4,
+            "n_groups": 2,
+            "group_name": "patient",
+            "dataset_identity_key": identity_key,
+        },
+    )
+
+    artifact = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_key,
+            labels_key=labels_key,
+            groups_key=groups_key,
+            output_key="scores/grouped",
+            metrics=[CallableMetric("mean_embedding", mean_embedding_metric)],
+            primary_metric="mean_embedding",
+        ),
+        store,
+    )
+
+    assert artifact["groups_key"] == groups_key
+    assert artifact["group_metadata"]["group_name"] == "patient"
+    assert artifact["metrics"]["mean_embedding"]["metadata"]["received_groups"] == [
+        10,
+        10,
+        20,
+        20,
+    ]
+
+
+@pytest.mark.parametrize(
+    "case,match",
+    [
+        ("artifact_type", "artifact_type='groups'"),
+        ("row_count", "different row counts"),
+        ("identity", "different dataset identities"),
+        ("loaded_length", "expected 4 rows, loaded 3"),
+    ],
+)
+def test_group_artifact_validation_fails_before_metric_execution(tmp_path, case, match):
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_key = "embeddings/invalid-groups"
+    labels_key = "labels/invalid-groups"
+    groups_key = "groups/invalid"
+    store.put_array(embedding_key, np.ones((4, 1)))
+    store.put_json(
+        embedding_key,
+        {"n_samples": 4, "dataset_identity_key": "dataset/a"},
+    )
+    store.put_labels(labels_key, ["a", "a", "b", "b"])
+    store.put_json(
+        labels_key,
+        {
+            "artifact_type": "labels",
+            "n_samples": 4,
+            "target_type": "single_label",
+            "dataset_identity_key": "dataset/a",
+        },
+    )
+    store.put_labels(groups_key, [0, 0, 1] if case == "loaded_length" else [0, 0, 1, 1])
+    store.put_json(
+        groups_key,
+        {
+            "artifact_type": "labels" if case == "artifact_type" else "groups",
+            "n_samples": 3 if case == "row_count" else 4,
+            "dataset_identity_key": "dataset/b" if case == "identity" else "dataset/a",
+        },
+    )
+    called = []
+
+    def metric(*_args, **_kwargs):
+        called.append(True)
+        return 1.0
+
+    with pytest.raises(ValueError, match=match):
+        score_embedding_artifact(
+            ScoringJob(
+                embedding_key=embedding_key,
+                labels_key=labels_key,
+                groups_key=groups_key,
+                output_key="scores/invalid-groups",
+                metrics=[CallableMetric("never_called", metric)],
+            ),
+            store,
+        )
+
+    assert called == []

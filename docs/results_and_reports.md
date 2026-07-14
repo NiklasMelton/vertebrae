@@ -157,6 +157,13 @@ result.save_markdown("report.md")
 The JSON report is the most complete machine-readable artifact. The Markdown report
 is aimed at practical review and sharing.
 
+JSON persistence is strict and deterministic. Metadata may contain ordinary JSON
+values, dataclasses, paths, enums, NumPy scalars or arrays, scipy sparse matrices,
+tuples, and sets. Sets receive a stable order and non-string mapping keys receive a
+collision-safe encoding. Unsupported live objects, recursive containers, and
+non-finite floats raise a path-aware serialization error instead of being silently
+converted with `str(...)`.
+
 `ZeroShotBenchmarkResult` is a separate result type for fixed prompt-prototype
 evaluation. Its ranking uses the configured zero-shot metric (Top-1 accuracy by
 default), while the report retains OverlapIndex as contextual sample-embedding
