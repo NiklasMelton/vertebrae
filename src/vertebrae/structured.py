@@ -5,9 +5,11 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 
+from vertebrae.cache.fingerprint import hash_json_exact
 from vertebrae.datasets.base import BenchmarkDataset, TargetView
 from vertebrae.datasets.identity import DatasetIdentity
-from vertebrae.utils.labels import labels_from_jsonable
+from vertebrae.utils.labels import MULTI_LABEL_TARGET, REGRESSION_TARGET, labels_from_jsonable
+from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
 @dataclass
@@ -35,14 +37,14 @@ class StructuredUnitAligner:
     def __init__(
         self,
         name: str,
-        align_fn: Callable[[np.ndarray, Dict[str, Any]], Any],
+        align_fn: Callable[[Any, Dict[str, Any]], Any],
         recipe_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.name = str(name)
         self.align_fn = align_fn
         self.recipe_data = dict(recipe_data or {})
 
-    def align(self, embeddings: np.ndarray, annotation: Dict[str, Any]) -> StructuredAlignment:
+    def align(self, embeddings: Any, annotation: Dict[str, Any]) -> StructuredAlignment:
         raw = self.align_fn(embeddings, annotation)
         return _normalize_alignment(raw)
 
@@ -242,6 +244,7 @@ def materialize_structured_outputs(
                     ),
                     "n_annotation_units": 0,
                     "n_embedding_units": 0,
+                    "embedding_contract": None,
                 },
             )
             if bucket["unit_type"] != output.unit_type:
@@ -250,6 +253,17 @@ def materialize_structured_outputs(
                 )
             for local_index, parent_index in enumerate(batch.indices):
                 annotation = annotations[int(parent_index)]
+                matrix = ensure_numeric_matrix(
+                    output.embeddings[local_index],
+                    f"Structured output {output.name!r} for parent {int(parent_index)}",
+                    allow_sparse=True,
+                )
+                _validate_embedding_contract(
+                    bucket,
+                    matrix,
+                    output_name=output.name,
+                    parent_index=int(parent_index),
+                )
                 n_annotation_units = len(
                     labels_from_jsonable(
                         annotation["labels"],
@@ -258,10 +272,10 @@ def materialize_structured_outputs(
                         target_names=annotation.get("target_names"),
                     )
                 )
-                n_embedding_units = int(np.asarray(output.embeddings[local_index]).shape[0])
+                n_embedding_units = int(matrix.shape[0])
                 parent_rows = _materialize_parent_rows(
                     parent_index=int(parent_index),
-                    embeddings=output.embeddings[local_index],
+                    embeddings=matrix,
                     annotation=annotation,
                     output_name=output.name,
                     unit_type=output.unit_type,
@@ -278,8 +292,8 @@ def materialize_structured_outputs(
             raise ValueError(f"Structured output {output_name!r} produced no valid units.")
         target_views = _materialized_target_views(dataset, rows)
         benchmark_dataset = BenchmarkDataset.from_embedding_units(
-            embeddings=np.vstack([row["embedding"] for row in rows]),
-            labels=np.asarray([row["label"] for row in rows], dtype=object),
+            embeddings=_stack_embedding_rows(rows),
+            labels=_flattened_labels(rows),
             unit_ids=[row["unit_id"] for row in rows],
             identity=DatasetIdentity.derived(
                 dataset.identity_key(),
@@ -342,18 +356,18 @@ def _materialize_parent_rows(
     unit_type: str,
     aligner: Optional[StructuredUnitAligner] = None,
 ) -> List[Dict[str, Any]]:
-    matrix = np.asarray(embeddings)
-    if matrix.ndim != 2:
-        raise ValueError(f"Structured output {output_name!r} for parent {parent_index} must be 2D.")
+    matrix = ensure_numeric_matrix(
+        embeddings,
+        f"Structured output {output_name!r} for parent {parent_index}",
+        allow_sparse=True,
+    )
     labels = labels_from_jsonable(
         annotation["labels"],
         label_names=annotation.get("label_names"),
         target_type=annotation.get("target_type", "auto"),
         target_names=annotation.get("target_names"),
     )
-    unit_ids = annotation.get("unit_ids") or [
-        f"{parent_index}:{index}" for index in range(len(labels))
-    ]
+    local_unit_ids = annotation.get("unit_ids") or list(range(len(labels)))
     positions = annotation.get("positions") or [None] * len(labels)
     spans = annotation.get("spans") or [None] * len(labels)
     coordinates = annotation.get("coordinates") or [None] * len(labels)
@@ -382,11 +396,14 @@ def _materialize_parent_rows(
     for alignment_index, (annotation_index, embedding_index) in enumerate(
         zip(annotation_indices.tolist(), embedding_indices.tolist())
     ):
+        local_unit_id = local_unit_ids[annotation_index]
+        unit_id = _global_unit_id(parent_index, local_unit_id)
         rows.append(
             {
                 "embedding": matrix[embedding_index : embedding_index + 1],
                 "label": labels[annotation_index],
-                "unit_id": unit_ids[annotation_index],
+                "unit_id": unit_id,
+                "local_unit_id": local_unit_id,
                 "parent_id": parent_index,
                 "position": positions[annotation_index],
                 "span": spans[annotation_index],
@@ -441,6 +458,7 @@ def _provenance(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "parent_id": row["parent_id"],
         "unit_id": row["unit_id"],
+        "local_unit_id": row["local_unit_id"],
         "unit_index": row["unit_index"],
         "annotation_index": row["annotation_index"],
         "embedding_index": row["embedding_index"],
@@ -452,6 +470,62 @@ def _provenance(row: Dict[str, Any]) -> Dict[str, Any]:
         "unit_provenance": row["unit_provenance"],
         "alignment_metadata": row["alignment_metadata"],
     }
+
+
+def _global_unit_id(parent_index: int, local_unit_id: Any) -> str:
+    digest = hash_json_exact(
+        {
+            "parent_index": int(parent_index),
+            "local_unit_id": local_unit_id,
+        }
+    )
+    return f"structured-unit-v1-{digest}"
+
+
+def _validate_embedding_contract(
+    bucket: Dict[str, Any],
+    matrix: Any,
+    output_name: str,
+    parent_index: int,
+) -> None:
+    contract = {
+        "embedding_dim": int(matrix.shape[1]),
+        "dtype": str(matrix.dtype),
+        "sparse": is_sparse_matrix(matrix),
+    }
+    expected = bucket["embedding_contract"]
+    if expected is None:
+        bucket["embedding_contract"] = contract
+        return
+    if contract != expected:
+        raise ValueError(
+            f"Structured output {output_name!r} changed embedding format for parent "
+            f"{parent_index}; expected dimension {expected['embedding_dim']}, dtype "
+            f"{expected['dtype']}, and sparse={expected['sparse']}, but received dimension "
+            f"{contract['embedding_dim']}, dtype {contract['dtype']}, and "
+            f"sparse={contract['sparse']}."
+        )
+
+
+def _stack_embedding_rows(rows: List[Dict[str, Any]]) -> Any:
+    embeddings = [row["embedding"] for row in rows]
+    if is_sparse_matrix(embeddings[0]):
+        from scipy import sparse as scipy_sparse
+
+        return scipy_sparse.vstack(embeddings, format="csr")
+    return np.vstack([np.asarray(embedding) for embedding in embeddings])
+
+
+def _flattened_labels(rows: List[Dict[str, Any]]) -> np.ndarray:
+    target_type = rows[0]["target_type"]
+    labels = [row["label"] for row in rows]
+    if target_type == REGRESSION_TARGET:
+        return np.asarray(labels, dtype=float)
+    if target_type == MULTI_LABEL_TARGET:
+        result = np.empty(len(labels), dtype=object)
+        result[:] = labels
+        return result
+    return np.asarray(labels, dtype=object)
 
 
 def _normalize_alignment(raw: Any) -> StructuredAlignment:
@@ -536,11 +610,11 @@ class _DropSpecialRowsPolicy:
 
     def __call__(
         self,
-        embeddings: np.ndarray,
+        embeddings: Any,
         annotation: Dict[str, Any],
     ) -> StructuredAlignment:
         n_annotations = _annotation_length(annotation)
-        n_embeddings = int(np.asarray(embeddings).shape[0])
+        n_embeddings = int(embeddings.shape[0])
         stop = n_embeddings - self.trailing if self.trailing else n_embeddings
         embedding_indices = np.arange(self.leading, stop, dtype=int)
         if len(embedding_indices) != n_annotations:
@@ -568,7 +642,7 @@ class _KeepRowIndicesPolicy:
 
     def __call__(
         self,
-        embeddings: np.ndarray,
+        embeddings: Any,
         annotation: Dict[str, Any],
     ) -> StructuredAlignment:
         _ = embeddings
@@ -593,7 +667,7 @@ class _SelectFrameRowsPolicy:
 
     def __call__(
         self,
-        embeddings: np.ndarray,
+        embeddings: Any,
         annotation: Dict[str, Any],
     ) -> StructuredAlignment:
         n_annotations = _annotation_length(annotation)
@@ -623,10 +697,10 @@ class _SelectFrameRowsPolicy:
 
     def _resolve_embedding_indices(
         self,
-        embeddings: np.ndarray,
+        embeddings: Any,
         annotation: Dict[str, Any],
     ) -> np.ndarray:
-        n_embeddings = int(np.asarray(embeddings).shape[0])
+        n_embeddings = int(embeddings.shape[0])
         if self.every_n is not None:
             return np.arange(self.start, n_embeddings, self.every_n, dtype=int)
         if self.indices is not None:

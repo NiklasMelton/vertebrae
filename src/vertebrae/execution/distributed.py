@@ -365,6 +365,7 @@ def materialize_structured_artifacts(
         if groups is None:
             raise ValueError("Structured materialization must define parent groups.")
         artifact_path = store.put_array(output_key, embeddings)
+        sparse_embeddings = is_sparse_matrix(embeddings)
         embedding_manifest = {
             "artifact_type": "structured_embedding",
             "vertebrae_version": __version__,
@@ -379,8 +380,9 @@ def materialize_structured_artifacts(
             "embedding_dim": int(embeddings.shape[1]),
             "shape": list(embeddings.shape),
             "dtype": str(embeddings.dtype),
-            "sparse": False,
-            "storage_format": "dense",
+            "sparse": sparse_embeddings,
+            "nnz": int(embeddings.nnz) if sparse_embeddings else None,
+            "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
             "modality": materialization.dataset.modality,
             "structured": materialization.metadata,
             "unit_type": materialization.metadata.get("unit_type"),
@@ -404,28 +406,50 @@ def materialize_structured_artifacts(
         if profile is not None:
             embedding_manifest["resource_profile"] = make_json_safe(profile)
         store.put_json(output_key, embedding_manifest)
-        label_path = store.put_labels(labels_key, labels)
+        label_names = materialization.dataset.metadata.get("label_names")
+        target_type = materialization.dataset.metadata.get("target_type", "auto")
+        target_names = materialization.dataset.metadata.get("target_names")
+        label_path = store.put_labels(
+            labels_key,
+            labels,
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+        )
         label_summary = target_summary(
             labels,
-            target_type=materialization.dataset.metadata.get("target_type", "auto"),
-            target_names=materialization.dataset.metadata.get("target_names"),
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
         )
-        store.put_json(
-            labels_key,
-            {
-                "artifact_type": "labels",
-                "vertebrae_version": __version__,
-                "output_key": labels_key,
-                "artifact_path": label_path,
-                "dataset_identity_key": materialization.dataset.identity_key(),
-                "n_samples": int(len(labels)),
-                "target_type": label_summary["target_type"],
-                "class_counts": make_json_safe(label_summary["class_counts"]),
-                "n_classes": label_summary["n_classes"],
-                "target_view": materialization.dataset.active_target_view(),
-                "label_view": materialization.dataset.active_label_view(),
-            },
-        )
+        label_manifest = {
+            "artifact_type": "labels",
+            "vertebrae_version": __version__,
+            "output_key": labels_key,
+            "artifact_path": label_path,
+            "dataset_identity_key": materialization.dataset.identity_key(),
+            "n_samples": int(len(labels)),
+            "target_type": label_summary["target_type"],
+            "class_counts": make_json_safe(label_summary["class_counts"]),
+            "n_classes": label_summary["n_classes"],
+            "target_view": materialization.dataset.active_target_view(),
+            "label_view": materialization.dataset.active_label_view(),
+        }
+        for label_key in (
+            "label_names",
+            "labelset_counts",
+            "mean_label_cardinality",
+            "label_density",
+            "n_targets",
+            "target_names",
+            "target_means",
+            "target_variances",
+            "constant_targets",
+            "nonconstant_targets",
+        ):
+            if label_key in label_summary:
+                label_manifest[label_key] = make_json_safe(label_summary[label_key])
+        store.put_json(labels_key, label_manifest)
         group_path = store.put_labels(groups_key, groups)
         store.put_json(
             groups_key,
@@ -577,7 +601,13 @@ def materialize_label_artifact(
     """
 
     output_key = key or labels_artifact_key(dataset)
-    artifact_path = store.put_labels(output_key, dataset.y)
+    artifact_path = store.put_labels(
+        output_key,
+        dataset.y,
+        label_names=dataset.metadata.get("label_names"),
+        target_type=dataset.metadata.get("target_type", "auto"),
+        target_names=dataset.metadata.get("target_names"),
+    )
     labels = target_summary(
         dataset.y,
         label_names=dataset.metadata.get("label_names"),

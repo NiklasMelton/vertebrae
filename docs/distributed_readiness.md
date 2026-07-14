@@ -242,6 +242,12 @@ structured extractors can materialize per-output unit embeddings, labels,
 groups, and provenance through `materialize_structured_artifacts(...)`, with one
 artifact boundary per named structured output.
 
+Structured artifacts preserve resolved single-label, multi-label, or
+regression schema metadata. Multi-label manifests retain ordered `label_names`;
+regression manifests retain ordered `target_names` and target counts. Sparse
+structured matrices are written as `.npz` artifacts and report their sparse
+format and nonzero count in the output manifest.
+
 The same path is available from the CLI:
 
 ```bash

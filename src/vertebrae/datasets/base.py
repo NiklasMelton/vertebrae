@@ -5,9 +5,11 @@ from typing import Any, Dict, Iterable, Iterator, Optional, Union, cast
 
 import numpy as np
 
+from vertebrae.cache.fingerprint import canonical_json_exact
 from vertebrae.datasets.identity import DatasetIdentity
 from vertebrae.execution.jobs import SampleBatch, ShardSpec
 from vertebrae.utils.labels import (
+    MULTI_LABEL_TARGET,
     REGRESSION_TARGET,
     class_counts,
     coerce_label_input,
@@ -1667,37 +1669,69 @@ def _normalize_unit_annotations(
             f"got {len(resolved)} annotations for {n_samples} samples."
         )
     entries = []
+    expected_schema: Optional[Dict[str, Any]] = None
     for index, annotation in enumerate(resolved):
         if not isinstance(annotation, UnitAnnotation):
             raise ValueError("unit annotations must contain UnitAnnotation entries.")
-        labels = coerce_label_input(annotation.labels)
-        if labels.ndim != 1:
-            raise ValueError(
-                f"{unit_type} annotation labels for sample {index} must be one-dimensional."
-            )
+        labels, target_metadata = normalize_targets(
+            annotation.labels,
+            label_names=annotation.label_names,
+            target_type=annotation.target_type,
+            target_names=annotation.target_names,
+        )
+        resolved_target_type = str(target_metadata["target_type"])
+        resolved_label_names = (
+            list(target_metadata["label_names"])
+            if resolved_target_type == MULTI_LABEL_TARGET
+            else None
+        )
+        resolved_target_names = (
+            list(target_metadata["target_names"])
+            if resolved_target_type == REGRESSION_TARGET
+            else None
+        )
+        if resolved_target_type == REGRESSION_TARGET and target_metadata["n_targets"] == 1:
+            labels = np.asarray(labels, dtype=float).reshape(-1)
         unit_count = int(len(labels))
         if unit_count < 1:
             raise ValueError(
                 f"{unit_type} annotations for sample {index} must contain at least one unit."
             )
+        schema = {
+            "target_type": resolved_target_type,
+            "label_names": resolved_label_names,
+            "target_names": resolved_target_names,
+        }
+        if expected_schema is None:
+            expected_schema = schema
+        else:
+            _validate_unit_annotation_schema(
+                expected=expected_schema,
+                actual=schema,
+                sample_index=index,
+                unit_type=unit_type,
+            )
         entry = {
             "labels": labels_to_jsonable(
                 labels,
-                label_names=annotation.label_names,
-                target_type=annotation.target_type,
-                target_names=annotation.target_names,
+                label_names=resolved_label_names,
+                target_type=resolved_target_type,
+                target_names=resolved_target_names,
             ),
-            "label_names": (
-                list(annotation.label_names) if annotation.label_names is not None else None
-            ),
-            "target_type": annotation.target_type,
-            "target_names": (
-                list(annotation.target_names) if annotation.target_names is not None else None
-            ),
+            "label_names": resolved_label_names,
+            "target_type": resolved_target_type,
+            "target_names": resolved_target_names,
             "metadata": dict(annotation.metadata),
         }
+        resolved_unit_ids = _validated_local_unit_ids(
+            annotation.unit_ids,
+            n_units=unit_count,
+            sample_index=index,
+            unit_type=unit_type,
+        )
+        if resolved_unit_ids is not None:
+            entry["unit_ids"] = resolved_unit_ids
         for key, values in (
-            ("unit_ids", annotation.unit_ids),
             ("positions", annotation.positions),
             ("spans", annotation.spans),
             ("coordinates", annotation.coordinates),
@@ -1708,6 +1742,56 @@ def _normalize_unit_annotations(
                 entry[key] = resolved_values
         entries.append(entry)
     return entries
+
+
+def _validate_unit_annotation_schema(
+    expected: Dict[str, Any],
+    actual: Dict[str, Any],
+    sample_index: int,
+    unit_type: str,
+) -> None:
+    if actual["target_type"] != expected["target_type"]:
+        raise ValueError(
+            f"{unit_type} annotation target_type for sample {sample_index} is "
+            f"{actual['target_type']!r}; expected {expected['target_type']!r} to match sample 0."
+        )
+    if actual["target_type"] == MULTI_LABEL_TARGET and (
+        actual["label_names"] != expected["label_names"]
+    ):
+        raise ValueError(
+            f"{unit_type} annotation label_names for sample {sample_index} do not match "
+            "sample 0. Provide the same ordered label_names for every multi-label parent."
+        )
+    if actual["target_type"] == REGRESSION_TARGET and (
+        actual["target_names"] != expected["target_names"]
+    ):
+        raise ValueError(
+            f"{unit_type} annotation target_names for sample {sample_index} do not match "
+            "sample 0; regression target count and ordered names must be identical."
+        )
+
+
+def _validated_local_unit_ids(
+    values: Any,
+    n_units: int,
+    sample_index: int,
+    unit_type: str,
+) -> Optional[list[Any]]:
+    unit_ids = _optional_aligned_values(values, n_units=n_units, name="unit_ids")
+    if unit_ids is None:
+        return None
+    try:
+        canonical_ids = [canonical_json_exact(value) for value in unit_ids]
+    except TypeError as exc:
+        raise ValueError(
+            f"{unit_type} unit_ids for sample {sample_index} must contain exact-fingerprintable "
+            "values."
+        ) from exc
+    if len(set(canonical_ids)) != len(canonical_ids):
+        raise ValueError(
+            f"{unit_type} unit_ids for sample {sample_index} must be unique within the parent."
+        )
+    return unit_ids
 
 
 def _metadata_with_target_metadata(

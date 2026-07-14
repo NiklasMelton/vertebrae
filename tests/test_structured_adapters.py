@@ -149,24 +149,28 @@ def test_depth_and_latent_slot_adapters_build_structured_unit_datasets():
         image_dataset,
         [
             DepthAnnotation(
-                labels=[1.0, 2.0, 9.0],
+                labels=[[1.0, 0.1], [2.0, 0.2], [9.0, 0.9]],
                 coordinates=[[0, 0], [1, 1], [2, 2]],
                 valid=[1, 1, 0],
+                target_names=["depth", "uncertainty"],
             ),
             DepthAnnotation(
-                labels=[1.2, 2.2, 9.2],
+                labels=[[1.2, 0.1], [2.2, 0.2], [9.2, 0.9]],
                 coordinates=[[0, 0], [1, 1], [2, 2]],
                 valid=[1, 1, 0],
+                target_names=["depth", "uncertainty"],
             ),
             DepthAnnotation(
-                labels=[3.0, 4.0, 9.3],
+                labels=[[3.0, 0.3], [4.0, 0.4], [9.3, 0.9]],
                 coordinates=[[0, 0], [1, 1], [2, 2]],
                 valid=[1, 1, 0],
+                target_names=["depth", "uncertainty"],
             ),
             DepthAnnotation(
-                labels=[3.2, 4.2, 9.4],
+                labels=[[3.2, 0.3], [4.2, 0.4], [9.4, 0.9]],
                 coordinates=[[0, 0], [1, 1], [2, 2]],
                 valid=[1, 1, 0],
+                target_names=["depth", "uncertainty"],
             ),
         ],
     )
@@ -174,6 +178,7 @@ def test_depth_and_latent_slot_adapters_build_structured_unit_datasets():
     assert depth_dataset.summary()["structured_units"]["task_family"] == "depth"
     assert len(depth_dataset.unit_annotations()[0]["labels"]) == 2
     assert depth_dataset.unit_annotations()[0]["target_type"] == "regression"
+    assert depth_dataset.unit_annotations()[0]["target_names"] == ["depth", "uncertainty"]
 
     latent_dataset = BenchmarkDataset.from_arrays(
         np.array(["z0", "z1", "z2", "z3"], dtype=object),
