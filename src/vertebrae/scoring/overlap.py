@@ -320,8 +320,12 @@ class OverlapIndexScorer:
             raw_score = index.fit_offline(embeddings, labels, reset_state=True)
 
         score = _extract_required_score(getattr(index, "index", raw_score))
-        macro_score = _extract_optional_score(getattr(index, "macro_index_", None)) or score
-        weighted_score = _extract_optional_score(getattr(index, "weighted_index", None)) or score
+        macro_score = _extract_optional_score(getattr(index, "macro_index_", None))
+        if macro_score is None:
+            macro_score = score
+        weighted_score = _extract_optional_score(getattr(index, "weighted_index", None))
+        if weighted_score is None:
+            weighted_score = score
         summary = target_summary(
             labels,
             target_type=label_metadata["target_type"],

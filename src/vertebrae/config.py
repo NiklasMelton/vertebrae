@@ -237,7 +237,6 @@ class StabilityConfig:
         repeats: Number of repeated scoring runs.
         interval_level: Percentile interval level reported in summaries.
         subsample_fraction: Fraction sampled for subsample stability.
-        stratified: Whether subsampling should preserve class membership.
         random_state: Seed used to generate repeat seeds and subsamples.
     """
 
@@ -246,7 +245,6 @@ class StabilityConfig:
     repeats: int = 20
     interval_level: float = 0.95
     subsample_fraction: float = 0.8
-    stratified: bool = False
     random_state: int = 42
 
     def __post_init__(self) -> None:
