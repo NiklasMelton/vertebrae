@@ -168,3 +168,36 @@ def test_segmentation_artifacts_have_independent_output_boundaries(tmp_path):
     assert store.get_labels(output["labels_key"]).shape == (8,)
     assert store.get_labels(output["groups_key"]).tolist() == [0, 0, 0, 0, 1, 1, 1, 1]
     assert len(store.get_json(output["provenance_key"])["rows"]) == 8
+
+
+def test_segmentation_artifacts_keep_formerly_colliding_names_independent(tmp_path):
+    values = np.arange(2 * 2 * 2 * 3, dtype=float).reshape(2, 2, 2, 3)
+    layout = SpatialLayout(grid_height=2, grid_width=2)
+    extractor = CallableSpatialExtractor(
+        "spatial-collisions",
+        transform_fn=lambda batch: {
+            "a/b": values[: len(batch)],
+            "a_b": values[: len(batch)] + 100,
+        },
+        output_specs=[
+            SpatialOutputSpec(name="a/b", layout=layout),
+            SpatialOutputSpec(name="a_b", layout=layout),
+        ],
+    )
+    store = LocalArtifactStore(tmp_path)
+
+    bundle = materialize_segmentation_artifacts(
+        _dataset(),
+        extractor,
+        store,
+        segmentation_config=SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            background_mode="include_excluded",
+        ),
+    )
+
+    assert [output["output_name"] for output in bundle["outputs"]] == ["a/b", "a_b"]
+    keys = [output["output_key"] for output in bundle["outputs"]]
+    assert len(set(keys)) == 2
+    assert np.array_equal(store.get_array(keys[1]), store.get_array(keys[0]) + 100)

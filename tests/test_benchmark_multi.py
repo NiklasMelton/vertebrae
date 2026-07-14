@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
+from vertebrae.cache import LocalArtifactStore
 from vertebrae.config import (
     CacheConfig,
     LabelViewConfig,
@@ -284,6 +285,51 @@ def test_output_levels_reuse_base_embedding_cache(tmp_path, fake_overlapindex):
         for item in first.extractor_results
     )
     assert all(item.embedding_metadata["cache_hit"] for item in second.extractor_results)
+
+
+def test_multi_output_cache_keeps_formerly_colliding_names_independent(
+    tmp_path, fake_overlapindex
+):
+    values = np.arange(24, dtype=float).reshape(8, 3)
+    dataset = BenchmarkDataset.from_arrays(
+        values,
+        ["a"] * 4 + ["b"] * 4,
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    transform_calls = []
+
+    def transform_many(batch):
+        transform_calls.append("transform_many")
+        return {
+            "a/b": np.asarray(batch)[:, :2],
+            "a_b": np.asarray(batch)[:, 1:3] + 100,
+        }
+
+    extractor = MultiOutputExtractor(
+        name="multi",
+        output_specs=[EmbeddingOutputSpec("a/b"), EmbeddingOutputSpec("a_b")],
+        transform_many_fn=transform_many,
+        modality="tabular",
+    )
+    kwargs = {
+        "stability_config": StabilityConfig(enabled=False),
+        "separatix_config": SeparatixConfig(enabled=False),
+        "cache_config": CacheConfig(enabled=True, cache_dir=str(tmp_path)),
+    }
+
+    first = Benchmark(dataset, [extractor], **kwargs).run()
+    second = Benchmark(dataset, [extractor], **kwargs).run()
+
+    assert transform_calls == ["transform_many"]
+    assert [item.name for item in second.extractor_results] == ["multi:a/b", "multi:a_b"]
+    assert all(item.embedding_metadata["cache_hit"] for item in second.extractor_results)
+    cache_keys = [item.embedding_metadata["cache_key"] for item in first.extractor_results]
+    assert len(set(cache_keys)) == 2
+
+    store = LocalArtifactStore(str(tmp_path))
+    assert np.array_equal(store.get_array(cache_keys[0]), values[:, :2])
+    assert np.array_equal(store.get_array(cache_keys[1]), values[:, 1:3] + 100)
 
 
 def test_multimodal_dataset_expands_multi_output_results(fake_overlapindex):

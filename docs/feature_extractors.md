@@ -74,6 +74,12 @@ recipe()
 
 Some extractors can also emit multiple named embedding matrices from one model
 pass. `Benchmark` and `Evaluator` score each named output as a separate result.
+Exact output names remain visible in results and recipes. For persisted artifacts,
+vertebrae derives a readable, collision-resistant segment from each name instead of
+using the name as a path: `output-v1-<slug>--<sha256>`. The slug is a lowercase ASCII
+description capped at 40 characters, while the full SHA-256 digest is computed from
+the exact, unnormalized UTF-8 name. Names such as `a/b` and `a_b` therefore remain
+independent even when their readable slugs match.
 
 Native multi-output support is available for:
 

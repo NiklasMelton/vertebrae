@@ -243,10 +243,10 @@ def test_plan_materialize_and_merge_multi_output_embedding_shards(tmp_path):
     )
     extractor = MultiOutputExtractor(
         name="multi",
-        output_specs=[EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")],
+        output_specs=[EmbeddingOutputSpec("a/b"), EmbeddingOutputSpec("a_b")],
         transform_many_fn=lambda batch: {
-            "left": np.asarray(batch)[:, :2],
-            "right": np.asarray(batch)[:, 1:3],
+            "a/b": np.asarray(batch)[:, :2],
+            "a_b": np.asarray(batch)[:, 1:3],
         },
         modality="tabular",
         streaming_safe=True,
@@ -265,7 +265,9 @@ def test_plan_materialize_and_merge_multi_output_embedding_shards(tmp_path):
     )
 
     assert merged["artifact_type"] == "multi_output_embedding"
-    assert [output["output_name"] for output in merged["outputs"]] == ["left", "right"]
+    assert [output["output_name"] for output in merged["outputs"]] == ["a/b", "a_b"]
+    assert len({output["output_key"] for output in merged["outputs"]}) == 2
+    assert all("/outputs/output-v1-a-b--" in output["output_key"] for output in merged["outputs"])
     left = store.get_array(merged["outputs"][0]["output_key"])
     right = store.get_array(merged["outputs"][1]["output_key"])
     assert np.array_equal(left, dataset.X[:, :2])
