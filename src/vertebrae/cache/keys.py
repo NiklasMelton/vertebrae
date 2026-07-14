@@ -45,9 +45,9 @@ def named_output_key_segment(output_name: str) -> str:
     if not output_name:
         raise ValueError("Output name must be non-empty.")
 
-    display_name = unicodedata.normalize("NFKD", output_name).encode(
-        "ascii", errors="ignore"
-    ).decode("ascii")
+    display_name = (
+        unicodedata.normalize("NFKD", output_name).encode("ascii", errors="ignore").decode("ascii")
+    )
     slug = _NON_ALPHANUMERIC.sub("-", display_name.lower()).strip("-")
     slug = slug[:_OUTPUT_SLUG_MAX_LENGTH].rstrip("-") or "output"
     digest = hashlib.sha256(output_name.encode("utf-8")).hexdigest()

@@ -287,9 +287,7 @@ def test_output_levels_reuse_base_embedding_cache(tmp_path, fake_overlapindex):
     assert all(item.embedding_metadata["cache_hit"] for item in second.extractor_results)
 
 
-def test_multi_output_cache_keeps_formerly_colliding_names_independent(
-    tmp_path, fake_overlapindex
-):
+def test_multi_output_cache_keeps_formerly_colliding_names_independent(tmp_path, fake_overlapindex):
     values = np.arange(24, dtype=float).reshape(8, 3)
     dataset = BenchmarkDataset.from_arrays(
         values,

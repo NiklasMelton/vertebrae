@@ -1125,12 +1125,8 @@ class Benchmark:
         )
         if self._supports_transform_many(extractor):
             specs = self._output_specs(extractor)
-            cache_keys = named_output_artifact_keys(
-                base_key, (spec.name for spec in specs)
-            )
-            return all(
-                store.exists(cache_keys[spec.name]) for spec in specs
-            )
+            cache_keys = named_output_artifact_keys(base_key, (spec.name for spec in specs))
+            return all(store.exists(cache_keys[spec.name]) for spec in specs)
         return store.exists(base_key)
 
     def _get_or_compute_embedding_variants(
