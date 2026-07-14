@@ -135,12 +135,14 @@ class ZeroShotConfig:
 
     Zero-shot evaluation compares frozen sample embeddings with frozen text prompt
     prototypes.  It intentionally has no learned calibration, prompt search, or
-    fitted classification head.
+    fitted classification head. `sample_batch_size` bounds the exact sample-to-class
+    score block, while `max_dense_bytes` caps the estimated scorer working set.
     """
 
     similarity: str = "cosine"
     top_k: Tuple[int, ...] = (1, 5)
     primary_metric: str = "accuracy"
+    sample_batch_size: int = 128
     max_dense_bytes: int = 2_000_000_000
     worst_samples: int = 10
 
@@ -154,6 +156,8 @@ class ZeroShotConfig:
         allowed_metrics = {"accuracy", "macro_f1", "balanced_accuracy"}
         if self.primary_metric not in allowed_metrics:
             raise ValueError(f"primary_metric must be one of {sorted(allowed_metrics)}.")
+        if self.sample_batch_size < 1:
+            raise ValueError("sample_batch_size must be >= 1.")
         if self.max_dense_bytes < 1:
             raise ValueError("max_dense_bytes must be >= 1.")
         if self.worst_samples < 0:

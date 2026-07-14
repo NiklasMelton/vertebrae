@@ -12,29 +12,32 @@ from vertebrae.utils.validation import ensure_numeric_matrix
 
 
 def compress_embedding_pair(
-    samples: Any,
-    prompts: Any,
+    fit_embeddings: Any,
+    paired_embeddings: Any,
     config: EmbeddingCompressionConfig,
+    *,
+    fit_name: str = "fit embeddings",
+    paired_name: str = "paired embeddings",
 ) -> Tuple[Any, Any, Dict[str, Any]]:
-    """Fit label-free compression on samples and apply it to paired prompts."""
+    """Fit compression on one endpoint and apply it to a paired endpoint."""
 
-    sample_matrix = ensure_numeric_matrix(samples, "sample embeddings", allow_sparse=True)
-    prompt_matrix = ensure_numeric_matrix(prompts, "prompt embeddings", allow_sparse=True)
-    if sample_matrix.shape[1] != prompt_matrix.shape[1]:
-        raise ValueError("Paired embeddings must have the same feature dimension.")
     if not isinstance(config, EmbeddingCompressionConfig):
         raise TypeError("config must be an EmbeddingCompressionConfig.")
+    fit_matrix = ensure_numeric_matrix(fit_embeddings, fit_name, allow_sparse=True)
+    paired_matrix = ensure_numeric_matrix(paired_embeddings, paired_name, allow_sparse=True)
+    if fit_matrix.shape[1] != paired_matrix.shape[1]:
+        raise ValueError("Paired embeddings must have the same feature dimension.")
 
     if not config.enabled or config.method == "none":
-        result = compress_embeddings(sample_matrix, config=config)
-        return result.embeddings, prompt_matrix, dict(result.metadata)
+        result = compress_embeddings(fit_matrix, config=config)
+        return result.embeddings, paired_matrix, dict(result.metadata)
 
-    if config.n_components is not None and config.n_components >= sample_matrix.shape[1]:
-        result = compress_embeddings(sample_matrix, config=config)
-        return result.embeddings, prompt_matrix, dict(result.metadata)
+    if config.n_components is not None and config.n_components >= fit_matrix.shape[1]:
+        result = compress_embeddings(fit_matrix, config=config)
+        return result.embeddings, paired_matrix, dict(result.metadata)
 
     compressor = create_embedding_compressor(config)
-    compressed_samples = compressor.fit_transform(sample_matrix)
-    compressed_prompts = compressor.transform(prompt_matrix)
-    metadata = _compression_metadata(compressor, sample_matrix, compressed_samples, warnings=[])
-    return compressed_samples, compressed_prompts, metadata
+    compressed_fit = compressor.fit_transform(fit_matrix)
+    compressed_paired = compressor.transform(paired_matrix)
+    metadata = _compression_metadata(compressor, fit_matrix, compressed_fit, warnings=[])
+    return compressed_fit, compressed_paired, metadata

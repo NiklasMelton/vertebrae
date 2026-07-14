@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from scipy import sparse
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -10,6 +11,7 @@ from vertebrae import (
     Evaluator,
 )
 from vertebrae.cache.local_store import LocalArtifactStore
+from vertebrae.compression import compress_embeddings
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.execution import (
     ScoringJob,
@@ -125,6 +127,57 @@ def test_prefix_truncate_sparse_embeddings_warns_without_matryoshka(fake_overlap
     assert item.compression_metadata["input_sparse"] is True
     assert item.compression_metadata["output_sparse"] is True
     assert any("Prefix truncation" in warning for warning in item.compression_metadata["warnings"])
+
+
+@pytest.mark.parametrize("sparse_input", [False, True])
+def test_prefix_truncate_honors_dtype_and_preserves_sparsity(sparse_input):
+    embeddings = np.arange(24, dtype=np.float64).reshape(4, 6)
+    if sparse_input:
+        embeddings = sparse.csr_matrix(embeddings)
+    result = compress_embeddings(
+        embeddings,
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="prefix_truncate",
+            n_components=3,
+            assume_matryoshka=True,
+            dtype="float32",
+        ),
+    )
+
+    assert result.embeddings.dtype == np.float32
+    assert sparse.issparse(result.embeddings) is sparse_input
+    assert result.metadata["dtype"] == "float32"
+    assert result.metadata["applied"] is True
+
+
+def test_skipped_compression_preserves_dtype_and_reports_actual_dtype():
+    embeddings = np.arange(12, dtype=np.float64).reshape(4, 3)
+    result = compress_embeddings(
+        embeddings,
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="pca",
+            n_components=3,
+            dtype="float32",
+        ),
+    )
+
+    assert result.embeddings is embeddings
+    assert result.embeddings.dtype == np.float64
+    assert result.metadata["dtype"] == "float64"
+    assert result.metadata["applied"] is False
+
+
+@pytest.mark.parametrize("method", ["pca", "incremental_pca"])
+def test_pca_compression_rejects_more_components_than_fit_samples(method):
+    embeddings = np.arange(10, dtype=np.float64).reshape(2, 5)
+
+    with pytest.raises(ValueError, match="fit-side samples"):
+        compress_embeddings(
+            embeddings,
+            EmbeddingCompressionConfig(enabled=True, method=method, n_components=3),
+        )
 
 
 def test_pca_rejects_sparse_embeddings(fake_overlapindex):

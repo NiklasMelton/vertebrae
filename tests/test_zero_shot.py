@@ -11,6 +11,7 @@ from uuid import UUID
 
 import numpy as np
 import pytest
+from scipy import sparse
 
 from vertebrae import (
     BenchmarkDataset,
@@ -492,6 +493,105 @@ def test_zero_shot_scorer_reports_metrics_ensembles_and_ties():
     assert any("tie" in warning for warning in tied.warnings)
 
 
+@pytest.mark.parametrize("similarity", ["cosine", "dot", "squared_l2"])
+def test_zero_shot_blockwise_scoring_matches_single_block(similarity):
+    samples = np.asarray(
+        [
+            [1.0, 0.0, 0.0],
+            [0.8, 0.2, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.2, 0.8, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ]
+    )
+    prompts = np.asarray(
+        [
+            [1.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.1, 0.9, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.1, 0.9],
+        ]
+    )
+    labels = ["a", "a", "b", "b", "c", "c"]
+    prompt_labels = ["a", "a", "b", "b", "c", "c"]
+    template_ids = ["first", "second", "first", "second", "first", "second"]
+    kwargs = {
+        "class_labels": ["a", "b", "c"],
+        "prompt_labels": prompt_labels,
+        "template_ids": template_ids,
+        "sample_ids": [f"sample-{index}" for index in range(len(samples))],
+    }
+    single = ZeroShotScorer(
+        ZeroShotConfig(
+            similarity=similarity,
+            top_k=(1, 2, 3),
+            sample_batch_size=len(samples),
+            worst_samples=len(samples),
+        )
+    ).score(samples, prompts, labels, **kwargs)
+    blocked = ZeroShotScorer(
+        ZeroShotConfig(
+            similarity=similarity,
+            top_k=(1, 2, 3),
+            sample_batch_size=2,
+            worst_samples=len(samples),
+        )
+    ).score(samples, prompts, labels, **kwargs)
+
+    assert blocked.score == pytest.approx(single.score)
+    assert blocked.metrics == pytest.approx(single.metrics)
+    assert blocked.per_class == single.per_class
+    assert blocked.confusion_matrix == single.confusion_matrix
+    assert blocked.diagnostics == single.diagnostics
+    assert blocked.warnings == single.warnings
+
+
+def test_zero_shot_memory_budget_allows_block_but_rejects_full_matrix():
+    samples = np.tile(np.eye(4), (5, 1))
+    prompts = np.eye(4)
+    labels = [index % 4 for index in range(len(samples))]
+    kwargs = {
+        "class_labels": [0, 1, 2, 3],
+        "prompt_labels": [0, 1, 2, 3],
+    }
+
+    blocked = ZeroShotScorer(ZeroShotConfig(sample_batch_size=2, max_dense_bytes=2_500)).score(
+        samples, prompts, labels, **kwargs
+    )
+    assert blocked.metrics["accuracy"] == pytest.approx(1.0)
+
+    with pytest.raises(MemoryError, match="sample_batch_size"):
+        ZeroShotScorer(ZeroShotConfig(sample_batch_size=len(samples), max_dense_bytes=2_500)).score(
+            samples, prompts, labels, **kwargs
+        )
+
+
+@pytest.mark.parametrize("as_sparse", [False, True])
+def test_zero_shot_memory_budget_guards_dense_and_sparse_inputs(as_sparse):
+    samples = np.eye(2)
+    prompts = np.eye(2)
+    if as_sparse:
+        samples = sparse.csr_matrix(samples)
+        prompts = sparse.csc_matrix(prompts)
+
+    with pytest.raises(MemoryError, match="ZeroShotConfig.max_dense_bytes"):
+        ZeroShotScorer(ZeroShotConfig(max_dense_bytes=1)).score(
+            samples,
+            prompts,
+            ["left", "right"],
+            class_labels=["left", "right"],
+            prompt_labels=["left", "right"],
+        )
+
+
+def test_zero_shot_config_rejects_invalid_sample_batch_size():
+    with pytest.raises(ValueError, match="sample_batch_size"):
+        ZeroShotConfig(sample_batch_size=0)
+
+
 def test_zero_shot_benchmark_caches_compresses_and_reports_overlap(tmp_path, fake_overlapindex):
     dataset = BenchmarkDataset.from_arrays(
         ["left-0", "left-1", "right-0", "right-1"],
@@ -535,6 +635,7 @@ def test_zero_shot_benchmark_caches_compresses_and_reports_overlap(tmp_path, fak
                 method="prefix_truncate",
                 n_components=2,
                 assume_matryoshka=True,
+                dtype="float32",
             ),
         ],
     }
@@ -542,6 +643,10 @@ def test_zero_shot_benchmark_caches_compresses_and_reports_overlap(tmp_path, fak
     second = ZeroShotBenchmark(protocol, [extractor], **kwargs).run()
     assert len(first.extractor_results) == 2
     assert first.ranked_results()[0].zero_shot.metrics["accuracy"] == pytest.approx(1.0)
+    compressed_variant = next(
+        item for item in first.extractor_results if item.compression_metadata["applied"]
+    )
+    assert compressed_variant.compression_metadata["dtype"] == "float32"
     assert first.extractor_results[0].overlap.kind == "overlap_index"
     assert all(item.cache_metadata["samples"]["hit"] for item in second.extractor_results)
     cached_profiles = second.extractor_results[0].resource_profiles
@@ -1128,8 +1233,12 @@ def test_zero_shot_score_keys_and_reconstruction_require_one_evaluation_recipe(
     )
     default_key = zero_shot_scoring_artifact_key("samples", "prompts", "protocol")
     macro_config = ZeroShotConfig(primary_metric="macro_f1")
+    batch_config = ZeroShotConfig(sample_batch_size=1)
     assert default_key != zero_shot_scoring_artifact_key(
         "samples", "prompts", "protocol", macro_config, OverlapScoringConfig()
+    )
+    assert default_key != zero_shot_scoring_artifact_key(
+        "samples", "prompts", "protocol", batch_config, OverlapScoringConfig()
     )
     store = LocalArtifactStore(str(tmp_path))
     protocol_key = materialize_zero_shot_protocol(protocol, store, "protocol")["output_key"]
@@ -1159,6 +1268,18 @@ def test_zero_shot_score_keys_and_reconstruction_require_one_evaluation_recipe(
             ),
             store,
         )
+    batch_artifact = score_zero_shot_artifact(
+        ZeroShotScoringJob(
+            sample_embedding_key="samples",
+            prompt_embedding_key="prompts",
+            protocol_key=protocol_key,
+            output_key="score-batch",
+            zero_shot_config=batch_config,
+        ),
+        store,
+    )
+    assert batch_artifact["evaluation_recipe"]["zero_shot_config"]["sample_batch_size"] == 1
+    assert batch_artifact["zero_shot"]["metadata"]["config"]["sample_batch_size"] == 1
     with pytest.raises(ValueError, match="evaluation configuration"):
         zero_shot_benchmark_result_from_artifacts(["score-accuracy", "score-macro"], store)
 

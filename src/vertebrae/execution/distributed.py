@@ -18,7 +18,7 @@ from vertebrae.compression import (
     compress_embeddings,
     compression_variant_name,
 )
-from vertebrae.compression.base import _compression_metadata, create_embedding_compressor
+from vertebrae.compression.paired import compress_embedding_pair
 from vertebrae.config import ResourceProfilingConfig
 from vertebrae.execution.jobs import (
     CompressionJob,
@@ -1604,16 +1604,13 @@ def compress_retrieval_embedding_artifacts(
     if query.shape[1] != gallery.shape[1]:
         raise ValueError("Paired retrieval compression requires matching endpoint dimensions.")
     config = job.compression_config
-    if not config.enabled or config.method == "none":
-        compression_result = compress_embeddings(gallery, config=config)
-        gallery_result = compression_result.embeddings
-        query_result = query
-        metadata = dict(compression_result.metadata)
-    else:
-        compressor = create_embedding_compressor(config)
-        gallery_result = compressor.fit_transform(gallery)
-        query_result = compressor.transform(query)
-        metadata = _compression_metadata(compressor, gallery, gallery_result, warnings=[])
+    gallery_result, query_result, metadata = compress_embedding_pair(
+        gallery,
+        query,
+        config,
+        fit_name="gallery embeddings",
+        paired_name="query embeddings",
+    )
     metadata["fit_side"] = "gallery"
     manifests: list[dict[str, Any]] = []
     for key, values, source_metadata, side in (
@@ -1631,6 +1628,9 @@ def compress_retrieval_embedding_artifacts(
                 "n_samples": int(values.shape[0]),
                 "embedding_dim": int(values.shape[1]),
                 "shape": list(values.shape),
+                "dtype": str(values.dtype),
+                "sparse": is_sparse_matrix(values),
+                "storage_format": values.getformat() if is_sparse_matrix(values) else "dense",
                 "compression": metadata,
             }
         )

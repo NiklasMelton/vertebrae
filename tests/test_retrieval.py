@@ -108,6 +108,37 @@ def test_dense_relevance_matrix_and_gallery_compression_benchmark():
     assert result.ranked_results()[0].compression_metadata["fit_side"] == "gallery"
 
 
+def test_retrieval_local_compression_skips_nonreducing_pca_and_preserves_dtype():
+    query = np.eye(3, dtype=np.float64)
+    gallery = np.eye(3, dtype=np.float64)
+    dataset = RetrievalDataset.from_embeddings(
+        query,
+        gallery,
+        [(index, index, 1.0) for index in range(3)],
+        identity=DatasetIdentity.ephemeral(),
+    )
+    result = RetrievalBenchmark(
+        dataset,
+        [PrecomputedExtractor()],
+        retrieval_config=RetrievalConfig(ks=(1,), primary_metric="ndcg@1"),
+        compression_config=EmbeddingCompressionConfig(
+            enabled=True,
+            method="pca",
+            n_components=3,
+            dtype="float32",
+        ),
+    ).run()
+
+    metadata = result.extractor_results[0].compression_metadata
+    assert metadata["applied"] is False
+    assert metadata["dtype"] == "float64"
+    assert metadata["fit_side"] == "gallery"
+    assert any("skipping compression" in warning for warning in metadata["warnings"])
+    assert any(
+        "skipping compression" in warning for warning in result.extractor_results[0].warnings
+    )
+
+
 def test_raw_cross_modal_retrieval_uses_explicit_callable_branches():
     dataset = RetrievalDataset.from_arrays(
         ["zero", "one"],
@@ -347,18 +378,62 @@ def test_retrieval_endpoint_shards_merge_and_paired_compression(tmp_path):
                 method="prefix_truncate",
                 n_components=2,
                 assume_matryoshka=True,
+                dtype="float32",
             ),
         ),
         store,
     )
     assert store.get_array("compressed/query").shape == (4, 2)
     assert store.get_array("compressed/gallery").shape == (4, 2)
+    assert store.get_array("compressed/query").dtype == np.float32
+    assert store.get_array("compressed/gallery").dtype == np.float32
+    assert store.get_json("compressed/query")["dtype"] == "float32"
+    assert store.get_json("compressed/gallery")["dtype"] == "float32"
     assert artifact["compression_metadata"]["fit_side"] == "gallery"
     distributed = query_manifest["distributed_resource_profile"]
     assert distributed["scope"] == "distributed_shards"
     assert distributed["shard_count"] == 2
     assert distributed["worker_first_calls"]["count"] == 2
     assert distributed["embedding"]["evaluated_persisted"]["status"] == "measured"
+
+
+def test_retrieval_artifact_compression_skips_nonreducing_pca(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    query = np.eye(3, dtype=np.float64)
+    gallery = np.eye(3, dtype=np.float64)
+    for key, values, side in (("query", query, "query"), ("gallery", gallery, "gallery")):
+        store.put_array(key, values)
+        store.put_json(
+            key,
+            {
+                "side": side,
+                "dataset_identity_key": "dataset-v1",
+                "recipe_hash": "extractor-v1",
+            },
+        )
+
+    artifact = compress_retrieval_embedding_artifacts(
+        RetrievalCompressionJob(
+            "query",
+            "gallery",
+            "compressed/query",
+            "compressed/gallery",
+            EmbeddingCompressionConfig(
+                enabled=True,
+                method="pca",
+                n_components=4,
+                dtype="float32",
+            ),
+        ),
+        store,
+    )
+
+    assert artifact["compression_metadata"]["applied"] is False
+    assert artifact["compression_metadata"]["dtype"] == "float64"
+    assert np.array_equal(store.get_array("compressed/query"), query)
+    assert np.array_equal(store.get_array("compressed/gallery"), gallery)
+    assert store.get_array("compressed/query").dtype == np.float64
+    assert store.get_array("compressed/gallery").dtype == np.float64
 
 
 def test_retrieval_branch_keys_are_distinct_and_wrong_provenance_is_rejected(tmp_path):

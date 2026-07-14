@@ -480,7 +480,13 @@ def _compress_pair(
     prompts: Any,
     config: EmbeddingCompressionConfig,
 ) -> tuple[Any, Any, Dict[str, Any]]:
-    return compress_embedding_pair(samples, prompts, config)
+    return compress_embedding_pair(
+        samples,
+        prompts,
+        config,
+        fit_name="sample embeddings",
+        paired_name="prompt embeddings",
+    )
 
 
 def _variant_name(name: str, compression: Dict[str, Any]) -> str:

@@ -144,6 +144,10 @@ stability:
 - MiniBatchKMeans seeds change across repeats,
 - summaries report mean, standard deviation, min, max, and percentile interval.
 
+Dense and scipy sparse embeddings are both preserved across repeats and subsample
+slices. Sparse matrices are densified only inside the overlap scoring adapter, where
+`OverlapScoringConfig.max_dense_bytes` remains the admission limit.
+
 Subsample stability is also available when requested through `StabilityConfig`.
 
 ```python

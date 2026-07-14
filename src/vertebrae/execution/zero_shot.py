@@ -309,7 +309,11 @@ def compress_zero_shot_embedding_artifacts(
     if not isinstance(config, EmbeddingCompressionConfig):
         raise TypeError("compression_config must be an EmbeddingCompressionConfig.")
     compressed_samples, compressed_prompts, metadata = compress_embedding_pair(
-        samples, prompts, config
+        samples,
+        prompts,
+        config,
+        fit_name="sample embeddings",
+        paired_name="prompt embeddings",
     )
     metadata["fit_side"] = "samples"
     compression_pair_id = hash_json_exact(

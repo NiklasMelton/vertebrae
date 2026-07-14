@@ -102,6 +102,19 @@ Poor zero-shot performance can reflect taxonomy wording, domain terminology, pro
 coverage, or a weak text branch. It does not prove that sample embeddings are poor
 features for a separately trained downstream model.
 
+## Memory-bounded exact scoring
+
+`ZeroShotConfig.sample_batch_size` controls how many samples are compared with the
+class prototypes at once; its default is `128`. Scoring remains exact and preserves
+declared-class-order tie breaking, but it never needs to allocate the complete
+sample-by-class score matrix.
+
+`ZeroShotConfig.max_dense_bytes` limits the estimated float64 scorer working set,
+including dense sample and prompt endpoints, prototypes, result accumulators, and one
+configured score block. If that block does not fit, lower `sample_batch_size`, compress
+the embeddings, or raise the explicit limit. Dense and sparse inputs use the same
+admission check before conversion or scoring.
+
 ## Compression and artifact workflows
 
 Compression variants are supported. Vertebrae fits the label-free compressor on sample
