@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Any, Iterable, Tuple
+from typing import Any, Iterable, Optional, Tuple
 
 import numpy as np
 
@@ -209,7 +209,15 @@ class LocalArtifactStore:
             storage_format=manifest.storage_format,
         )
 
-    def put_labels(self, key: str, labels: Any) -> str:
+    def put_labels(
+        self,
+        key: str,
+        labels: Any,
+        *,
+        label_names: Optional[Iterable[Any]] = None,
+        target_type: str = "auto",
+        target_names: Optional[Iterable[str]] = None,
+    ) -> str:
         """Store labels as a JSON artifact.
 
         Args:
@@ -223,7 +231,16 @@ class LocalArtifactStore:
         path = self._path(key)
         path.mkdir(parents=True, exist_ok=True)
         target = path / "labels.json"
-        payload = json_dumps_strict(labels_to_jsonable(labels), indent=2, sort_keys=True)
+        payload = json_dumps_strict(
+            labels_to_jsonable(
+                labels,
+                label_names=label_names,
+                target_type=target_type,
+                target_names=target_names,
+            ),
+            indent=2,
+            sort_keys=True,
+        )
         with target.open("w", encoding="utf-8") as f:
             f.write(payload)
         return str(target)

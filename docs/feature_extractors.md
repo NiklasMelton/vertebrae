@@ -45,6 +45,11 @@ embeddings.
 Structured outputs are intended for raw token, frame, region, keypoint, or
 other per-parent unit matrices that should be materialized and scored as unit
 embeddings without first precomputing a flat embedding dataset by hand.
+Each parent matrix may be a dense NumPy array or scipy sparse matrix. Sparse
+matrices are passed to explicit aligners without densification and remain
+sparse when rows are combined. Within one named output, feature dimension,
+dtype, and dense-versus-sparse representation must remain stable across
+parents and batches.
 
 Today the extractor families with native structured-output coverage are:
 

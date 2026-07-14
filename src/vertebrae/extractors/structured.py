@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 
-from vertebrae.utils.validation import ensure_numeric_matrix
+from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,8 @@ class PrecomputedStructuredExtractor(CallableStructuredExtractor):
 
 
 def _per_parent_structured_values(value: Any, unit_type: str) -> List[Any]:
+    if is_sparse_matrix(value):
+        return [ensure_numeric_matrix(value, f"{unit_type} embeddings", allow_sparse=True)]
     if isinstance(value, np.ndarray):
         if value.ndim == 3:
             return [

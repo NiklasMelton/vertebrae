@@ -614,6 +614,13 @@ representation diagnostics for regions, tokens, frames, keypoints, depth cells,
 and latent slots. It does not substitute task-native metrics such as mAP, IoU,
 WER/CER, OKS, depth error, or reconstruction quality.
 
+Unit annotations may use single-label, multi-label, or one-/multi-target
+regression targets, provided every parent uses the same resolved schema. Local
+unit IDs may repeat across parents; materialization generates parent-aware
+global IDs and retains the supplied value as `local_unit_id` in provenance.
+Dense and scipy sparse per-parent matrices are supported without premature
+densification.
+
 ```python
 from vertebrae import Benchmark, BenchmarkDataset, UnitAnnotation, DatasetIdentity
 from vertebrae.extractors import CallableStructuredExtractor, StructuredOutputSpec

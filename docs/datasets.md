@@ -292,6 +292,21 @@ This keeps the original parent-sample dataset intact until a structured
 extractor materializes one embedding row per retained unit. The same pattern
 works across several structured domains:
 
+`UnitAnnotation.labels` accepts the same target families as an ordinary
+dataset: one-dimensional single labels, two-dimensional indicator matrices or
+one-dimensional label-set sequences for multi-label targets, and one- or
+two-dimensional numeric regression targets. Every parent must resolve to the
+same target schema. Multi-label parents therefore need the same ordered
+`label_names`, and regression parents need the same ordered `target_names` and
+target count. Supplying these names explicitly is recommended whenever one
+parent may not contain the complete label vocabulary.
+
+Annotation `unit_ids` are local to their parent. They must be unique within a
+parent, but the same local values may be reused by different parents. During
+materialization, vertebrae creates a deterministic global `unit_id` from the
+exact typed `(parent_index, local_unit_id)` pair. Provenance retains both that
+global ID and the original `local_unit_id`.
+
 - OCR/document layout regions: use `coordinates`, stable `unit_ids`, and page or
   document provenance per region.
 - ASR or NLP tokens: use `positions`, `spans`, and utterance or sequence
@@ -431,6 +446,18 @@ Aligners must return explicit one-to-one annotation and embedding row matches.
 `vertebrae` validates bounds and uniqueness and records the alignment recipe in
 materialized metadata and provenance. It does not perform automatic IoU-based,
 temporal, Hungarian, or learned matching on the user's behalf.
+
+Dense NumPy and scipy sparse unit matrices are both supported. A named output
+must keep the same feature dimension, dtype, and dense-versus-sparse form for
+all parents and batches. Aligners receive the original matrix form, and sparse
+rows remain sparse through flattening and artifact materialization.
+
+### Alpha migration note
+
+Materialized `unit_ids` are now generated global identifiers rather than the
+annotation values copied verbatim. Code that needs the caller-supplied ID
+should read `local_unit_id` from unit provenance. This direct contract change
+follows the package's pre-release compatibility policy.
 
 ## Validation rules
 

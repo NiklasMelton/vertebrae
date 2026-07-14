@@ -153,11 +153,28 @@ class GCSArtifactStore:
             storage_format=manifest.storage_format,
         )
 
-    def put_labels(self, key: str, labels: Any) -> str:
+    def put_labels(
+        self,
+        key: str,
+        labels: Any,
+        *,
+        label_names: Optional[Iterable[Any]] = None,
+        target_type: str = "auto",
+        target_names: Optional[Iterable[str]] = None,
+    ) -> str:
         """Store labels as JSON."""
 
-        payload = json_dumps_strict(labels_to_jsonable(labels), indent=2, sort_keys=True).encode(
-            "utf-8"
+        payload = json_dumps_strict(
+            labels_to_jsonable(
+                labels,
+                label_names=label_names,
+                target_type=target_type,
+                target_names=target_names,
+            ),
+            indent=2,
+            sort_keys=True,
+        ).encode(
+            "utf-8",
         )
         blob_name = self._artifact_blob_name(key, "labels.json")
         self._put_bytes(blob_name, payload)

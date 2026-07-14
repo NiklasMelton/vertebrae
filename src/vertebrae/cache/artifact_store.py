@@ -164,7 +164,15 @@ class ArtifactStore(Protocol):
 
         ...
 
-    def put_labels(self, key: str, labels: Any) -> str:
+    def put_labels(
+        self,
+        key: str,
+        labels: Any,
+        *,
+        label_names: Optional[Iterable[Any]] = None,
+        target_type: str = "auto",
+        target_names: Optional[Iterable[str]] = None,
+    ) -> str:
         """Store labels and return their URI/path."""
 
         ...
