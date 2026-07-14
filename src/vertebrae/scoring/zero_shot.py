@@ -336,7 +336,6 @@ def _similarities(samples: np.ndarray, prototypes: np.ndarray, similarity: str) 
     scores *= 2.0
     scores -= sample_norms
     scores -= prototype_norms
-    np.negative(scores, out=scores)
     return scores
 
 

@@ -493,6 +493,34 @@ def test_zero_shot_scorer_reports_metrics_ensembles_and_ties():
     assert any("tie" in warning for warning in tied.warnings)
 
 
+def test_zero_shot_squared_l2_ranks_nearest_prototypes_across_batches():
+    samples = np.asarray([[1.0, 0.0], [0.8, 0.2], [0.0, 1.0], [0.2, 0.8]], dtype=np.float64)
+    prompts = np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
+    labels = ["left", "left", "right", "right"]
+    oracle_scores = -np.sum((samples[:, None, :] - prompts[None, :, :]) ** 2, axis=2)
+    assert np.argmax(oracle_scores, axis=1).tolist() == [0, 0, 1, 1]
+
+    result = ZeroShotScorer(
+        ZeroShotConfig(
+            similarity="squared_l2",
+            top_k=(1, 2),
+            sample_batch_size=1,
+        )
+    ).score(
+        samples,
+        prompts,
+        labels,
+        class_labels=["left", "right"],
+        prompt_labels=["left", "right"],
+    )
+
+    assert result.score == pytest.approx(1.0)
+    assert result.metrics["top_k_accuracy@1"] == pytest.approx(1.0)
+    assert result.metrics["top_k_accuracy@2"] == pytest.approx(1.0)
+    assert result.confusion_matrix == [[2, 0], [0, 2]]
+    assert result.diagnostics["correct_class_margin"]["min"] > 0.0
+
+
 @pytest.mark.parametrize("similarity", ["cosine", "dot", "squared_l2"])
 def test_zero_shot_blockwise_scoring_matches_single_block(similarity):
     samples = np.asarray(
@@ -764,6 +792,40 @@ def test_zero_shot_artifact_round_trip(tmp_path, fake_overlapindex):
     assert reconstructed.extractor_results[0].zero_shot.score == pytest.approx(1.0)
     assert reconstructed.dataset_summary == protocol_artifact["dataset_summary"]
     assert store.get_json("report")["extractor_results"]
+
+
+def test_zero_shot_squared_l2_artifact_scoring_ranks_nearest_prototypes(
+    tmp_path, fake_overlapindex
+):
+    dataset = BenchmarkDataset.from_arrays(
+        ["left-0", "left-1", "right-0", "right-1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
+    store = LocalArtifactStore(str(tmp_path))
+    protocol_key = materialize_zero_shot_protocol(protocol, store, "protocol")["output_key"]
+    _materialize_aligned_zero_shot_endpoints(protocol, store)
+
+    artifact = score_zero_shot_artifact(
+        ZeroShotScoringJob(
+            sample_embedding_key="samples",
+            prompt_embedding_key="prompts",
+            protocol_key=protocol_key,
+            output_key="score",
+            zero_shot_config=ZeroShotConfig(
+                similarity="squared_l2",
+                top_k=(1, 2),
+                sample_batch_size=1,
+            ),
+        ),
+        store,
+    )
+
+    assert artifact["zero_shot"]["metrics"]["accuracy"] == pytest.approx(1.0)
+    assert artifact["zero_shot"]["confusion_matrix"] == [[2, 0], [0, 2]]
+    assert artifact["zero_shot"]["diagnostics"]["correct_class_margin"]["min"] > 0.0
 
 
 def test_zero_shot_cli_round_trip(tmp_path, fake_overlapindex):

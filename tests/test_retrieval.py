@@ -90,6 +90,103 @@ def test_query_batch_scoring_matches_single_query_batches():
     assert batched.metrics == pytest.approx(single.metrics)
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "use_sparse"),
+    [
+        ("query", False),
+        ("query", True),
+        ("gallery", False),
+        ("gallery", True),
+    ],
+)
+def test_cosine_retrieval_rejects_zero_norm_rows_with_endpoint_identity(endpoint, use_sparse):
+    queries = np.asarray([[1.0, 0.0], [0.0, 1.0]])
+    gallery = np.asarray([[1.0, 0.0], [0.0, 1.0]])
+    query_ids = ["query-ok", "query-zero"]
+    gallery_ids = ["gallery-ok", "gallery-zero"]
+    if endpoint == "query":
+        queries[1] = 0.0
+        if use_sparse:
+            queries = sparse.csr_matrix(queries)
+        expected_endpoint = "Query embeddings"
+        expected_id = "query-zero"
+    else:
+        gallery[1] = 0.0
+        if use_sparse:
+            gallery = sparse.csr_matrix(gallery)
+        expected_endpoint = "Gallery embeddings"
+        expected_id = "gallery-zero"
+
+    with pytest.raises(ValueError) as error:
+        RetrievalScorer(RetrievalConfig(ks=(1,), primary_metric="ndcg@1")).score(
+            queries,
+            gallery,
+            {0: {0: 1.0}, 1: {1: 1.0}},
+            query_ids=query_ids,
+            gallery_ids=gallery_ids,
+        )
+
+    message = str(error.value)
+    assert expected_endpoint in message
+    assert "1 zero-norm row(s)" in message
+    assert "index 1" in message
+    assert expected_id in message
+    assert "Cosine similarity is undefined" in message
+
+
+def test_cosine_retrieval_zero_norm_error_bounds_row_preview():
+    queries = np.zeros((12, 2))
+    gallery = np.asarray([[1.0, 0.0]])
+    relevance = {index: {0: 1.0} for index in range(len(queries))}
+
+    with pytest.raises(ValueError) as error:
+        RetrievalScorer(RetrievalConfig(ks=(1,), primary_metric="ndcg@1")).score(
+            queries,
+            gallery,
+            relevance,
+        )
+
+    message = str(error.value)
+    assert "12 zero-norm row(s)" in message
+    assert "index 9" in message
+    assert "index 10" not in message
+    assert ", ..." in message
+
+
+@pytest.mark.parametrize("similarity", ["dot", "squared_l2"])
+def test_non_cosine_retrieval_accepts_zero_norm_rows(similarity):
+    result = RetrievalScorer(
+        RetrievalConfig(similarity=similarity, ks=(1,), primary_metric="ndcg@1")
+    ).score(
+        np.asarray([[0.0, 0.0], [1.0, 0.0]]),
+        np.asarray([[0.0, 0.0], [1.0, 0.0]]),
+        {0: {0: 1.0}, 1: {1: 1.0}},
+    )
+
+    assert result.score == pytest.approx(1.0)
+
+
+def test_retrieval_benchmark_rejects_zero_norm_cosine_queries():
+    dataset = RetrievalDataset.from_embeddings(
+        np.asarray([[1.0, 0.0], [0.0, 0.0]]),
+        np.asarray([[1.0, 0.0], [0.0, 1.0]]),
+        [
+            ("query-ok", "gallery-left", 1.0),
+            ("query-zero", "gallery-right", 1.0),
+        ],
+        query_ids=["query-ok", "query-zero"],
+        gallery_ids=["gallery-left", "gallery-right"],
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    with pytest.raises(ValueError, match="Query embeddings.*query-zero"):
+        RetrievalBenchmark(
+            dataset,
+            [PrecomputedExtractor()],
+            retrieval_config=RetrievalConfig(ks=(1,), primary_metric="ndcg@1"),
+        ).run()
+
+
 def test_dense_relevance_matrix_and_gallery_compression_benchmark():
     dataset = RetrievalDataset.from_relevance_matrix(
         np.eye(2),
@@ -307,6 +404,39 @@ def test_retrieval_artifact_scoring_round_trip(tmp_path):
     result = retrieval_benchmark_result_from_artifacts(["out"], store)
     assert result.ranked_results()[0].primary_score == pytest.approx(1.0)
     assert result.dataset_summary["n_queries"] == 2
+
+
+def test_retrieval_artifact_rejects_zero_norm_cosine_gallery(tmp_path):
+    store = LocalArtifactStore(str(tmp_path))
+    store.put_array("q", np.eye(2))
+    store.put_json(
+        "q", {"n_samples": 2, "side": "query", "dataset_identity_key": "d", "recipe_hash": "e"}
+    )
+    store.put_array("g", np.asarray([[1.0, 0.0], [0.0, 0.0]]))
+    store.put_json(
+        "g", {"n_samples": 2, "side": "gallery", "dataset_identity_key": "d", "recipe_hash": "e"}
+    )
+    store.put_json(
+        "r",
+        {
+            "relevance": {"0": {"0": 1.0}, "1": {"1": 1.0}},
+            "query_ids": ["query-left", "query-right"],
+            "gallery_ids": ["gallery-ok", "gallery-zero"],
+            "dataset_identity_key": "d",
+        },
+    )
+
+    with pytest.raises(ValueError, match="Gallery embeddings.*gallery-zero"):
+        score_retrieval_artifact(
+            RetrievalScoringJob(
+                "q",
+                "g",
+                "r",
+                "out",
+                RetrievalConfig(ks=(1,), primary_metric="ndcg@1"),
+            ),
+            store,
+        )
 
 
 def test_retrieval_artifact_rejects_misaligned_ids(tmp_path):

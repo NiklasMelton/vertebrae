@@ -93,8 +93,16 @@ class RetrievalScorer:
         query_dense = _to_dense(query_matrix)
         gallery_dense = _to_dense(gallery_matrix)
         if self.config.similarity == "cosine":
-            query_dense = _l2_normalize(query_dense)
-            gallery_dense = _l2_normalize(gallery_dense)
+            query_dense = _l2_normalize(
+                query_dense,
+                endpoint="Query embeddings",
+                row_ids=query_ids,
+            )
+            gallery_dense = _l2_normalize(
+                gallery_dense,
+                endpoint="Gallery embeddings",
+                row_ids=gallery_ids,
+            )
         metric_rows: List[Dict[str, float]] = []
         positive_sims: List[float] = []
         negative_sims: List[float] = []
@@ -329,9 +337,28 @@ def _dense_bytes(value: Any) -> int:
     return int(value.shape[0]) * int(value.shape[1]) * np.dtype(np.float64).itemsize
 
 
-def _l2_normalize(value: np.ndarray) -> np.ndarray:
+def _l2_normalize(
+    value: np.ndarray,
+    *,
+    endpoint: str,
+    row_ids: Optional[List[Any]] = None,
+) -> np.ndarray:
     norms = np.linalg.norm(value, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
+    zero_rows = np.flatnonzero(norms[:, 0] == 0.0)
+    if len(zero_rows):
+        preview = []
+        for index in zero_rows[:10]:
+            row = int(index)
+            identity = f"index {row}"
+            if row_ids is not None:
+                identity += f" (ID {row_ids[row]!r})"
+            preview.append(identity)
+        suffix = "" if len(zero_rows) <= len(preview) else ", ..."
+        raise ValueError(
+            f"{endpoint} contain {len(zero_rows)} zero-norm row(s): "
+            f"{', '.join(preview)}{suffix}. Cosine similarity is undefined for zero-norm "
+            "embeddings."
+        )
     return value / norms
 
 
