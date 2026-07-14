@@ -286,6 +286,7 @@ def test_local_batch_writes_allow_intentional_gaps_but_validate_sample_count(tmp
             n_samples=0,
         )
 
+
 def test_s3_artifact_store_missing_dependency_raises_clear_error():
     if importlib.util.find_spec("boto3") is not None:
         pytest.skip("boto3 is installed in this environment.")

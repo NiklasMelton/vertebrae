@@ -173,9 +173,7 @@ def _mapping_value_path(path: str, key: str) -> str:
 
 
 def _set_json(value: Any, *, path: str, active: MutableSet[int]) -> list:
-    normalized = [
-        _make_json_safe(item, path=f"{path}<set-item>", active=active) for item in value
-    ]
+    normalized = [_make_json_safe(item, path=f"{path}<set-item>", active=active) for item in value]
     return sorted(
         normalized,
         key=lambda item: json.dumps(

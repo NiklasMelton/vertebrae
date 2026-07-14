@@ -153,9 +153,9 @@ class GCSArtifactStore:
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as JSON."""
 
-        payload = json_dumps_strict(
-            labels_to_jsonable(labels), indent=2, sort_keys=True
-        ).encode("utf-8")
+        payload = json_dumps_strict(labels_to_jsonable(labels), indent=2, sort_keys=True).encode(
+            "utf-8"
+        )
         blob_name = self._artifact_blob_name(key, "labels.json")
         self._put_bytes(blob_name, payload)
         return self._uri_for(blob_name)

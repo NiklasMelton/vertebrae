@@ -162,9 +162,9 @@ class S3ArtifactStore:
     def put_labels(self, key: str, labels: Any) -> str:
         """Store labels as JSON."""
 
-        payload = json_dumps_strict(
-            labels_to_jsonable(labels), indent=2, sort_keys=True
-        ).encode("utf-8")
+        payload = json_dumps_strict(labels_to_jsonable(labels), indent=2, sort_keys=True).encode(
+            "utf-8"
+        )
         object_key = self._artifact_object_key(key, "labels.json")
         self._put_bytes(object_key, payload)
         return self._uri_for(object_key)
