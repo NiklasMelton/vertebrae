@@ -23,6 +23,126 @@ from vertebrae.execution import (
 from vertebrae.extractors import CallableExtractor, PrecomputedExtractor, SklearnExtractor
 
 
+@pytest.mark.parametrize("dtype", ["float16", "float32", "float64"])
+def test_compression_config_accepts_real_floating_dtypes(dtype):
+    config = EmbeddingCompressionConfig(
+        enabled=True,
+        method="prefix_truncate",
+        n_components=2,
+        dtype=dtype,
+    )
+
+    assert config.dtype == dtype
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "int8",
+        "uint64",
+        "complex64",
+        "bool",
+        "object",
+        "U16",
+        "S16",
+        "datetime64[ns]",
+        np.dtype([("feature", np.float32)]),
+    ],
+)
+def test_compression_config_rejects_nonfloating_dtypes(dtype):
+    with pytest.raises(ValueError, match="real floating-point NumPy dtype"):
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="prefix_truncate",
+            n_components=2,
+            dtype=dtype,
+        )
+
+
+def test_compression_config_rejects_unsupported_dtype():
+    with pytest.raises(ValueError, match="Unsupported compression dtype"):
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="prefix_truncate",
+            n_components=2,
+            dtype="not-a-dtype",
+        )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_pca_config_rejects_conflicting_dimension_options(enabled):
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        EmbeddingCompressionConfig(
+            enabled=enabled,
+            method="pca",
+            n_components=2,
+            preserve_variance=0.9,
+        )
+
+
+def test_enabled_pca_config_requires_one_dimension_option():
+    with pytest.raises(ValueError, match="requires n_components or preserve_variance"):
+        EmbeddingCompressionConfig(enabled=True, method="pca")
+
+
+@pytest.mark.parametrize("preserve_variance", [-0.1, 0.0, 1.0, 1.1, np.nan, np.inf])
+def test_pca_config_rejects_invalid_preserve_variance(preserve_variance):
+    with pytest.raises(ValueError, match="preserve_variance must be in"):
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="pca",
+            preserve_variance=preserve_variance,
+        )
+
+
+def test_pca_config_accepts_each_dimension_option_independently():
+    by_dimension = EmbeddingCompressionConfig(enabled=True, method="pca", n_components=2)
+    by_variance = EmbeddingCompressionConfig(
+        enabled=True,
+        method="pca",
+        preserve_variance=0.9,
+    )
+
+    assert by_dimension.n_components == 2
+    assert by_dimension.preserve_variance is None
+    assert by_variance.n_components is None
+    assert by_variance.preserve_variance == pytest.approx(0.9)
+
+
+def test_pca_preserve_variance_resolves_dimension_and_metadata():
+    embeddings = np.random.default_rng(123).normal(size=(30, 6))
+    result = compress_embeddings(
+        embeddings,
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="pca",
+            preserve_variance=0.8,
+        ),
+    )
+
+    assert result.embeddings.shape[0] == embeddings.shape[0]
+    assert 1 <= result.embeddings.shape[1] < embeddings.shape[1]
+    assert result.metadata["compressed_dim"] == result.embeddings.shape[1]
+    assert result.metadata["resolved_n_components"] == result.embeddings.shape[1]
+    assert result.metadata["explained_variance_total"] >= 0.8
+
+
+def test_pca_compression_honors_floating_output_dtype():
+    embeddings = np.random.default_rng(456).normal(size=(12, 5))
+    result = compress_embeddings(
+        embeddings,
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="pca",
+            n_components=3,
+            dtype="float32",
+        ),
+    )
+
+    assert result.embeddings.dtype == np.float32
+    assert result.metadata["dtype"] == "float32"
+
+
 def test_pca_compression_reduces_dense_embeddings(fake_overlapindex):
     rng = np.random.default_rng(0)
     embeddings = rng.normal(size=(12, 8))
@@ -149,6 +269,105 @@ def test_prefix_truncate_honors_dtype_and_preserves_sparsity(sparse_input):
     assert sparse.issparse(result.embeddings) is sparse_input
     assert result.metadata["dtype"] == "float32"
     assert result.metadata["applied"] is True
+
+
+def test_prefix_truncate_normalizes_sparse_integer_output_to_float():
+    embeddings = sparse.csr_matrix(np.arange(12, dtype=np.int64).reshape(4, 3))
+    result = compress_embeddings(
+        embeddings,
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="prefix_truncate",
+            n_components=2,
+            assume_matryoshka=True,
+        ),
+    )
+
+    assert sparse.issparse(result.embeddings)
+    assert np.issubdtype(result.embeddings.dtype, np.floating)
+    assert result.metadata["dtype"] == "float64"
+
+
+def test_quantize_float16_preserves_sparse_output_and_validates_dtype():
+    embeddings = sparse.csr_matrix(np.eye(4, dtype=np.float32))
+    result = compress_embeddings(
+        embeddings,
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="quantize",
+            precision="float16",
+        ),
+    )
+
+    assert sparse.issparse(result.embeddings)
+    assert result.embeddings.dtype == np.float16
+    assert result.metadata["dtype"] == "float16"
+
+
+@pytest.mark.parametrize("sparse_input", [False, True])
+def test_prefix_truncate_rejects_nonfinite_output_after_dtype_cast(sparse_input):
+    embeddings = np.asarray(
+        [
+            [1e100, 0.0],
+            [0.0, 1.0],
+            [-1e100, 2.0],
+        ]
+    )
+    if sparse_input:
+        embeddings = sparse.csr_matrix(embeddings)
+
+    with pytest.raises(ValueError, match="finite numeric values"):
+        compress_embeddings(
+            embeddings,
+            EmbeddingCompressionConfig(
+                enabled=True,
+                method="prefix_truncate",
+                n_components=1,
+                assume_matryoshka=True,
+                dtype="float16",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="pca",
+            n_components=1,
+            dtype="float16",
+        ),
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="quantize",
+            precision="float16",
+        ),
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="quantize",
+            precision="int8",
+        ),
+        EmbeddingCompressionConfig(
+            enabled=True,
+            method="quantize",
+            precision="uint8",
+        ),
+    ],
+    ids=["pca", "float16", "int8", "uint8"],
+)
+def test_compression_rejects_nonfinite_output_after_precision_cast(config):
+    embeddings = np.asarray(
+        [
+            [-1e100, 0.0],
+            [0.0, 1.0],
+            [1e100, 2.0],
+            [2e100, 3.0],
+        ]
+    )
+
+    with pytest.raises(ValueError, match="finite numeric values"):
+        compress_embeddings(embeddings, config)
 
 
 def test_skipped_compression_preserves_dtype_and_reports_actual_dtype():

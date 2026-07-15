@@ -44,6 +44,11 @@ result = Evaluator(
 To compare multiple compression variants in one run, pass
 `compression_configs=[...]` to `Benchmark`.
 
+For dimensional compression methods, `dtype` may be set to a real floating-point
+NumPy dtype such as `float16`, `float32`, or `float64`. Integer, complex, boolean,
+object, text, datetime, and structured dtypes are rejected. Use quantization's
+`precision="int8"` or `precision="uint8"` when evaluating integer encoding.
+
 ## Supported methods
 
 ### `none`
@@ -55,7 +60,8 @@ Disables compression and preserves the current workflow.
 Dense PCA for low- to medium-dimensional dense embeddings.
 
 - Requires dense input.
-- Supports `n_components` or `preserve_variance`.
+- Requires exactly one of `n_components` or `preserve_variance`.
+- `preserve_variance` must be strictly between `0` and `1`.
 - Supports `whiten=True`.
 
 ### `incremental_pca`
@@ -104,8 +110,9 @@ model-native shortening path.
 For every dimensional method, a requested `n_components` greater than or equal to
 the current embedding width is recorded as a skipped compression and leaves values,
 sparsity, dimensions, and dtype unchanged. A requested `dtype` is applied only when
-compression is actually performed. PCA and incremental PCA also reject a reducing
-dimension that exceeds the number of samples on the side used to fit the transform.
+compression is actually performed. It is never used to cast a skipped or disabled
+compression result. PCA and incremental PCA also reject a reducing dimension that
+exceeds the number of samples on the side used to fit the transform.
 
 ### `quantize`
 
@@ -117,6 +124,10 @@ Supported precisions:
 - `float16`: direct cast for dense or sparse embeddings.
 - `int8`: dense scalar quantize/dequantize round trip using symmetric per-dimension scaling.
 - `uint8`: dense scalar quantize/dequantize round trip using affine per-dimension min/max scaling.
+
+The integer precisions record the encoded dtype and estimated encoded size in
+metadata, then return dequantized `float32` embeddings for scoring. They do not
+return integer matrices to the scoring pipeline.
 
 Binary and packed-bit quantization are intentionally not included here because
 they are more appropriate for retrieval or ANN index evaluation than for
@@ -153,6 +164,9 @@ vertebrae compress \
   --n-components 256 \
   --assume-matryoshka
 ```
+
+For PCA, pass either `--n-components` or `--preserve-variance`; the CLI rejects
+commands that provide both.
 
 Example quantization run:
 
