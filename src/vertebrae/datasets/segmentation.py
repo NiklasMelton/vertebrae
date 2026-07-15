@@ -111,8 +111,7 @@ class SegmentationDataset:
         if not self.annotations:
             raise ValueError("SegmentationDataset must contain at least one image.")
         if any(
-            not isinstance(annotation, SegmentationAnnotation)
-            for annotation in self.annotations
+            not isinstance(annotation, SegmentationAnnotation) for annotation in self.annotations
         ):
             raise TypeError("annotations must contain SegmentationAnnotation values.")
         self.annotations = [annotation.normalized() for annotation in self.annotations]

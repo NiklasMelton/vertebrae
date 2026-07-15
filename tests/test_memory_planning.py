@@ -219,9 +219,7 @@ def test_memory_triggered_regression_subsample_preserves_variation(
     assert item.embedding_metadata["requested_subsample_rate"] == 0.5
     assert item.embedding_metadata["effective_subsample_rate"] == 0.5
     assert np.var(fake_overlapindex.continuous_calls[-1]["fit_y"]) > 0.0
-    assert any(
-        "target-preserving regression subsample" in warning for warning in item.warnings
-    )
+    assert any("target-preserving regression subsample" in warning for warning in item.warnings)
 
 
 def test_streaming_embedding_records_memory_estimate(tmp_path, fake_overlapindex):
