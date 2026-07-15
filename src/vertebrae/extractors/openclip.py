@@ -4,18 +4,32 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
     coerce_image,
     ensure_text_sequence,
     iter_chunks,
     maybe_move_to_device,
+    optional_dependency_versions,
     resolve_output_specs,
     resolve_output_value,
+    snapshot_mapping,
+    snapshot_string_mapping,
     spec_to_recipe,
     stack_batch,
     tensor_to_numpy,
+    validate_batch_size,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+
+_OPENCLIP_OUTPUT_SOURCES = {"fused", "image", "text"}
 
 
 class OpenCLIPExtractor:
@@ -34,19 +48,37 @@ class OpenCLIPExtractor:
         device: Optional[str] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[Sequence[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
-        self.model_name = model_name
-        self.pretrained = pretrained
-        self.input_modalities = input_modalities or {"image": "image", "text": "text"}
-        self._output_specs = resolve_output_specs(
-            outputs or [{"name": "image_branch", "source": "image"}]
+        batch_size = validate_batch_size(batch_size)
+        self.name = validate_extractor_name(name)
+        self.model_name = validate_nonblank_string(model_name, "model_name")
+        self.pretrained = validate_optional_nonblank_string(pretrained, "pretrained")
+        resolved_modalities = (
+            {"image": "image", "text": "text"} if input_modalities is None else input_modalities
         )
+        self.input_modalities = snapshot_string_mapping(
+            resolved_modalities,
+            "input_modalities",
+            allowed_values={"image", "text"},
+        )
+        if not self.input_modalities:
+            raise ValueError("input_modalities must not be empty.")
+        self._output_specs = resolve_output_specs(
+            [{"name": "image_branch", "source": "image"}] if outputs is None else outputs
+        )
+        _validate_transform_sources(self._output_specs, self.input_modalities)
         self.batch_size = batch_size
-        self.image_mode = image_mode
-        self.alpha_mode = alpha_mode
-        self.device = device
-        self.model_kwargs = model_kwargs or {}
+        self.image_mode = validate_choice(
+            image_mode, "image_mode", {"auto", "rgb", "grayscale", "preserve"}
+        )
+        self.alpha_mode = validate_choice(
+            alpha_mode,
+            "alpha_mode",
+            {"drop", "white_background", "black_background"},
+        )
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "multimodal"
         self.extractor_type = "openclip"
@@ -56,6 +88,7 @@ class OpenCLIPExtractor:
         self._model: Any = None
         self._preprocess: Any = None
         self._tokenizer: Any = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "OpenCLIPExtractor":
         return self
@@ -157,7 +190,7 @@ class OpenCLIPExtractor:
         return np.vstack(collected)
 
     def recipe(self) -> Dict[str, Any]:
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -170,8 +203,21 @@ class OpenCLIPExtractor:
             "alpha_mode": self.alpha_mode,
             "device": self.device,
             "model_kwargs": self.model_kwargs,
+            "dependency_versions": optional_dependency_versions(
+                "open-clip-torch", "Pillow", "torch"
+            ),
             "streaming_safe": self.streaming_safe,
         }
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                paths=self.checkpoint_paths,
+                state_required=self.pretrained is None,
+                require_pinned_revision=self.pretrained is not None,
+                paths_authoritative=False,
+            )
+        )
+        return recipe
 
     def get_resource_profile_adapter(self) -> Any:
         from vertebrae.profiling import TorchResourceProfileAdapter
@@ -192,42 +238,55 @@ class OpenCLIPExtractor:
         preprocess_fn: Any,
         tokenizer: Any,
     ) -> Dict[str, Any]:
-        images = [
-            preprocess_fn(
-                coerce_image(
-                    sample[_first_field(self.input_modalities, "image")],
-                    image_module=image_module,
-                    image_mode=self.image_mode,
-                    alpha_mode=self.alpha_mode,
+        sources = {str(spec.metadata["source"]) for spec in self._output_specs}
+        needs_image = bool(sources & {"image", "fused"})
+        needs_text = bool(sources & {"text", "fused"})
+        image_batch = None
+        text_batch = None
+        if needs_image:
+            image_field = _first_field(self.input_modalities, "image")
+            images = [
+                preprocess_fn(
+                    coerce_image(
+                        sample[image_field],
+                        image_module=image_module,
+                        image_mode=self.image_mode,
+                        alpha_mode=self.alpha_mode,
+                    )
                 )
+                for sample in batch
+            ]
+            image_batch = maybe_move_to_device(
+                stack_batch(images, torch_module=torch_module),
+                device=self._device(torch_module),
+                torch_module=torch_module,
             )
-            for sample in batch
-        ]
-        texts = [sample[_first_field(self.input_modalities, "text")] for sample in batch]
-        image_batch = stack_batch(images, torch_module=torch_module)
-        image_batch = maybe_move_to_device(
-            image_batch,
-            device=self._device(torch_module),
-            torch_module=torch_module,
-        )
-        text_batch = tokenizer(ensure_text_sequence(texts, "OpenCLIPExtractor"))
-        text_batch = maybe_move_to_device(
-            text_batch,
-            device=self._device(torch_module),
-            torch_module=torch_module,
-        )
+        if needs_text:
+            text_field = _first_field(self.input_modalities, "text")
+            texts = [sample[text_field] for sample in batch]
+            text_batch = tokenizer(ensure_text_sequence(texts, "OpenCLIPExtractor"))
+            text_batch = maybe_move_to_device(
+                text_batch,
+                device=self._device(torch_module),
+                torch_module=torch_module,
+            )
         projected: Dict[str, Any] = {}
-        if any(spec.metadata.get("source") == "image" for spec in self._output_specs):
+        if "image" in sources:
             projected["image"] = model.encode_image(image_batch)
-        if any(spec.metadata.get("source") == "text" for spec in self._output_specs):
+        if "text" in sources:
             projected["text"] = model.encode_text(text_batch)
-        if any(spec.metadata.get("source") == "fused" for spec in self._output_specs):
-            if hasattr(model, "get_logits"):
-                projected["fused"] = model.get_logits(image_batch, text_batch)
+        if "fused" in sources:
+            get_logits = getattr(model, "get_logits", None)
+            if callable(get_logits):
+                projected["fused"] = get_logits(image_batch, text_batch)
             else:
+                if "image" not in projected:
+                    projected["image"] = model.encode_image(image_batch)
+                if "text" not in projected:
+                    projected["text"] = model.encode_text(text_batch)
                 projected["fused"] = {
-                    "image": projected.get("image"),
-                    "text": projected.get("text"),
+                    "image": projected["image"],
+                    "text": projected["text"],
                 }
         return projected
 
@@ -287,3 +346,30 @@ def _first_field(input_modalities: Dict[str, str], modality: str) -> str:
         if field_modality == modality:
             return field_name
     raise ValueError(f"input_modalities does not include a {modality!r} field.")
+
+
+def _validate_transform_sources(
+    specs: Sequence[EmbeddingOutputSpec],
+    input_modalities: Dict[str, str],
+) -> None:
+    """Reject output branches that cannot be produced from declared transform inputs."""
+
+    sources = {spec.metadata.get("source") for spec in specs}
+    invalid = sources - _OPENCLIP_OUTPUT_SOURCES
+    if invalid:
+        raise ValueError(
+            "OpenCLIPExtractor output source must be one of: fused, image, text; "
+            f"got {sorted(repr(item) for item in invalid)}."
+        )
+    declared_modalities = set(input_modalities.values())
+    required_modalities = set()
+    if sources & {"image", "fused"}:
+        required_modalities.add("image")
+    if sources & {"text", "fused"}:
+        required_modalities.add("text")
+    missing = required_modalities - declared_modalities
+    if missing:
+        raise ValueError(
+            "OpenCLIPExtractor input_modalities is missing fields required by its outputs: "
+            f"{sorted(missing)}."
+        )

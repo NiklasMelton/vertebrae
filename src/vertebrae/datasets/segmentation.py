@@ -2,12 +2,15 @@
 
 from dataclasses import dataclass, field
 from numbers import Integral
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 import numpy as np
 
+from vertebrae.cache.fingerprint import canonical_json_exact
 from vertebrae.datasets.identity import DatasetIdentity
 from vertebrae.execution.jobs import SampleBatch, ShardSpec
+from vertebrae.utils.semantic_labels import semantic_label_key
+from vertebrae.utils.validation import validate_row_indices
 
 
 @dataclass(frozen=True)
@@ -23,14 +26,23 @@ class SegmentationAnnotation:
         semantic = np.asarray(self.semantic)
         if semantic.ndim != 2:
             raise ValueError("Segmentation semantic masks must be two-dimensional.")
+        if semantic.size == 0 or any(size < 1 for size in semantic.shape):
+            raise ValueError("Segmentation semantic masks must contain at least one pixel.")
         instance = None if self.instance is None else np.asarray(self.instance)
         if instance is not None and instance.shape != semantic.shape:
             raise ValueError("Instance and semantic masks must have the same shape.")
+        semantic_keys = _validate_mask_cells(semantic, "Segmentation semantic masks")
+        if instance is not None:
+            _validate_mask_cells(instance, "Segmentation instance masks")
+        ignore_labels = tuple(self.ignore_labels)
+        for value in ignore_labels:
+            _stable_scalar_key(value, "Segmentation ignore_labels")
+        class_metadata = _normalize_class_metadata(self.class_metadata, semantic_keys)
         return SegmentationAnnotation(
             semantic=semantic,
             instance=instance,
-            ignore_labels=tuple(self.ignore_labels),
-            class_metadata=dict(self.class_metadata),
+            ignore_labels=ignore_labels,
+            class_metadata=class_metadata,
         )
 
 
@@ -62,13 +74,14 @@ class SegmentationDataset:
     ) -> "SegmentationDataset":
         semantics = list(semantic_masks)
         instances = [None] * len(semantics) if instance_masks is None else list(instance_masks)
+        resolved_ignore_labels = tuple(ignore_labels)
         if len(instances) != len(semantics):
             raise ValueError("instance_masks and semantic_masks must have the same length.")
         annotations = [
             SegmentationAnnotation(
                 semantic=semantic,
                 instance=instance,
-                ignore_labels=tuple(ignore_labels),
+                ignore_labels=resolved_ignore_labels,
                 class_metadata=dict(class_metadata or {}),
             )
             for semantic, instance in zip(semantics, instances)
@@ -137,6 +150,9 @@ class SegmentationDataset:
         batch_size: int,
         shard: Optional[ShardSpec] = None,
     ) -> Iterable[SampleBatch]:
+        if isinstance(batch_size, (bool, np.bool_)) or not isinstance(batch_size, Integral):
+            raise TypeError("batch_size must be an integer.")
+        batch_size = int(batch_size)
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1.")
         indices = (shard or ShardSpec()).indices(len(self.annotations))
@@ -145,9 +161,10 @@ class SegmentationDataset:
             yield SampleBatch(indices=batch_indices, X=_take(self.X, batch_indices))
 
     def subset(self, indices: Any) -> "SegmentationDataset":
-        index_array = np.asarray(indices, dtype=int)
-        if index_array.ndim != 1:
-            raise ValueError("subset indices must be one-dimensional.")
+        raw_indices = np.asarray(indices, dtype=object)
+        if raw_indices.ndim == 1 and raw_indices.size == 0:
+            raise ValueError("SegmentationDataset subsets must contain at least one image.")
+        index_array = validate_row_indices(indices, len(self.annotations), name="subset indices")
         parent_indices = self.metadata.get("sample_indices")
         if parent_indices is None:
             sample_indices = index_array.tolist()
@@ -164,16 +181,21 @@ class SegmentationDataset:
                 "subset": True,
                 "parent_n_images": len(self.annotations),
                 "sample_indices": sample_indices,
+                "parent_row_positions": index_array.tolist(),
             },
         )
 
     def summary(self) -> Dict[str, Any]:
-        labels = set()
-        instance_ids = set()
+        labels: set[str] = set()
+        instance_ids: set[str] = set()
         for annotation in self.annotations:
-            labels.update(np.unique(annotation.semantic).tolist())
+            labels.update(
+                semantic_label_key(value) for value in annotation.semantic.reshape(-1).tolist()
+            )
             if annotation.instance is not None:
-                instance_ids.update(np.unique(annotation.instance).tolist())
+                instance_ids.update(
+                    semantic_label_key(value) for value in annotation.instance.reshape(-1).tolist()
+                )
         return {
             "n_images": len(self.annotations),
             "n_classes_raw": len(labels),
@@ -216,3 +238,59 @@ def _take(value: Any, indices: np.ndarray) -> Any:
     if isinstance(value, np.ndarray):
         return value[indices]
     return [value[int(index)] for index in indices]
+
+
+def _validate_mask_cells(mask: np.ndarray, name: str) -> set[str]:
+    keys: set[str] = set()
+    for value in mask.reshape(-1).tolist():
+        keys.add(_stable_scalar_key(value, name))
+    return keys
+
+
+def _stable_scalar_key(value: Any, name: str) -> str:
+    normalized = value.item() if isinstance(value, np.generic) else value
+    if normalized is None or _is_missing_scalar(normalized):
+        raise ValueError(f"{name} must contain non-missing scalar values.")
+    if isinstance(normalized, (Mapping, list, tuple, set, frozenset, np.ndarray)):
+        raise TypeError(f"{name} must contain scalar values.")
+    try:
+        hash(normalized)
+        return canonical_json_exact(normalized)
+    except TypeError as exc:
+        raise TypeError(
+            f"{name} values must be hashable and have stable exact identities."
+        ) from exc
+
+
+def _is_missing_scalar(value: Any) -> bool:
+    if isinstance(value, (float, np.floating, complex, np.complexfloating)):
+        return bool(np.isnan(value))
+    if isinstance(value, (np.datetime64, np.timedelta64)):
+        return bool(np.isnat(value))
+    return False
+
+
+def _normalize_class_metadata(
+    value: Any,
+    semantic_keys: set[str],
+) -> Dict[Any, Dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        raise TypeError("Segmentation class_metadata must be a mapping.")
+    normalized: Dict[Any, Dict[str, Any]] = {}
+    for label, metadata in value.items():
+        key = _stable_scalar_key(label, "Segmentation class_metadata labels")
+        if key not in semantic_keys:
+            raise ValueError(
+                f"Segmentation class_metadata label {label!r} is not present in the semantic mask."
+            )
+        if not isinstance(metadata, Mapping):
+            raise TypeError("Segmentation class_metadata values must be mappings.")
+        item = dict(metadata)
+        try:
+            canonical_json_exact(item)
+        except TypeError as exc:
+            raise ValueError(
+                "Segmentation class_metadata values must have stable exact JSON identities."
+            ) from exc
+        normalized[label] = item
+    return normalized

@@ -1,5 +1,6 @@
 """Validation helpers for dense and sparse embeddings."""
 
+from numbers import Integral
 from typing import Any
 
 import numpy as np
@@ -24,11 +25,13 @@ def ensure_2d_numeric_array(value: Any, name: str) -> np.ndarray:
     arr = np.asarray(value)
     if arr.ndim != 2:
         raise ValueError(f"{name} must be a 2D array; got shape {arr.shape}.")
+    if arr.shape[1] < 1:
+        raise ValueError(f"{name} must contain at least one feature column.")
     if not np.issubdtype(arr.dtype, np.number):
         raise ValueError(f"{name} must contain numeric values.")
     if not np.issubdtype(arr.dtype, np.floating):
         arr = arr.astype(float, copy=False)
-    if not np.all(np.isfinite(arr)):
+    if not _all_finite(arr):
         raise ValueError(f"{name} must contain only finite numeric values.")
     return arr
 
@@ -90,9 +93,11 @@ def ensure_sparse_numeric_2d(value: Any, name: str) -> Any:
         raise ValueError(f"{name} must be a scipy sparse matrix.")
     if value.ndim != 2:
         raise ValueError(f"{name} must be a 2D matrix; got shape {value.shape}.")
+    if value.shape[1] < 1:
+        raise ValueError(f"{name} must contain at least one feature column.")
     if not np.issubdtype(value.dtype, np.number):
         raise ValueError(f"{name} must contain numeric values.")
-    if not np.all(np.isfinite(value.data)):
+    if not _all_finite(value.data):
         raise ValueError(f"{name} must contain only finite numeric values.")
     return value
 
@@ -138,6 +143,41 @@ def is_sparse_matrix(value: Any) -> bool:
     except ImportError:
         return False
     return bool(sparse.issparse(value))
+
+
+def _all_finite(values: Any, chunk_size: int = 65_536) -> bool:
+    """Check finite values without allocating a full-size boolean matrix."""
+
+    flattened = np.asarray(values).reshape(-1)
+    for start in range(0, int(flattened.size), chunk_size):
+        if not bool(np.all(np.isfinite(flattened[start : start + chunk_size]))):
+            return False
+    return True
+
+
+def validate_row_indices(value: Any, size: int, name: str = "indices") -> np.ndarray:
+    """Validate an exact, one-dimensional row selection.
+
+    NumPy's ``dtype=int`` coercion silently truncates floats and accepts booleans.
+    Dataset subsetting is identity-bearing, so those coercions are not safe here.
+    """
+
+    raw = np.asarray(value, dtype=object)
+    if raw.ndim != 1:
+        raise ValueError(f"{name} must be one-dimensional.")
+    if raw.size == 0:
+        raise ValueError(f"{name} must not be empty.")
+    if any(
+        isinstance(item, (bool, np.bool_)) or not isinstance(item, Integral)
+        for item in raw.tolist()
+    ):
+        raise TypeError(f"{name} entries must be integers, not booleans or coerced values.")
+    indices = np.asarray([int(item) for item in raw.tolist()], dtype=int)
+    if np.any(indices < 0) or np.any(indices >= int(size)):
+        raise IndexError(f"{name} entries must be in [0, {int(size)}).")
+    if len(set(indices.tolist())) != len(indices):
+        raise ValueError(f"{name} must not contain duplicate row positions.")
+    return indices
 
 
 def l2_normalize_rows(value: np.ndarray) -> np.ndarray:

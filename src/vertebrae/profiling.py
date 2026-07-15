@@ -12,7 +12,10 @@ import numpy as np
 import psutil
 
 from vertebrae.config import ResourceProfilingConfig
-from vertebrae.utils.memory import estimate_matrix_resident_bytes
+from vertebrae.utils.memory import (
+    estimate_matrix_resident_bytes,
+    estimate_metadata_resident_bytes,
+)
 
 
 @dataclass(frozen=True)
@@ -626,14 +629,14 @@ class ResourceProfiler:
         return self._adapter_metadata
 
     def _inference_profile(self, *, cache_hit: bool) -> InferenceProfile:
-        if not self.records:
+        materialized = [item for item in self.records if item.materialized]
+        if not materialized:
             return InferenceProfile(
                 status="not_measured_cache_hit" if cache_hit else "not_measured"
             )
-        first = self.records[0]
-        warm = self.records[1:]
+        first = materialized[0]
+        warm = materialized[1:]
         warm_seconds = np.asarray([item.seconds for item in warm], dtype=float)
-        materialized = [item for item in self.records if item.materialized]
         total_seconds = float(sum(item.seconds for item in materialized))
         samples = int(sum(item.samples for item in materialized))
         warm_samples = int(sum(item.samples for item in warm))
@@ -831,21 +834,25 @@ def with_embedding_footprint(
     store: Any = None,
     raw_key: Optional[str] = None,
     evaluated_key: Optional[str] = None,
+    raw_stat: Any = None,
+    evaluated_stat: Any = None,
     persisted_storage: bool = True,
 ) -> Optional[ResourceProfile]:
     if profile is None:
         return None
-    raw_bytes = estimate_matrix_resident_bytes(raw_embeddings)
-    evaluated_bytes = estimate_matrix_resident_bytes(evaluated_embeddings)
-    n_samples = int(getattr(evaluated_embeddings, "shape", (0,))[0])
+    raw_bytes = _embedding_resident_bytes(raw_embeddings)
+    evaluated_bytes = _embedding_resident_bytes(evaluated_embeddings)
+    n_samples = _embedding_sample_count(evaluated_embeddings)
     raw_persisted, raw_warning = _persisted_array_footprint(
         store,
         raw_key,
+        stat=raw_stat,
         enabled=persisted_storage,
     )
     evaluated_persisted, evaluated_warning = _persisted_array_footprint(
         store,
         evaluated_key,
+        stat=evaluated_stat,
         enabled=persisted_storage,
     )
     footprint = EmbeddingFootprint(
@@ -869,23 +876,27 @@ def with_distributed_embedding_footprint(
     store: Any = None,
     raw_key: Optional[str] = None,
     evaluated_key: Optional[str] = None,
+    raw_stat: Any = None,
+    evaluated_stat: Any = None,
     persisted_storage: bool = True,
 ) -> Optional[DistributedResourceProfile]:
     """Update variant storage while retaining distributed inference evidence."""
 
     if profile is None:
         return None
-    raw_bytes = estimate_matrix_resident_bytes(raw_embeddings)
-    evaluated_bytes = estimate_matrix_resident_bytes(evaluated_embeddings)
-    n_samples = int(getattr(evaluated_embeddings, "shape", (0,))[0])
+    raw_bytes = _embedding_resident_bytes(raw_embeddings)
+    evaluated_bytes = _embedding_resident_bytes(evaluated_embeddings)
+    n_samples = _embedding_sample_count(evaluated_embeddings)
     raw_persisted, raw_warning = _persisted_array_footprint(
         store,
         raw_key,
+        stat=raw_stat,
         enabled=persisted_storage,
     )
     evaluated_persisted, evaluated_warning = _persisted_array_footprint(
         store,
         evaluated_key,
+        stat=evaluated_stat,
         enabled=persisted_storage,
     )
     warnings = list(profile.warnings)
@@ -967,6 +978,7 @@ def aggregate_distributed_resource_profiles(
     all_shard_keys: Optional[Sequence[str]] = None,
     store: Any = None,
     merged_key: Optional[str] = None,
+    merged_stat: Any = None,
     persisted_storage: bool = True,
 ) -> DistributedResourceProfile:
     """Aggregate worker observations without presenting them as one local run."""
@@ -1001,11 +1013,12 @@ def aggregate_distributed_resource_profiles(
         lambda profile: profile.device_memory.peak_allocated_bytes,
     )
     model = _consistent_model_footprint(measured)
-    merged_bytes = estimate_matrix_resident_bytes(merged_embeddings)
-    n_samples = int(getattr(merged_embeddings, "shape", (0,))[0])
+    merged_bytes = _embedding_resident_bytes(merged_embeddings)
+    n_samples = _embedding_sample_count(merged_embeddings)
     merged_persisted, persisted_warning = _persisted_array_footprint(
         store,
         merged_key,
+        stat=merged_stat,
         enabled=persisted_storage,
     )
     shard_persisted_values = [
@@ -1072,10 +1085,21 @@ def _persisted_array_footprint(
     store: Any,
     key: Optional[str],
     *,
+    stat: Any = None,
     enabled: bool,
 ) -> Tuple[PersistedArtifactFootprint, Optional[str]]:
     if not enabled:
         return PersistedArtifactFootprint(status="disabled"), None
+    if stat is not None:
+        return (
+            PersistedArtifactFootprint(
+                status="measured",
+                bytes=int(stat.size_bytes),
+                uri=str(stat.uri),
+                storage_format=str(stat.storage_format),
+            ),
+            None,
+        )
     if store is None or not key:
         return PersistedArtifactFootprint(status="not_persisted"), None
     try:
@@ -1097,6 +1121,28 @@ def _persisted_array_footprint(
         ),
         None,
     )
+
+
+def _embedding_resident_bytes(value: Any) -> int:
+    """Estimate an embedding from either a matrix or committed metadata."""
+
+    if isinstance(value, dict):
+        estimated = estimate_metadata_resident_bytes(value)
+        if estimated is None:
+            raise ValueError(
+                "Embedding metadata must define shape, dtype, sparse, and nnz when "
+                "used for resource-footprint calculation."
+            )
+        return int(estimated)
+    return estimate_matrix_resident_bytes(value)
+
+
+def _embedding_sample_count(value: Any) -> int:
+    if isinstance(value, dict):
+        shape = value.get("shape")
+    else:
+        shape = getattr(value, "shape", None)
+    return int(shape[0]) if shape else 0
 
 
 def _artifact_footprint_from_dict(value: Dict[str, Any]) -> ArtifactFootprint:

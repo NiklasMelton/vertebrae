@@ -37,6 +37,18 @@ Omitting `identity=` is an immediate construction error. Derived subsets, views,
 groups, structured units, and segmentation materializations receive deterministic
 child identities automatically.
 
+Cache identity schema v2 uses exact typed values throughout. Mapping keys, complete
+arrays and sequences, typed labels, hierarchy paths, endpoint IDs, and aligned
+protocol metadata all participate without sampling or string coercion. Dataset IDs
+must be unique and hashable under this typed semantic identity, so values such as
+integer `1` and string `"1"` remain distinct.
+
+Structural metadata is owned by the dataset implementation. User metadata may not
+replace sample indices, groups, target views, hierarchy, unit or relational IDs, or
+provenance. `subset()` strictly accepts one-dimensional non-boolean integral indices
+and slices every registered row-aligned field together while preserving stable source
+sample/parent identity separately from the new local row positions.
+
 ## Supported constructors
 
 Use the constructor that matches the form of your source data:
@@ -233,6 +245,14 @@ dataset = BenchmarkDataset.from_arrays(
 
 For DataFrames, pass multiple label columns to `label_col`; those columns are
 treated as 0/1 indicator columns and their names become `label_names`.
+
+Single-label and hierarchy labels keep exact typed semantics. Integer `1`, string
+`"1"`, and boolean values are not collapsed through `str(...)`, and hierarchy paths
+are encoded as structured typed values rather than delimiter-joined text. Dataset
+summaries and score metadata include a `label_catalog` that maps stable semantic keys
+back to original values and readable display text. When distinct values render the
+same way, reports add a type suffix to disambiguate them. Per-class diagnostics,
+`k` mappings, exclusions, stability, and artifacts all use this catalog consistently.
 
 ## Named target views
 
@@ -447,10 +467,26 @@ Aligners must return explicit one-to-one annotation and embedding row matches.
 materialized metadata and provenance. It does not perform automatic IoU-based,
 temporal, Hungarian, or learned matching on the user's behalf.
 
+A custom aligner callable must either be an importable top-level function with a
+portable implementation identity or declare `cache_identity=` explicitly.
+`recipe_data` describes behavior but is not a substitute for callable identity;
+closures, lambdas, bound methods, and stateful callable objects therefore require
+an explicit cache identity before they can participate in artifact workflows.
+
 Dense NumPy and scipy sparse unit matrices are both supported. A named output
 must keep the same feature dimension, dtype, and dense-versus-sparse form for
 all parents and batches. Aligners receive the original matrix form, and sparse
 rows remain sparse through flattening and artifact materialization.
+
+When `MemoryConfig.allow_disk_spill=True`, aligned embeddings and their per-unit
+metadata are staged incrementally in local append-only stores per named output.
+Final matrices are assembled one output at a time; over-budget dense matrices and
+CSR component arrays remain disk-backed, and sparse inputs are never densified by
+materialization. Final labels, IDs, groups, annotations, target views, and provenance
+remain resident because they are part of the returned dataset contract. Their estimated
+footprint is admitted before allocation; disk spill cannot bypass that check. Disabling
+spill accounts both staged and final embeddings and metadata against one shared peak
+budget and fails before retaining or allocating a row that would exceed it.
 
 ### Alpha migration note
 
@@ -469,6 +505,13 @@ include:
 - the dataset must contain at least one sample.
 - the dataset must contain at least two classes or labels.
 - each class or label must contain at least two samples.
+- IDs and groups must be aligned; IDs must also be unique and hashable under exact
+  typed semantic identity.
+- target-view, output, label-view, and hierarchy names are stripped and must remain
+  nonblank and unambiguous.
+- precomputed dense embeddings must be finite numeric 2D matrices with nonzero feature
+  width; sparse embeddings receive the same shape checks and must have finite stored
+  data. Retrieval query and gallery embeddings must have equal feature widths.
 
 Multi-label targets additionally require every sample to have at least one label,
 no duplicate labels within a sample, and binary values for indicator matrices.
@@ -503,7 +546,10 @@ Relational embedding constructors use modality `"embeddings"` and preserve a
 `"pair"`, or `"triplet"`.
 
 `metadata` is preserved through benchmarking so reports can retain source context
-such as dataset name, split, backbone provenance, or collection notes.
+such as dataset name, split, backbone provenance, or collection notes. Structural keys
+such as sample indices, groups, target views, hierarchy data, unit/relational IDs, and
+provenance are reserved; pass those values through their dedicated APIs rather than
+attempting to replace them in user metadata.
 
 Multi-modal datasets also preserve:
 
@@ -530,7 +576,7 @@ dataset = BenchmarkDataset.from_multimodal(
 )
 ```
 
-V1 requires every declared modality to be present for every sample. Filter or
+Every declared modality must be present for every sample. Filter or
 impute missing modalities before constructing the dataset.
 
 Dataset summaries include `target_type`. For multi-label targets they also include
@@ -544,6 +590,17 @@ and chosen input columns. When using `from_embeddings(...)`, metadata is tagged 
 `sampling_rate` in metadata. Video-array datasets preserve an optional shared
 `frame_rate` in metadata. Time-series datasets preserve structured fields such as
 `observed_mask`, `time_features`, and `timestamps` when provided.
+
+These modality constructors reject malformed values at construction time:
+
+- audio waveforms are finite, nonempty numeric rank-1 or rank-2 arrays, and the shared
+  sampling rate is a positive integer (not a boolean or fractional value);
+- predecoded video clips are finite, nonempty rank-4 frame arrays, and frame rates are
+  finite and positive, either scalar or one value per sample;
+- time-series values are finite, nonempty rank-2 or rank-3 arrays; `observed_mask`
+  matches the complete series shape and contains only 0/1 values, while time features
+  and timestamps align on the sample and time axes. Timestamp values may not be
+  missing, `NaT`, or non-finite.
 
 ## Hierarchical label views
 

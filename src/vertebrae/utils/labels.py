@@ -1,11 +1,22 @@
 """Label helpers."""
 
+from numbers import Integral
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from vertebrae.utils.semantic_labels import (
+    LABEL_ENCODING,
+    SemanticLabelKey,
+    semantic_label_catalog,
+    semantic_label_key,
+    semantic_label_keys,
+    validate_label_catalog,
+)
+
 LABEL_PATH_DELIMITER = " > "
 LABEL_SET_DELIMITER = " + "
+HIERARCHY_LABEL_PREFIX = "hierarchy-key-v1:"
 SINGLE_LABEL_TARGET = "single_label"
 MULTI_LABEL_TARGET = "multi_label"
 REGRESSION_TARGET = "regression"
@@ -16,13 +27,21 @@ def coerce_label_input(labels: Any) -> np.ndarray:
 
     if isinstance(labels, np.ndarray):
         return labels
+    if not hasattr(labels, "__len__") and not isinstance(labels, (str, bytes)):
+        labels = list(labels)
     try:
-        return np.asarray(labels)
+        array = np.asarray(labels)
     except ValueError:
         items = list(labels)
         result = np.empty(len(items), dtype=object)
         result[:] = items
         return result
+    if array.ndim == 1:
+        items = list(labels)
+        result = np.empty(len(items), dtype=object)
+        result[:] = items
+        return result
+    return array
 
 
 def normalize_targets(
@@ -189,6 +208,8 @@ def target_summary(
             target_names=metadata.get("target_names"),
         ),
     }
+    if metadata["target_type"] != REGRESSION_TARGET:
+        summary["label_catalog"] = list(metadata.get("label_catalog", []))
     if metadata["target_type"] == MULTI_LABEL_TARGET:
         summary.update(
             {
@@ -236,6 +257,40 @@ def metric_labels(
     return labels, metadata
 
 
+def canonical_metric_targets(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
+) -> np.ndarray:
+    """Return the stable label representation shared by local and artifact metrics.
+
+    Regression targets remain numeric. Classification values become marked
+    semantic keys so custom metrics observe the same values whether labels came
+    directly from a dataset or from a portable v2 label artifact.
+    """
+
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
+    if metadata["target_type"] == REGRESSION_TARGET:
+        return np.asarray(labels, dtype=float)
+    if metadata["target_type"] == MULTI_LABEL_TARGET:
+        normalized = np.empty(len(labels), dtype=object)
+        normalized[:] = [
+            tuple(SemanticLabelKey(semantic_label_key(value)) for value in labelset)
+            for labelset in labels
+        ]
+        return normalized
+    return np.asarray(
+        [SemanticLabelKey(semantic_label_key(value)) for value in labels],
+        dtype=object,
+    )
+
+
 def labels_to_jsonable(
     y: Any,
     label_names: Optional[Iterable[Any]] = None,
@@ -257,13 +312,53 @@ def labels_to_jsonable(
     return labels.tolist()
 
 
+def labels_to_artifact_jsonable(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    target_type: str = "auto",
+    target_names: Optional[Iterable[Any]] = None,
+) -> Any:
+    """Serialize labels using portable semantic keys for classification artifacts."""
+
+    labels, metadata = normalize_targets(
+        y,
+        label_names=label_names,
+        target_type=target_type,
+        target_names=target_names,
+    )
+    if metadata["target_type"] == MULTI_LABEL_TARGET:
+        return [semantic_label_keys(labelset) for labelset in labels]
+    if metadata["target_type"] == REGRESSION_TARGET:
+        return np.asarray(labels, dtype=float).tolist()
+    return semantic_label_keys(labels.tolist())
+
+
 def labels_from_jsonable(
     payload: Any,
     label_names: Optional[Iterable[Any]] = None,
     target_type: str = "auto",
     target_names: Optional[Iterable[Any]] = None,
+    label_encoding: Optional[str] = None,
 ) -> np.ndarray:
     """Load labels from an artifact JSON payload."""
+
+    if label_encoding is not None:
+        if label_encoding != LABEL_ENCODING:
+            raise ValueError(
+                "Unsupported label artifact encoding; expected "
+                f"{LABEL_ENCODING!r}, found {label_encoding!r}."
+            )
+        if target_type == REGRESSION_TARGET:
+            raise ValueError("Regression artifacts must not declare a semantic label encoding.")
+        label_names = (
+            None if label_names is None else [SemanticLabelKey(str(value)) for value in label_names]
+        )
+        if not isinstance(payload, list):
+            raise ValueError("Semantic label artifact payloads must be JSON lists.")
+        if target_type == MULTI_LABEL_TARGET:
+            payload = [[SemanticLabelKey(str(value)) for value in row] for row in payload]
+        else:
+            payload = [SemanticLabelKey(str(value)) for value in payload]
 
     if target_type == REGRESSION_TARGET:
         labels, _ = normalize_targets(
@@ -291,6 +386,27 @@ def labels_from_jsonable(
     return labels
 
 
+def decode_label_artifact_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and mark semantic-key fields loaded from a v2 labels artifact."""
+
+    decoded = dict(metadata)
+    target_type = str(decoded.get("target_type", "auto"))
+    if target_type == REGRESSION_TARGET:
+        if decoded.get("label_encoding") is not None:
+            raise ValueError("Regression label artifacts must not declare label_encoding.")
+        return decoded
+    encoding = decoded.get("label_encoding")
+    if encoding != LABEL_ENCODING:
+        raise ValueError(
+            "Classification label artifact is stale or unsupported; expected "
+            f"label_encoding={LABEL_ENCODING!r}, found {encoding!r}."
+        )
+    decoded["label_catalog"] = validate_label_catalog(decoded.get("label_catalog"))
+    if decoded.get("label_names") is not None:
+        decoded["label_names"] = [SemanticLabelKey(str(value)) for value in decoded["label_names"]]
+    return decoded
+
+
 def multilabel_indicator(y: Any, label_names: Optional[Iterable[Any]] = None) -> np.ndarray:
     """Convert a multi-label target to a dense binary indicator matrix."""
 
@@ -298,11 +414,11 @@ def multilabel_indicator(y: Any, label_names: Optional[Iterable[Any]] = None) ->
     if metadata["target_type"] != MULTI_LABEL_TARGET:
         raise ValueError("multilabel_indicator requires a multi-label target.")
     resolved_names = tuple(metadata["label_names"])
-    positions = {label: index for index, label in enumerate(resolved_names)}
+    positions = {semantic_label_key(label): index for index, label in enumerate(resolved_names)}
     indicator = np.zeros((len(labels), len(resolved_names)), dtype=int)
     for row_index, labelset in enumerate(labels):
         for label in labelset:
-            indicator[row_index, positions[label]] = 1
+            indicator[row_index, positions[semantic_label_key(label)]] = 1
     return indicator
 
 
@@ -438,6 +554,7 @@ def normalize_label_paths(label_paths: Any, n_samples: int) -> Tuple[Tuple[Any, 
             raise ValueError(
                 "Label paths must be non-missing; " f"sample {index} contains a missing value."
             )
+        _validate_exact_semantic_values(values, f"label path for sample {index}")
         normalized.append(values)
     return tuple(normalized)
 
@@ -450,7 +567,10 @@ def normalize_level_names(
 
     if level_names is None:
         return None
-    normalized = tuple(str(name) for name in level_names)
+    raw_names = tuple(level_names)
+    if any(not isinstance(name, str) or not name.strip() for name in raw_names):
+        raise ValueError("level_names must contain non-empty strings.")
+    normalized = tuple(name.strip() for name in raw_names)
     if len(normalized) != max_depth:
         raise ValueError(
             "level_names must match the hierarchy depth; "
@@ -471,7 +591,8 @@ def normalize_label_names(label_names: Optional[Iterable[Any]]) -> Optional[Tupl
         raise ValueError("label_names must not be empty.")
     if any(_is_missing_label(name) for name in normalized):
         raise ValueError("label_names must be non-missing.")
-    if len(set(normalized)) != len(normalized):
+    keys = _semantic_keys_checked(normalized, "label_names")
+    if len(set(keys)) != len(keys):
         raise ValueError("label_names must be unique.")
     return normalized
 
@@ -500,10 +621,32 @@ def label_view_from_paths(
         raise ValueError(
             "Hierarchy level " f"{display_label(level)} is missing for {len(missing)} samples."
         )
-    labels = np.asarray(
-        [_format_label_prefix(path[: resolved_level + 1]) for path in label_paths],
-        dtype=object,
-    )
+    prefixes = [tuple(path[: resolved_level + 1]) for path in label_paths]
+    prefix_keys = semantic_label_keys(prefixes)
+    hierarchy_keys = {
+        key: f"{HIERARCHY_LABEL_PREFIX}{key.rsplit(':', 1)[-1]}" for key in prefix_keys
+    }
+    labels = np.asarray([hierarchy_keys[key] for key in prefix_keys], dtype=object)
+    catalog = semantic_label_catalog(prefixes)
+    prefix_by_key = {semantic_label_key(prefix): prefix for prefix in prefixes}
+    display_counts: Dict[str, int] = {}
+    for item in catalog:
+        original_key = str(item["key"])
+        prefix = prefix_by_key[original_key]
+        display = _format_label_prefix(prefix)
+        item["key"] = hierarchy_keys[original_key]
+        item["display"] = display
+        display_counts[display] = display_counts.get(display, 0) + 1
+    for item in catalog:
+        prefix = next(
+            candidate
+            for original_key, candidate in prefix_by_key.items()
+            if hierarchy_keys[original_key] == item["key"]
+        )
+        display = str(item["display"])
+        item["report_display"] = (
+            f"{display} [path={prefix!r}]" if display_counts[display] > 1 else display
+        )
     level_name = _hierarchy_level_name(resolved_level, level_names)
     return labels, {
         "kind": "hierarchy",
@@ -513,6 +656,7 @@ def label_view_from_paths(
         "key": f"hierarchy:{resolved_level}:{level_name}",
         "max_depth": int(max_depth),
         "path_delimiter": LABEL_PATH_DELIMITER,
+        "label_catalog": catalog,
     }
 
 
@@ -524,14 +668,19 @@ def resolve_hierarchy_level(
     """Resolve an integer or named hierarchy level to a concrete index."""
 
     if isinstance(level, str):
+        normalized_level = level.strip()
+        if not normalized_level:
+            raise ValueError("Hierarchy level names must be non-empty strings.")
         if level_names is None:
             raise ValueError(
                 f"Hierarchy level {level!r} requires level_names metadata on the dataset."
             )
         try:
-            return int(level_names.index(level))
+            return int(level_names.index(normalized_level))
         except ValueError as exc:
             raise ValueError(f"Unknown hierarchy level name {level!r}.") from exc
+    if isinstance(level, (bool, np.bool_)) or not isinstance(level, Integral):
+        raise TypeError("Hierarchy levels must be non-boolean integers or named strings.")
     resolved = int(level)
     if resolved < 0:
         resolved += max_depth
@@ -589,6 +738,7 @@ def _target_metadata(
             "label_density": (
                 float(np.mean(cardinalities) / len(label_names)) if label_names else 0.0
             ),
+            "label_catalog": _semantic_catalog_or_empty(label_names),
         }
     if target_type_value == REGRESSION_TARGET:
         regression = np.asarray(labels, dtype=float)
@@ -627,6 +777,7 @@ def _target_metadata(
         "target_type": SINGLE_LABEL_TARGET,
         "n_classes": int(len(counts)),
         "class_counts": counts,
+        "label_catalog": _semantic_catalog_or_empty(labels.tolist()),
     }
 
 
@@ -636,15 +787,23 @@ def _single_label_counts(labels: np.ndarray) -> Dict[Any, int]:
     counts: Dict[Any, int] = {}
     for value in labels:
         label = value.item() if hasattr(value, "item") else value
-        counts[label] = counts.get(label, 0) + 1
+        try:
+            key = semantic_label_key(label)
+        except TypeError as exc:
+            raise ValueError(
+                "single-label targets must contain deterministic semantic values "
+                "supported by vertebrae."
+            ) from exc
+        counts[key] = counts.get(key, 0) + 1
     return counts
 
 
 def _multi_label_counts(labels: np.ndarray, label_names: Sequence[Any]) -> Dict[Any, int]:
-    counts = {label: 0 for label in label_names}
+    counts = {semantic_label_key(label): 0 for label in label_names}
     for labelset in labels:
         for label in tuple(labelset):
-            counts[label] = counts.get(label, 0) + 1
+            key = semantic_label_key(label)
+            counts[key] = counts.get(key, 0) + 1
     return counts
 
 
@@ -741,8 +900,10 @@ def _normalize_label_sequences(
 ) -> Tuple[np.ndarray, Tuple[Any, ...]]:
     raw_labelsets: List[Tuple[Any, ...]] = []
     observed: List[Any] = []
-    observed_set: set[Any] = set()
-    allowed = set(label_names) if label_names is not None else None
+    observed_set: set[str] = set()
+    allowed = (
+        set(_semantic_keys_checked(label_names, "label_names")) if label_names is not None else None
+    )
     for row_index, row in enumerate(rows):
         if isinstance(row, np.ndarray):
             values = row.tolist()
@@ -760,25 +921,34 @@ def _normalize_label_sequences(
         normalized_values = tuple(_normalize_scalar(value) for value in values)
         if any(_is_missing_label(value) for value in normalized_values):
             raise ValueError(f"Multi-label sample {row_index} contains a missing label value.")
-        if len(set(normalized_values)) != len(normalized_values):
+        normalized_keys = _semantic_keys_checked(
+            normalized_values,
+            f"multi-label sample {row_index}",
+        )
+        if len(set(normalized_keys)) != len(normalized_keys):
             raise ValueError(f"Multi-label sample {row_index} contains duplicate labels.")
         if allowed is not None:
-            unknown = [value for value in normalized_values if value not in allowed]
+            unknown = [
+                value
+                for value, key in zip(normalized_values, normalized_keys)
+                if key not in allowed
+            ]
             if unknown:
                 raise ValueError(
                     f"Multi-label sample {row_index} contains labels not present "
                     f"in label_names: {unknown}."
                 )
-        for value in normalized_values:
-            if value not in observed_set:
+        for value, key in zip(normalized_values, normalized_keys):
+            if key not in observed_set:
                 observed.append(value)
-                observed_set.add(value)
+                observed_set.add(key)
         raw_labelsets.append(normalized_values)
     resolved_names = tuple(label_names) if label_names is not None else tuple(observed)
-    positions = {label: index for index, label in enumerate(resolved_names)}
+    positions = {semantic_label_key(label): index for index, label in enumerate(resolved_names)}
     normalized = np.empty(len(raw_labelsets), dtype=object)
     normalized[:] = [
-        tuple(sorted(labelset, key=lambda label: positions[label])) for labelset in raw_labelsets
+        tuple(sorted(labelset, key=lambda label: positions[semantic_label_key(label)]))
+        for labelset in raw_labelsets
     ]
     return normalized, resolved_names
 
@@ -828,8 +998,9 @@ def _single_label_subsample_indices(
     min_samples_per_class: int,
 ) -> np.ndarray:
     selected = []
+    label_keys = np.asarray(semantic_label_keys(labels.tolist()), dtype=object)
     for label in _ordered_unique_labels(labels):
-        class_indices = np.flatnonzero(labels == label)
+        class_indices = np.flatnonzero(label_keys == label)
         target = int(np.floor(len(class_indices) * rate))
         if len(class_indices) >= min_samples_per_class:
             target = max(min_samples_per_class, target)
@@ -846,6 +1017,28 @@ def _ordered_unique_labels(labels: np.ndarray) -> Tuple[Any, ...]:
 
 def _format_label_prefix(prefix: Sequence[Any]) -> str:
     return LABEL_PATH_DELIMITER.join(display_label(value) for value in prefix)
+
+
+def _semantic_keys_checked(values: Iterable[Any], name: str) -> List[str]:
+    try:
+        return semantic_label_keys(values)
+    except TypeError as exc:
+        raise ValueError(
+            f"{name} must contain deterministic semantic values supported by vertebrae."
+        ) from exc
+
+
+def _semantic_catalog_or_empty(values: Iterable[Any]) -> List[Dict[str, Any]]:
+    try:
+        return semantic_label_catalog(values)
+    except TypeError as exc:
+        raise ValueError(
+            "Labels must contain deterministic semantic values supported by vertebrae."
+        ) from exc
+
+
+def _validate_exact_semantic_values(values: Iterable[Any], name: str) -> None:
+    _semantic_keys_checked(values, name)
 
 
 def _hierarchy_level_name(level: int, level_names: Optional[Sequence[str]]) -> str:

@@ -151,7 +151,9 @@ def test_onnx_extractor_works_in_streaming_evaluator(fake_onnxruntime, fake_over
     metadata = result.extractor_results[0].embedding_metadata
     assert metadata["streamed"] is True
     assert metadata["stream_batch_size"] == 2
-    assert len(fake_onnxruntime.instances[0].run_calls) == 3
+    # Memory admission probes a disposable clone once; the live extractor still
+    # transforms exactly the three evaluation batches without being fitted twice.
+    assert [len(instance.run_calls) for instance in fake_onnxruntime.instances] == [1, 3]
 
 
 def test_onnx_extractor_supports_structured_outputs(fake_onnxruntime):
@@ -171,3 +173,41 @@ def test_onnx_extractor_supports_structured_outputs(fake_onnxruntime):
 
     assert len(output.embeddings) == 2
     assert output.embeddings[0].shape == (2, 3)
+
+
+def test_onnx_recipe_hashes_local_model_content(tmp_path):
+    model_path = tmp_path / "model.onnx"
+    model_path.write_bytes(b"first")
+    first = ONNXExtractor("onnx", model_path=model_path).recipe()
+    model_path.write_bytes(b"second")
+    second = ONNXExtractor("onnx", model_path=model_path).recipe()
+
+    assert first["cache_safe"] is True
+    assert second["cache_safe"] is True
+    assert first["path_identities"][0]["sha256"] != second["path_identities"][0]["sha256"]
+
+
+def test_onnx_recipe_auto_discovers_and_hashes_external_data_sidecars(tmp_path):
+    model_path = tmp_path / "model.onnx"
+    sidecar = tmp_path / "weights.bin"
+    model_path.write_bytes(b"tensor external_data location weights.bin")
+    sidecar.write_bytes(b"first-weights")
+
+    first = ONNXExtractor("onnx", model_path=model_path).recipe()
+    sidecar.write_bytes(b"second-weights")
+    second = ONNXExtractor("onnx", model_path=model_path).recipe()
+
+    assert first["external_data_identity_status"] == "auto_discovered"
+    assert first["external_data_paths"] == [str(sidecar)]
+    assert first["cache_safe"] is True
+    assert first["path_identities"][1]["sha256"] != second["path_identities"][1]["sha256"]
+
+
+def test_onnx_recipe_disables_cache_when_external_data_cannot_be_discovered(tmp_path):
+    model_path = tmp_path / "model.onnx"
+    model_path.write_bytes(b"tensor external_data location missing-weights.bin")
+
+    recipe = ONNXExtractor("onnx", model_path=model_path).recipe()
+
+    assert recipe["external_data_identity_status"] == "unsafe_undeclared"
+    assert recipe["cache_safe"] is False

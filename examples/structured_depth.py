@@ -78,6 +78,7 @@ def main() -> None:
         transform_fn=_lookup_structured_embeddings(embeddings),
         output_specs=[StructuredOutputSpec(name="depth_cells", unit_type="depth_sample")],
         modality="image",
+        cache_identity="structured-depth-samples-v1",
     )
 
     result = Benchmark(

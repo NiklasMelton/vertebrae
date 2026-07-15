@@ -1,19 +1,30 @@
 """Optional ONNX runtime feature extractor."""
 
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
     callable_name,
     infer_batch_size,
     materialize_named_outputs,
     materialize_structured_parent_matrices,
+    optional_dependency_versions,
     resolve_output_specs,
     resolve_structured_output_specs,
+    snapshot_mapping,
+    snapshot_mapping_sequence,
+    snapshot_string_sequence,
     spec_to_recipe,
     structured_spec_to_recipe,
+    validate_bool,
+    validate_nonblank_string,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
@@ -57,25 +68,57 @@ class ONNXExtractor:
         allow_sparse: bool = False,
         streaming_safe: bool = True,
         external_data_paths: Optional[Iterable[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
+        if not isinstance(model_path, (str, Path)):
+            raise TypeError("model_path must be a string or pathlib.Path.")
+        if isinstance(model_path, str):
+            model_path = validate_nonblank_string(model_path, "model_path")
+        if input_fn is not None and not callable(input_fn):
+            raise TypeError("input_fn must be callable when provided.")
+        if output_fn is not None and not callable(output_fn):
+            raise TypeError("output_fn must be callable when provided.")
+        resolved_input_names = snapshot_string_sequence(input_names, "input_names")
+        resolved_output_names = snapshot_string_sequence(output_names, "output_names")
+        resolved_providers = snapshot_string_sequence(providers, "providers")
+        resolved_provider_options = snapshot_mapping_sequence(provider_options, "provider_options")
+        for owner, names in (
+            ("input_names", resolved_input_names),
+            ("output_names", resolved_output_names),
+            ("providers", resolved_providers),
+        ):
+            if names is not None and not names:
+                raise ValueError(f"{owner} must not be empty when provided.")
+            if names is not None and len(names) != len(set(names)):
+                raise ValueError(f"{owner} must contain unique values.")
+        if (
+            resolved_providers is not None
+            and resolved_provider_options is not None
+            and len(resolved_provider_options) != len(resolved_providers)
+        ):
+            raise ValueError("provider_options must align one-to-one with providers.")
+        self.name = validate_extractor_name(name)
         self.model_path = Path(model_path)
         self.input_fn = input_fn
         self.output_fn = output_fn
         self._output_specs = resolve_output_specs(outputs)
         self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
-        self.input_names = input_names
-        self.output_names = output_names
-        self.providers = providers
-        self.provider_options = provider_options
-        self.modality = modality
-        self.extractor_type = extractor_type
-        self.recipe_data = recipe_data or {}
-        self.allow_sparse = allow_sparse
-        self.streaming_safe = streaming_safe
-        self.external_data_paths = tuple(external_data_paths or ())
+        self.input_names = resolved_input_names
+        self.output_names = resolved_output_names
+        self.providers = resolved_providers
+        self.provider_options = resolved_provider_options
+        self.modality = validate_nonblank_string(modality, "modality")
+        self.extractor_type = validate_nonblank_string(extractor_type, "extractor_type")
+        self.recipe_data = snapshot_mapping(recipe_data, "recipe_data")
+        self.allow_sparse = validate_bool(allow_sparse, "allow_sparse")
+        self.streaming_safe = validate_bool(streaming_safe, "streaming_safe")
+        resolved_external_paths = snapshot_string_sequence(
+            external_data_paths, "external_data_paths"
+        )
+        self.external_data_paths = tuple(resolved_external_paths or ())
         self._session: Any = None
         self._ort: Any = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "ONNXExtractor":
         """No-op fit for frozen ONNX models."""
@@ -173,6 +216,7 @@ class ONNXExtractor:
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable ONNX extractor recipe."""
 
+        external_data_paths, external_data_status = self._resolved_external_data_paths()
         recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
@@ -188,12 +232,23 @@ class ONNXExtractor:
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
-            "external_data_paths": list(self.external_data_paths),
+            "external_data_paths": [str(path) for path in external_data_paths],
+            "external_data_identity_status": external_data_status,
+            "dependency_versions": optional_dependency_versions("onnxruntime"),
         }
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
                 structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
+        identity = cache_identity_fields(
+            explicit=self.cache_identity,
+            callables=(("input_fn", self.input_fn), ("output_fn", self.output_fn)),
+            paths=(self.model_path, *external_data_paths),
+            state_required=True,
+        )
+        if self.cache_identity is None and external_data_status == "unsafe_undeclared":
+            identity["cache_safe"] = False
+        recipe.update(identity)
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:
@@ -201,7 +256,19 @@ class ONNXExtractor:
 
         from vertebrae.profiling import ONNXResourceProfileAdapter
 
-        return ONNXResourceProfileAdapter(self, self.external_data_paths)
+        external_data_paths, _status = self._resolved_external_data_paths()
+        return ONNXResourceProfileAdapter(
+            self,
+            tuple(str(path) for path in external_data_paths),
+        )
+
+    def _resolved_external_data_paths(self) -> Tuple[Tuple[Path, ...], str]:
+        if self.external_data_paths:
+            resolved = tuple(
+                _resolve_external_path(self.model_path, value) for value in self.external_data_paths
+            )
+            return resolved, "declared"
+        return _discover_external_data_paths(self.model_path)
 
     def _load_session(self) -> Any:
         if self._session is None:
@@ -321,3 +388,36 @@ def _resolve_selector(value: Any, selector: str) -> Any:
             return None
         current = getattr(current, part)
     return current
+
+
+def _resolve_external_path(model_path: Path, value: Any) -> Path:
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else model_path.parent / path
+
+
+def _discover_external_data_paths(model_path: Path) -> tuple[tuple[Path, ...], str]:
+    """Discover referenced local ONNX sidecars without requiring the `onnx` package."""
+
+    try:
+        payload = model_path.expanduser().read_bytes()
+        siblings = list(model_path.expanduser().parent.iterdir())
+    except (OSError, ValueError):
+        return (), "unavailable"
+    candidates: List[Path] = []
+    conventional = {
+        f"{model_path.name}.data",
+        f"{model_path.stem}.data",
+        f"{model_path.name}_data",
+        f"{model_path.stem}_data",
+    }
+    for sibling in siblings:
+        if sibling == model_path:
+            continue
+        encoded_name = sibling.name.encode("utf-8", errors="surrogateescape")
+        if sibling.name in conventional or encoded_name in payload:
+            candidates.append(sibling)
+    if candidates:
+        return tuple(sorted(candidates, key=lambda path: path.as_posix())), "auto_discovered"
+    if b"location" in payload:
+        return (), "unsafe_undeclared"
+    return (), "self_contained"

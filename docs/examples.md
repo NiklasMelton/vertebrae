@@ -10,7 +10,8 @@ Runnable examples live in `examples/`:
 - `sklearn_wine_pipeline.py`: compare real scaling/projection pipelines on the
   bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare multiple local extractors.
-- `cache_reuse.py`: demonstrate embedding cache reuse.
+- `cache_reuse.py`: demonstrate safe embedding cache reuse with an explicit callable
+  `cache_identity`.
 - `zero_shot_callable.py`: compare a synthetic frozen image/text-aligned adapter with
   an explicit prompt protocol, without downloads or a learned head.
 - `structured_outputs.py`: materialize OCR/layout regions, ASR tokens, and pose
@@ -48,7 +49,9 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_text_pipel
 ```
 
 The Hugging Face examples require optional dependencies and a model available from
-a local cache or from Hugging Face:
+a local cache or from Hugging Face. Their remote names are intentionally unpinned and
+the scripts explicitly disable embedding caching; pin an immutable revision or maintain
+an explicit `cache_identity` before opting a real deployment into reuse.
 
 ```bash
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E hf

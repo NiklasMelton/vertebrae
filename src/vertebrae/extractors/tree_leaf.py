@@ -4,6 +4,17 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
+from vertebrae.extractors._utils import (
+    optional_dependency_versions,
+    snapshot_mapping,
+    validate_bool,
+    validate_choice,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -18,19 +29,21 @@ class TreeLeafEmbeddingExtractor:
         encoding: str = "dense",
         sparse_output: bool = True,
         recipe_data: Optional[Dict[str, Any]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        if encoding not in {"dense", "one_hot"}:
-            raise ValueError("encoding must be 'dense' or 'one_hot'.")
-        self.name = name
+        backend = validate_choice(backend, "backend", {"auto", "xgboost", "lightgbm", "catboost"})
+        encoding = validate_choice(encoding, "encoding", {"dense", "one_hot"})
+        self.name = validate_extractor_name(name)
         self.model = model
         self.backend = backend
         self.encoding = encoding
-        self.sparse_output = sparse_output
-        self.recipe_data = recipe_data or {}
+        self.sparse_output = validate_bool(sparse_output, "sparse_output")
+        self.recipe_data = snapshot_mapping(recipe_data, "recipe_data")
         self.modality = "tabular"
         self.extractor_type = "tree_leaf_embeddings"
         self.streaming_safe = encoding == "dense"
         self._column_maps: Optional[list[dict[int, int]]] = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "TreeLeafEmbeddingExtractor":
         if self.encoding == "one_hot":
@@ -63,22 +76,30 @@ class TreeLeafEmbeddingExtractor:
         return self.fit(X, y).transform(X)
 
     def recipe(self) -> Dict[str, Any]:
-        return {
+        backend = self._resolved_backend()
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
-            "backend": self._resolved_backend(),
+            "backend": backend,
             "encoding": self.encoding,
             "sparse_output": self.sparse_output,
             "model_class": self.model.__class__.__module__ + "." + self.model.__class__.__name__,
             "recipe_data": self.recipe_data,
+            "dependency_versions": optional_dependency_versions(backend),
             "streaming_safe": self.streaming_safe,
         }
+        recipe.update(cache_identity_fields(explicit=self.cache_identity, state_required=True))
+        return recipe
 
     def _leaf_matrix(self, X: Any) -> np.ndarray:
         values = np.asarray(self._predict_leaf_indices(X))
+        if values.ndim == 0:
+            raise ValueError("Tree leaf indices must contain one row per sample.")
         if values.ndim == 1:
             values = values.reshape(-1, 1)
+        elif values.ndim > 2:
+            values = values.reshape(values.shape[0], -1)
         return values.astype(np.int64, copy=False)
 
     def _predict_leaf_indices(self, X: Any) -> Any:

@@ -17,14 +17,20 @@ STRING_KEY_PREFIX = "@vertebrae-string-v1:"
 MAPPING_KEY_PREFIX = "@vertebrae-key-v1:"
 
 
+class SemanticLabelKey(str):
+    """Marker for a value already converted to a canonical semantic label key."""
+
+
 def semantic_label_key(value: Any) -> str:
     """Return a collision-resistant JSON object key for one semantic label."""
 
-    if isinstance(value, str) and not value.startswith(
+    if isinstance(value, SemanticLabelKey):
+        return str(value)
+    if type(value) is str and not value.startswith(
         (LABEL_KEY_PREFIX, STRING_KEY_PREFIX, MAPPING_KEY_PREFIX)
     ):
         return value
-    if isinstance(value, str):
+    if type(value) is str:
         encoded = base64.urlsafe_b64encode(value.encode("utf-8")).decode("ascii")
         return f"{STRING_KEY_PREFIX}{encoded}"
     return f"{LABEL_KEY_PREFIX}{hash_json_exact(value)}"
@@ -37,7 +43,11 @@ def semantic_label_catalog(values: Iterable[Any]) -> List[Dict[str, Any]]:
     observed: Dict[str, Any] = {}
     for value in values:
         key = semantic_label_key(value)
-        encoded = exact_json_value(value)
+        encoded = (
+            {"type": "semantic_label_key", "value": str(value)}
+            if isinstance(value, SemanticLabelKey)
+            else exact_json_value(value)
+        )
         if key in observed:
             if observed[key] != encoded:
                 raise ValueError("Semantic label key collision detected; rename the labels.")
@@ -67,6 +77,20 @@ def semantic_label_keys(values: Iterable[Any]) -> List[str]:
     """Serialize a sequence of labels into stable scoring keys."""
 
     return [semantic_label_key(value) for value in values]
+
+
+def canonical_semantic_array(values: Iterable[Any]) -> np.ndarray:
+    """Return a one-dimensional object array of marked semantic keys."""
+
+    if isinstance(values, np.ndarray):
+        if values.ndim != 1:
+            raise ValueError("Semantic value arrays must be one-dimensional.")
+        items = values.tolist()
+    else:
+        items = list(values)
+    result = np.empty(len(items), dtype=object)
+    result[:] = [SemanticLabelKey(semantic_label_key(value)) for value in items]
+    return result
 
 
 def label_display(value: Any, catalog: Sequence[Mapping[str, Any]]) -> str:
@@ -131,20 +155,20 @@ def validate_label_catalog(catalog: Any) -> List[Dict[str, Any]]:
     """Validate an artifact label catalog and return normalized entries."""
 
     if not isinstance(catalog, list):
-        raise ValueError("Zero-shot label_catalog must be an ordered list.")
+        raise ValueError("label_catalog must be an ordered list.")
     entries: List[Dict[str, Any]] = []
     keys = set()
     for item in catalog:
         if not isinstance(item, dict) or not isinstance(item.get("key"), str):
-            raise ValueError("Zero-shot label_catalog entries must declare string keys.")
+            raise ValueError("label_catalog entries must declare string keys.")
         key = item["key"]
         if key in keys:
-            raise ValueError("Zero-shot label_catalog contains duplicate keys.")
+            raise ValueError("label_catalog contains duplicate keys.")
         if not all(field in item for field in ("value", "type", "display")):
-            raise ValueError("Zero-shot label_catalog entries are incomplete.")
+            raise ValueError("label_catalog entries are incomplete.")
         encoded = item["value"]
         if key != _semantic_key_from_encoded(encoded) or item["type"] != _semantic_type(encoded):
-            raise ValueError("Zero-shot label_catalog key or type does not match its value.")
+            raise ValueError("label_catalog key or type does not match its value.")
         keys.add(key)
         entries.append(dict(item))
     return entries
@@ -173,6 +197,11 @@ def _semantic_type(encoded: Any) -> str:
 
 
 def _semantic_key_from_encoded(encoded: Any) -> str:
+    if isinstance(encoded, dict) and encoded.get("type") == "semantic_label_key":
+        value = encoded.get("value")
+        if not isinstance(value, str):
+            raise ValueError("Semantic label key catalog entries require string values.")
+        return value
     if isinstance(encoded, dict) and encoded.get("type") == "str":
         return semantic_label_key(encoded.get("value"))
     return f"{LABEL_KEY_PREFIX}{hash_exact_json_value(encoded)}"

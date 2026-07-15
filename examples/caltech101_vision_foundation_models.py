@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.request import urlretrieve
 
 import numpy as np
-from _common import CACHE_DIR, EXAMPLES_DIR, ensure_output_dir, print_ranking
+from _common import EXAMPLES_DIR, ensure_output_dir, print_ranking
 from PIL import Image
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
@@ -143,7 +143,8 @@ def main() -> None:
         dataset=dataset,
         scoring_config=OverlapScoringConfig(k=4, min_samples_per_cluster=4),
         stability_config=StabilityConfig(repeats=3, random_state=random_state),
-        cache_config=CacheConfig(cache_dir=str(CACHE_DIR / "caltech101_vision_models")),
+        # The optional Hub models intentionally use unpinned remote names.
+        cache_config=CacheConfig(enabled=False),
         embedding_config=EmbeddingConfig(batch_size=8),
     )
 

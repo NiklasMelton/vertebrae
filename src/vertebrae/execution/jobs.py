@@ -5,7 +5,16 @@ from typing import Any, Optional
 
 import numpy as np
 
-from vertebrae.config import ResourceProfilingConfig
+from vertebrae.config import MemoryConfig, ResourceProfilingConfig
+
+
+def _require_integral(value: Any, name: str, *, minimum: int) -> None:
+    """Require a non-boolean Python or NumPy integer at or above a bound."""
+
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be an integer >= {minimum}.")
+    if int(value) < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
 
 
 @dataclass(frozen=True)
@@ -27,8 +36,8 @@ class ShardSpec:
             ValueError: If shard counts or index bounds are invalid.
         """
 
-        if self.total_shards < 1:
-            raise ValueError("total_shards must be >= 1.")
+        _require_integral(self.total_shards, "total_shards", minimum=1)
+        _require_integral(self.shard_index, "shard_index", minimum=0)
         if not 0 <= self.shard_index < self.total_shards:
             raise ValueError("shard_index must be in [0, total_shards).")
 
@@ -42,6 +51,7 @@ class ShardSpec:
             Whether the sample belongs to this shard.
         """
 
+        _require_integral(sample_index, "sample_index", minimum=0)
         return sample_index % self.total_shards == self.shard_index
 
     def indices(self, n_samples: int) -> np.ndarray:
@@ -54,6 +64,7 @@ class ShardSpec:
             One-dimensional array of non-overlapping sample indices.
         """
 
+        _require_integral(n_samples, "n_samples", minimum=0)
         return np.arange(self.shard_index, n_samples, self.total_shards, dtype=int)
 
     @property
@@ -122,16 +133,22 @@ class ResourceSpec:
             ValueError: If resource values are negative or zero where invalid.
         """
 
-        if self.cpus < 1:
-            raise ValueError("ResourceSpec.cpus must be >= 1.")
-        if self.memory_bytes is not None and self.memory_bytes < 1:
-            raise ValueError("ResourceSpec.memory_bytes must be >= 1.")
-        if self.gpus < 0:
-            raise ValueError("ResourceSpec.gpus must be >= 0.")
-        if self.gpu_memory_bytes is not None and self.gpu_memory_bytes < 1:
-            raise ValueError("ResourceSpec.gpu_memory_bytes must be >= 1.")
-        if self.walltime_seconds is not None and self.walltime_seconds < 1:
-            raise ValueError("ResourceSpec.walltime_seconds must be >= 1.")
+        _require_integral(self.cpus, "ResourceSpec.cpus", minimum=1)
+        if self.memory_bytes is not None:
+            _require_integral(self.memory_bytes, "ResourceSpec.memory_bytes", minimum=1)
+        _require_integral(self.gpus, "ResourceSpec.gpus", minimum=0)
+        if self.gpu_memory_bytes is not None:
+            _require_integral(
+                self.gpu_memory_bytes,
+                "ResourceSpec.gpu_memory_bytes",
+                minimum=1,
+            )
+        if self.walltime_seconds is not None:
+            _require_integral(
+                self.walltime_seconds,
+                "ResourceSpec.walltime_seconds",
+                minimum=1,
+            )
 
 
 @dataclass(frozen=True)
@@ -152,9 +169,11 @@ class EmbeddingShardJob:
     shard: ShardSpec
     output_key: str
     batch_size: int = 128
-    fit_extractor: bool = True
     streaming_enabled: bool = True
+    cache_eligible: bool = True
+    cache_status: str = "miss"
     resources: ResourceSpec = ResourceSpec()
+    memory_config: MemoryConfig = field(default_factory=MemoryConfig)
     resource_profiling_config: ResourceProfilingConfig = field(
         default_factory=ResourceProfilingConfig
     )
@@ -166,8 +185,11 @@ class EmbeddingShardJob:
             ValueError: If `batch_size` is invalid.
         """
 
-        if self.batch_size < 1:
-            raise ValueError("EmbeddingShardJob.batch_size must be >= 1.")
+        _require_integral(
+            self.batch_size,
+            "EmbeddingShardJob.batch_size",
+            minimum=1,
+        )
 
 
 @dataclass(frozen=True)
@@ -195,8 +217,11 @@ class EmbeddingMergeJob:
 
         if not self.shard_keys:
             raise ValueError("EmbeddingMergeJob.shard_keys must not be empty.")
-        if self.n_samples < 1:
-            raise ValueError("EmbeddingMergeJob.n_samples must be >= 1.")
+        _require_integral(
+            self.n_samples,
+            "EmbeddingMergeJob.n_samples",
+            minimum=1,
+        )
 
 
 @dataclass(frozen=True)
@@ -261,6 +286,10 @@ class RetrievalEmbeddingShardJob:
     output_key: str
     branch: Optional[str] = None
     batch_size: int = 128
+    streaming_enabled: bool = True
+    cache_eligible: bool = True
+    cache_status: str = "miss"
+    fitted_bundle: bool = False
     resources: ResourceSpec = ResourceSpec()
     resource_profiling_config: ResourceProfilingConfig = field(
         default_factory=ResourceProfilingConfig
@@ -269,8 +298,11 @@ class RetrievalEmbeddingShardJob:
     def __post_init__(self) -> None:
         if self.side not in {"query", "gallery"}:
             raise ValueError("RetrievalEmbeddingShardJob.side must be 'query' or 'gallery'.")
-        if self.batch_size < 1:
-            raise ValueError("batch_size must be >= 1.")
+        _require_integral(
+            self.batch_size,
+            "RetrievalEmbeddingShardJob.batch_size",
+            minimum=1,
+        )
 
 
 @dataclass(frozen=True)
@@ -296,6 +328,9 @@ class ZeroShotEmbeddingShardJob:
     shard: ShardSpec
     output_key: str
     batch_size: int = 128
+    streaming_enabled: bool = True
+    cache_eligible: bool = True
+    cache_status: str = "miss"
     resources: ResourceSpec = ResourceSpec()
     resource_profiling_config: ResourceProfilingConfig = field(
         default_factory=ResourceProfilingConfig
@@ -306,8 +341,11 @@ class ZeroShotEmbeddingShardJob:
             raise ValueError("ZeroShotEmbeddingShardJob.side must be 'samples' or 'prompts'.")
         if not self.branch:
             raise ValueError("ZeroShotEmbeddingShardJob.branch must be non-empty.")
-        if self.batch_size < 1:
-            raise ValueError("batch_size must be >= 1.")
+        _require_integral(
+            self.batch_size,
+            "ZeroShotEmbeddingShardJob.batch_size",
+            minimum=1,
+        )
 
 
 @dataclass(frozen=True)

@@ -1,8 +1,12 @@
 """Explicit adapter for independent query and gallery embedding branches."""
 
-import importlib
 from typing import Any, Callable, Dict, Optional
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -22,17 +26,13 @@ class CallableRetrievalExtractor:
     ) -> None:
         if not callable(query_fn) or not callable(gallery_fn or query_fn):
             raise TypeError("query_fn and gallery_fn must be callable.")
-        self.name = name
+        self.name = validate_extractor_name(name)
         self.query_fn = query_fn
         self.gallery_fn = gallery_fn or query_fn
         self.query_modality = query_modality
         self.gallery_modality = gallery_modality or query_modality
         self.metadata = dict(metadata or {})
-        if cache_identity is not None and (
-            not isinstance(cache_identity, str) or not cache_identity
-        ):
-            raise ValueError("cache_identity must be a non-empty string when provided.")
-        self.cache_identity = cache_identity
+        self.cache_identity = validate_cache_identity(cache_identity)
         self.modality = "retrieval"
         self.extractor_type = "custom_retrieval"
         self.streaming_safe = True
@@ -49,43 +49,26 @@ class CallableRetrievalExtractor:
         )
 
     def recipe(self) -> Dict[str, Any]:
-        query_path = _callable_path(self.query_fn)
-        gallery_path = _callable_path(self.gallery_fn)
-        cache_safe = bool(self.cache_identity or (query_path and gallery_path))
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "query_modality": self.query_modality,
             "gallery_modality": self.gallery_modality,
             "metadata": self.metadata,
-            "query_callable": query_path,
-            "gallery_callable": gallery_path,
-            "cache_identity": self.cache_identity,
-            "cache_safe": cache_safe,
+            "query_callable": _callable_name(self.query_fn),
+            "gallery_callable": _callable_name(self.gallery_fn),
         }
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(("query_fn", self.query_fn), ("gallery_fn", self.gallery_fn)),
+            )
+        )
+        return recipe
 
 
-def _callable_path(function: Callable[[Any], Any]) -> Optional[str]:
-    """Return a stable import-style path when a callable has one.
-
-    Nested functions and lambdas intentionally have no portable identity: their
-    process-local implementation cannot safely participate in artifact cache keys.
-    """
-
-    module = getattr(function, "__module__", None)
-    qualname = getattr(function, "__qualname__", None)
-    if not isinstance(module, str) or not isinstance(qualname, str) or module == "__main__":
-        return None
-    if "<locals>" in qualname or "<lambda>" in qualname:
-        return None
-    try:
-        resolved: Any = importlib.import_module(module)
-        for part in qualname.split("."):
-            resolved = getattr(resolved, part)
-    except (AttributeError, ImportError, ValueError):
-        return None
-    expected = getattr(function, "__func__", function)
-    actual = getattr(resolved, "__func__", resolved)
-    if actual is not expected:
-        return None
-    return f"{module}:{qualname}"
+def _callable_name(function: Callable[[Any], Any]) -> str:
+    value_type = type(function)
+    module = getattr(function, "__module__", value_type.__module__)
+    qualname = getattr(function, "__qualname__", value_type.__qualname__)
+    return f"{module}.{qualname}"

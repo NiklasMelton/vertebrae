@@ -244,6 +244,42 @@ def test_hf_multimodal_selects_hidden_state_and_pooling(fake_multimodal_modules)
     ]
 
 
+def test_hf_multimodal_applies_selector_to_ordinary_outputs(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[
+            {
+                "name": "selected",
+                "source": "fused",
+                "model_output": "custom",
+                "selector": "embedding",
+            }
+        ],
+        output_fn=lambda model_output: {"selected": {"embedding": model_output.pooler_output}},
+        batch_size=2,
+    )
+
+    output = extractor.transform(_dataset().X)
+
+    assert output.tolist() == [[5.0] * 4] * 4
+    assert extractor.recipe()["outputs"][0]["selector"] == "embedding"
+
+
+def test_hf_multimodal_alpha_modes_composite_transparency():
+    image_module = pytest.importorskip("PIL.Image")
+    from vertebrae.extractors.huggingface_multimodal import _coerce_image
+
+    transparent_red = np.asarray([[[255, 0, 0, 0]]], dtype=np.uint8)
+
+    white = _coerce_image(transparent_red, image_module, "rgb", "white_background")
+    black = _coerce_image(transparent_red, image_module, "rgb", "black_background")
+
+    assert np.asarray(white).tolist() == [[[255, 255, 255]]]
+    assert np.asarray(black).tolist() == [[[0, 0, 0]]]
+
+
 def test_hf_multimodal_recipe_and_report_metadata(
     fake_multimodal_modules,
     fake_overlapindex,

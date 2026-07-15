@@ -585,6 +585,7 @@ def test_compressed_embeddings_are_reused_from_cache(tmp_path, fake_overlapindex
 
     assert first.extractor_results[0].compression_metadata["cache_hit"] is False
     assert second.extractor_results[0].compression_metadata["cache_hit"] is True
+    assert second.extractor_results[0].compression_metadata["cache_status"] == "hit"
 
 
 def test_compress_embedding_artifact_round_trip(tmp_path, fake_overlapindex):
@@ -597,9 +598,9 @@ def test_compress_embedding_artifact_round_trip(tmp_path, fake_overlapindex):
     embedding_key = "embeddings/raw"
     labels_key = "labels/raw"
     embeddings = np.asarray(dataset.X)
-    store.put_array(embedding_key, embeddings)
-    store.put_json(
+    store.put_artifact(
         embedding_key,
+        embeddings,
         {
             "cache_key": embedding_key,
             "extractor_name": "artifact",
@@ -614,13 +615,14 @@ def test_compress_embedding_artifact_round_trip(tmp_path, fake_overlapindex):
             "modality": "embeddings",
         },
     )
-    store.put_labels(labels_key, dataset.y)
-    store.put_json(
+    store.put_labels_artifact(
         labels_key,
+        dataset.y,
         {
             "dataset_identity_key": dataset.identity_key(),
             "n_samples": int(len(dataset.y)),
             "class_counts": dataset.class_counts(),
+            "target_type": dataset.metadata["target_type"],
         },
     )
 

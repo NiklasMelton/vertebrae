@@ -229,3 +229,20 @@ def test_keras_extractor_supports_explicit_structured_outputs(monkeypatch):
     assert output.unit_type == "token"
     assert len(output.embeddings) == 2
     assert output.embeddings[0].shape == (3, 4)
+
+
+def test_keras_extractor_rejects_undeclared_named_adapter_outputs(monkeypatch):
+    _install_fake_keras(monkeypatch)
+    model = FakeKerasModel(call_fn=lambda batch, kwargs: {"features": np.ones((2, 2, 2, 3))})
+    extractor = KerasExtractor(
+        "spatial",
+        model=model,
+        spatial_output_fn=lambda output: {
+            "layer": output["features"],
+            "extra": output["features"],
+        },
+        spatial_output_specs=[SpatialOutputSpec("layer", SpatialLayout(2, 2))],
+    )
+
+    with pytest.raises(ValueError, match="extra=.*extra"):
+        extractor.transform_spatial(np.ones((2, 4)))

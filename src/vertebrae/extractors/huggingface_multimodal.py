@@ -1,14 +1,28 @@
 """Optional Hugging Face multi-modal embedding extractor."""
 
-from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, cast
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, cast
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    local_model_paths,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
+    coerce_image,
     materialize_structured_parent_matrices,
+    optional_dependency_versions,
     resolve_output_value,
+    snapshot_mapping,
+    snapshot_string_mapping,
     structured_spec_to_recipe,
+    validate_batch_size,
+    validate_bool,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
@@ -50,26 +64,47 @@ class HFMultimodalExtractor:
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[Iterable[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
+        if not isinstance(input_modalities, Mapping):
+            raise TypeError("input_modalities must be a mapping.")
         if not input_modalities:
             raise ValueError("input_modalities must not be empty.")
-        if batch_size < 1:
-            raise ValueError("batch_size must be >= 1.")
-        self.name = name
-        self.model_id = model_id
-        self.processor_id = processor_id or model_id
-        self.input_modalities = {str(key): str(value) for key, value in input_modalities.items()}
-        self.input_map = dict(input_map or _default_input_map(self.input_modalities))
+        batch_size = validate_batch_size(batch_size)
+        if input_fn is not None and not callable(input_fn):
+            raise TypeError("input_fn must be callable when provided.")
+        if output_fn is not None and not callable(output_fn):
+            raise TypeError("output_fn must be callable when provided.")
+        self.name = validate_extractor_name(name)
+        self.model_id = validate_nonblank_string(model_id, "model_id")
+        self.processor_id = (
+            validate_optional_nonblank_string(processor_id, "processor_id") or self.model_id
+        )
+        self.input_modalities = snapshot_string_mapping(
+            input_modalities,
+            "input_modalities",
+            allowed_values=_KNOWN_MODALITIES,
+        )
+        resolved_input_map = (
+            _default_input_map(self.input_modalities) if input_map is None else input_map
+        )
+        self.input_map = snapshot_string_mapping(resolved_input_map, "input_map")
         self.input_fn = input_fn
         self.output_fn = output_fn
         self.batch_size = batch_size
-        self.image_mode = image_mode
-        self.alpha_mode = alpha_mode
-        self.device = device
-        self.revision = revision
-        self.trust_remote_code = trust_remote_code
-        self.processor_kwargs = processor_kwargs or {}
-        self.model_kwargs = model_kwargs or {}
+        self.image_mode = validate_choice(
+            image_mode, "image_mode", {"auto", "rgb", "grayscale", "preserve"}
+        )
+        self.alpha_mode = validate_choice(
+            alpha_mode,
+            "alpha_mode",
+            {"drop", "white_background", "black_background"},
+        )
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.revision = validate_optional_nonblank_string(revision, "revision")
+        self.trust_remote_code = validate_bool(trust_remote_code, "trust_remote_code")
+        self.processor_kwargs = snapshot_mapping(processor_kwargs, "processor_kwargs")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "multimodal"
         self.extractor_type = "frozen_pretrained"
@@ -82,6 +117,7 @@ class HFMultimodalExtractor:
         self._model: Any = None
         self._torch: Any = None
         self._image_module: Any = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
         input_fields = set(self.input_modalities)
         map_fields = set(self.input_map)
@@ -126,6 +162,15 @@ class HFMultimodalExtractor:
                 )
                 for spec in self._output_specs:
                     value = _resolve_named_output(projected, spec, model_output=model_output)
+                    selector = spec.metadata.get("selector")
+                    if selector is not None:
+                        selected = resolve_output_value(value, str(selector))
+                        if selected is None:
+                            raise ValueError(
+                                f"HFMultimodalExtractor output '{spec.name}' could not resolve "
+                                f"selector='{selector}'."
+                            )
+                        value = selected
                     matrix = _materialize_output_matrix(
                         value,
                         spec=spec,
@@ -251,6 +296,7 @@ class HFMultimodalExtractor:
             "trust_remote_code": self.trust_remote_code,
             "processor_kwargs": self.processor_kwargs,
             "model_kwargs": self.model_kwargs,
+            "dependency_versions": optional_dependency_versions("Pillow", "torch", "transformers"),
             "streaming_safe": self.streaming_safe,
             "outputs": [_spec_to_recipe(spec) for spec in self._output_specs],
         }
@@ -258,6 +304,20 @@ class HFMultimodalExtractor:
             recipe["structured_outputs"] = [
                 _structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(("input_fn", self.input_fn), ("output_fn", self.output_fn)),
+                paths=local_model_paths(
+                    self.model_id,
+                    self.checkpoint_paths,
+                    additional_identifiers=(self.processor_id,),
+                ),
+                require_pinned_revision=True,
+                revision=self.revision,
+                revision_identifiers=(self.model_id, self.processor_id),
+            )
+        )
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:
@@ -336,36 +396,47 @@ def _resolve_multimodal_output_specs(outputs: List[Dict[str, Any]]) -> List[Embe
     specs: List[EmbeddingOutputSpec] = []
     seen = set()
     for output in outputs:
-        name = str(output.get("name", "")).strip()
+        if not isinstance(output, Mapping):
+            raise TypeError("HFMultimodalExtractor output specs must be mappings.")
+        raw_name = output.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) else ""
         if not name:
             raise ValueError("HFMultimodalExtractor output specs must include a name.")
         if name in seen:
             raise ValueError("HFMultimodalExtractor output names must be unique.")
-        source = str(output.get("source", "")).strip()
+        raw_source = output.get("source")
+        source = raw_source.strip() if isinstance(raw_source, str) else ""
         if not source:
             raise ValueError(f"HFMultimodalExtractor output '{name}' must include a source.")
         if source not in _KNOWN_MODALITIES:
             raise ValueError(
                 f"HFMultimodalExtractor output '{name}' has unsupported source '{source}'."
             )
-        model_output = str(output.get("model_output", "")).strip()
+        raw_model_output = output.get("model_output")
+        model_output = raw_model_output.strip() if isinstance(raw_model_output, str) else ""
         if not model_output:
             raise ValueError(
                 f"HFMultimodalExtractor output '{name}' must include a model_output selector."
             )
         pooling = output.get("pooling")
         hidden_layer = output.get("hidden_layer")
+        raw_metadata = output.get("metadata", {})
+        if not isinstance(raw_metadata, Mapping):
+            raise TypeError("HFMultimodalExtractor output metadata must be a mapping.")
         metadata = {
+            **dict(raw_metadata),
             "source": source,
             "model_output": model_output,
         }
         if "selector" in output:
+            if not isinstance(output["selector"], str):
+                raise TypeError("HFMultimodalExtractor output selector must be a string.")
             metadata["selector"] = output["selector"]
         specs.append(
             EmbeddingOutputSpec(
                 name=name,
-                pooling=str(pooling) if pooling is not None else None,
-                hidden_layer=int(hidden_layer) if hidden_layer is not None else None,
+                pooling=pooling,
+                hidden_layer=hidden_layer,
                 metadata=metadata,
             )
         )
@@ -383,17 +454,22 @@ def _resolve_multimodal_structured_output_specs(
     specs: List[StructuredOutputSpec] = []
     seen = set()
     for output in outputs:
-        name = str(output.get("name", "")).strip()
+        if not isinstance(output, Mapping):
+            raise TypeError("HFMultimodalExtractor structured output specs must be mappings.")
+        raw_name = output.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) else ""
         if not name:
             raise ValueError("HFMultimodalExtractor structured output specs must include a name.")
         if name in seen:
             raise ValueError("HFMultimodalExtractor structured output names must be unique.")
-        unit_type = str(output.get("unit_type", "")).strip()
+        raw_unit_type = output.get("unit_type")
+        unit_type = raw_unit_type.strip() if isinstance(raw_unit_type, str) else ""
         if not unit_type:
             raise ValueError(
                 f"HFMultimodalExtractor structured output '{name}' must include a unit_type."
             )
-        source = str(output.get("source", "")).strip()
+        raw_source = output.get("source")
+        source = raw_source.strip() if isinstance(raw_source, str) else ""
         if not source:
             raise ValueError(
                 f"HFMultimodalExtractor structured output '{name}' must include a source."
@@ -403,25 +479,30 @@ def _resolve_multimodal_structured_output_specs(
                 f"HFMultimodalExtractor structured output '{name}' has unsupported source "
                 f"'{source}'."
             )
-        model_output = str(output.get("model_output", "")).strip()
+        raw_model_output = output.get("model_output")
+        model_output = raw_model_output.strip() if isinstance(raw_model_output, str) else ""
         if not model_output:
             raise ValueError(
                 f"HFMultimodalExtractor structured output '{name}' must include a "
                 "model_output selector."
             )
+        raw_metadata = output.get("metadata", {})
+        if not isinstance(raw_metadata, Mapping):
+            raise TypeError("HFMultimodalExtractor structured metadata must be a mapping.")
         metadata = {
+            **dict(raw_metadata),
             "source": source,
             "model_output": model_output,
         }
         if output.get("selector") is not None:
-            metadata["selector"] = str(output["selector"])
+            if not isinstance(output["selector"], str):
+                raise TypeError("HFMultimodalExtractor structured selector must be a string.")
+            metadata["selector"] = output["selector"]
         specs.append(
             StructuredOutputSpec(
                 name=name,
                 unit_type=unit_type,
-                hidden_layer=(
-                    int(output["hidden_layer"]) if output.get("hidden_layer") is not None else None
-                ),
+                hidden_layer=output.get("hidden_layer"),
                 metadata=metadata,
             )
         )
@@ -437,15 +518,18 @@ def _spec_to_recipe(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
         "pooling": spec.pooling,
         "hidden_layer": spec.hidden_layer,
         "selector": spec.metadata.get("selector"),
+        "metadata": dict(spec.metadata),
     }
 
 
 def _spec_to_metadata(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
     return {
+        **dict(spec.metadata),
         "source": spec.metadata.get("source"),
         "model_output": spec.metadata.get("model_output"),
         "pooling": spec.pooling,
         "hidden_layer": spec.hidden_layer,
+        "selector": spec.metadata.get("selector"),
     }
 
 
@@ -457,6 +541,7 @@ def _structured_spec_to_recipe(spec: StructuredOutputSpec) -> Dict[str, Any]:
         "model_output": spec.metadata.get("model_output"),
         "hidden_layer": spec.hidden_layer,
         "selector": spec.metadata.get("selector"),
+        "metadata": dict(spec.metadata),
     }
 
 
@@ -663,18 +748,12 @@ def _to_numpy(value: Any) -> np.ndarray:
 
 
 def _coerce_image(value: Any, image_module: Any, image_mode: str, alpha_mode: str) -> Any:
-    if isinstance(value, (str, Path)):
-        return image_module.open(value).convert("RGB")
-    if isinstance(value, np.ndarray):
-        if value.ndim == 2:
-            return image_module.fromarray(value.astype(np.uint8))
-        if value.ndim == 3 and value.shape[-1] in {1, 3, 4}:
-            if value.shape[-1] == 1:
-                value = value[:, :, 0]
-            elif value.shape[-1] == 4 and alpha_mode == "drop":
-                value = value[:, :, :3]
-            return image_module.fromarray(value.astype(np.uint8))
-    return value
+    return coerce_image(
+        value,
+        image_module=image_module,
+        image_mode=image_mode,
+        alpha_mode=alpha_mode,
+    )
 
 
 def _iter_chunks(items: Iterable[Any], size: int) -> Iterable[List[Any]]:
@@ -689,4 +768,7 @@ def _iter_chunks(items: Iterable[Any], size: int) -> Iterable[List[Any]]:
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:
-    return f"{getattr(fn, '__module__', '<unknown>')}.{getattr(fn, '__qualname__', repr(fn))}"
+    value_type = type(fn)
+    module = getattr(fn, "__module__", value_type.__module__)
+    qualname = getattr(fn, "__qualname__", value_type.__qualname__)
+    return f"{module}.{qualname}"

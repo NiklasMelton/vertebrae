@@ -13,6 +13,33 @@ from vertebrae.extractors import CallableExtractor
 from vertebrae.utils.memory import resolve_memory_budget
 
 
+class _FitRowTrackingExtractor:
+    name = "fit_row_tracking"
+    modality = "tabular"
+    extractor_type = "test"
+    streaming_safe = True
+
+    def __init__(self):
+        self.fit_calls = 0
+        self.fit_rows = None
+
+    def fit(self, X, y=None):
+        del y
+        self.fit_calls += 1
+        self.fit_rows = np.asarray(X).copy()
+        return self
+
+    def transform(self, X):
+        return np.ones((len(X), 100), dtype=np.float64)
+
+    def recipe(self):
+        return {
+            "name": self.name,
+            "extractor_type": self.extractor_type,
+            "cache_safe": True,
+        }
+
+
 def test_memory_config_resolves_explicit_budget():
     budget = resolve_memory_budget(MemoryConfig(max_memory_bytes=123_456))
 
@@ -111,6 +138,72 @@ def test_streaming_embedding_auto_subsamples_when_scoring_would_exceed_memory(
     assert len(seen[2:]) == 4
 
 
+def test_auto_memory_probe_fits_live_extractor_once_on_final_rows(
+    tmp_path,
+    fake_overlapindex,
+):
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(30).reshape(10, 3),
+        ["a"] * 5 + ["b"] * 5,
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = _FitRowTrackingExtractor()
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=extractor,
+        scoring_config=OverlapScoringConfig(k=1),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        embedding_config=EmbeddingConfig(batch_size=2),
+        memory_config=MemoryConfig(max_memory_bytes=4_000),
+    ).run()
+
+    assert result.extractor_results[0].embedding_metadata["n_samples"] == 4
+    assert extractor.fit_calls == 1
+    assert extractor.fit_rows is not None
+    assert len(extractor.fit_rows) == 4
+
+
+def test_auto_memory_probe_uses_derived_budget_without_fitting_live_extractor_twice(
+    tmp_path,
+    fake_overlapindex,
+    monkeypatch,
+):
+    class _Memory:
+        total = 8_000
+        available = 5_334
+
+    monkeypatch.setattr("vertebrae.utils.memory.psutil.virtual_memory", lambda: _Memory())
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(30).reshape(10, 3),
+        ["a"] * 5 + ["b"] * 5,
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = _FitRowTrackingExtractor()
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=extractor,
+        scoring_config=OverlapScoringConfig(k=1),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        embedding_config=EmbeddingConfig(batch_size=2),
+        memory_config=MemoryConfig(reserve_system_bytes=0),
+    ).run()
+
+    metadata = result.extractor_results[0].embedding_metadata
+    assert metadata["subsampled"] is True
+    assert metadata["n_samples"] == 4
+    assert extractor.fit_calls == 1
+    assert extractor.fit_rows is not None
+    assert len(extractor.fit_rows) == 4
+
+
 def test_user_requested_subsample_rate_limits_benchmark_samples(tmp_path, fake_overlapindex):
     seen = []
 
@@ -144,7 +237,11 @@ def test_user_requested_subsample_rate_limits_benchmark_samples(tmp_path, fake_o
     assert metadata["n_samples"] == 6
     assert metadata["effective_subsample_rate"] == 0.5
     assert set(metadata["sample_indices"]).issubset(set(range(12)))
-    assert len(seen) == 6
+    # The disposable sizing clone probes one batch; the live extractor still
+    # materializes exactly the six final rows once.
+    assert len(seen) == 9
+    assert len(seen[:3]) == 3
+    assert len(seen[3:]) == 6
     assert any("user-requested" in warning for warning in extractor_result.warnings)
 
 
@@ -251,7 +348,10 @@ def test_streaming_embedding_records_memory_estimate(tmp_path, fake_overlapindex
     assert estimate["strategy"] == "in_memory"
 
 
-def test_streaming_probe_is_reused_when_no_subsampling_is_needed(tmp_path, fake_overlapindex):
+def test_disposable_streaming_probe_is_not_reused_by_live_extractor(
+    tmp_path,
+    fake_overlapindex,
+):
     seen = []
 
     def embed(batch):
@@ -277,4 +377,5 @@ def test_streaming_probe_is_reused_when_no_subsampling_is_needed(tmp_path, fake_
         memory_config=MemoryConfig(max_memory_bytes=10_000_000),
     ).run()
 
-    assert seen == list(range(0, 24, 3))
+    assert seen[:3] == [0, 3, 6]
+    assert seen[3:] == list(range(0, 24, 3))

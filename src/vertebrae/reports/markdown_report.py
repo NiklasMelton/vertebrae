@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Any, List
 
 from vertebrae.profiling import DistributedResourceProfile
+from vertebrae.reports._markdown import markdown_text as _markdown_text
 from vertebrae.scoring.separatix import probe_summary_for_result
+from vertebrae.utils.semantic_labels import label_display
 
 
 def save_markdown_report(result: Any, path: str) -> None:
@@ -44,15 +46,16 @@ def render_markdown_report(result: Any) -> str:
                 if target_type == "regression"
                 else f"- Classes: {dataset.get('n_classes', dataset.get('n_classes_raw', ''))}"
             ),
-            f"- Target type: {target_type}",
-            f"- Modality: {dataset['modality']}",
+            f"- Target type: {_markdown_text(target_type)}",
+            f"- Modality: {_markdown_text(dataset['modality'])}",
         ]
     )
     if dataset.get("target_view"):
-        lines.append(f"- Target view: {dataset.get('target_view', {}).get('name', 'primary')}")
+        target_view_name = dataset.get("target_view", {}).get("name", "primary")
+        lines.append(f"- Target view: {_markdown_text(target_view_name)}")
     if dataset.get("available_target_views"):
         target_view_names = [item.get("name") for item in dataset.get("available_target_views", [])]
-        lines.append(f"- Available target views: {target_view_names}")
+        lines.append(f"- Available target views: {_markdown_text(target_view_names)}")
     if dataset.get("modality") == "segmentation":
         lines.append(f"- Source images: {dataset.get('n_images', '')}")
         lines.append(
@@ -65,31 +68,35 @@ def render_markdown_report(result: Any) -> str:
         )
         lines.append(f"- Label density: {_format_float(dataset.get('label_density'))}")
     if target_type == "regression":
-        lines.append(f"- Target names: {dataset.get('target_names', [])}")
+        lines.append(f"- Target names: {_markdown_text(dataset.get('target_names', []))}")
         constant_targets = dataset.get("constant_targets", [])
         if constant_targets:
-            lines.append(f"- Constant targets: {constant_targets}")
+            lines.append(f"- Constant targets: {_markdown_text(constant_targets)}")
     dataset_metadata = dataset.get("metadata", {})
     if dataset_metadata.get("modalities"):
-        lines.append(f"- Modalities: {dataset_metadata['modalities']}")
+        lines.append(f"- Modalities: {_markdown_text(dataset_metadata['modalities'])}")
     if dataset_metadata.get("input_fields"):
-        lines.append(f"- Input fields: {dataset_metadata['input_fields']}")
+        lines.append(f"- Input fields: {_markdown_text(dataset_metadata['input_fields'])}")
     if dataset_metadata.get("relational_unit"):
-        lines.append(f"- Relational unit: {dataset_metadata['relational_unit']}")
+        lines.append(f"- Relational unit: {_markdown_text(dataset_metadata['relational_unit'])}")
     units = dataset.get("units")
     if units:
-        lines.append(f"- Unit type: {units.get('unit_type', 'unit')}")
+        lines.append(f"- Unit type: {_markdown_text(units.get('unit_type', 'unit'))}")
     structured_units = dataset.get("structured_units")
     if structured_units:
-        lines.append(f"- Structured unit type: {structured_units.get('unit_type', 'unit')}")
+        lines.append(
+            f"- Structured unit type: {_markdown_text(structured_units.get('unit_type', 'unit'))}"
+        )
         if structured_units.get("task_family"):
-            lines.append(f"- Structured task family: {structured_units.get('task_family')}")
+            lines.append(
+                f"- Structured task family: {_markdown_text(structured_units.get('task_family'))}"
+            )
         lines.append(f"- Structured parents: {structured_units.get('n_parents', '')}")
         lines.append(f"- Structured units: {structured_units.get('n_units', '')}")
     if dataset_metadata.get("entity_type"):
-        lines.append(f"- Entity type: {dataset_metadata['entity_type']}")
+        lines.append(f"- Entity type: {_markdown_text(dataset_metadata['entity_type'])}")
     if dataset_metadata.get("composition"):
-        lines.append(f"- Embedding composition: {dataset_metadata['composition']}")
+        lines.append(f"- Embedding composition: {_markdown_text(dataset_metadata['composition'])}")
     lines.extend(
         [
             "",
@@ -98,18 +105,19 @@ def render_markdown_report(result: Any) -> str:
         ]
     )
     for item in data.get("recommendations", []):
-        lines.append(f"- {item}")
+        lines.append(f"- {_markdown_text(item)}")
     for warning in data.get("metadata", {}).get("label_view_warnings", []):
-        lines.append(f"- {warning}")
+        lines.append(f"- {_markdown_text(warning)}")
     for warning in data.get("metadata", {}).get("target_view_warnings", []):
-        lines.append(f"- {warning}")
-    top_ranked = result.ranked_results()[0] if result.extractor_results else None
+        lines.append(f"- {_markdown_text(warning)}")
+    ranked_results = result.ranked_results()
+    top_ranked = ranked_results[0] if ranked_results else None
     if top_ranked and top_ranked.separatix and top_ranked.separatix.ran:
         lines.append(
             "- "
             f"Separatix complexity guidance for the top representation: "
-            f"{top_ranked.separatix.recommendation or ''} "
-            f"({top_ranked.separatix.confidence or ''} confidence).".strip()
+            f"{_markdown_text(top_ranked.separatix.recommendation or '')} "
+            f"({_markdown_text(top_ranked.separatix.confidence or '')} confidence).".strip()
         )
     structured_outputs = dataset.get("structured_outputs", [])
     if structured_outputs:
@@ -120,12 +128,17 @@ def render_markdown_report(result: Any) -> str:
         lines.append("| --- | --- | --- | --- | --- | --- |")
         for output in structured_outputs:
             lines.append(
-                f"| {output.get('extractor', '')} | {output.get('output', '')} | "
-                f"{output.get('unit_type', '')} | {output.get('task_family', '')} | "
-                f"{output.get('alignment_mode', '')} | "
-                f"{_alignment_recipe_label(output.get('alignment_recipe'))} |"
+                f"| {_markdown_text(output.get('extractor', ''))} | "
+                f"{_markdown_text(output.get('output', ''))} | "
+                f"{_markdown_text(output.get('unit_type', ''))} | "
+                f"{_markdown_text(output.get('task_family', ''))} | "
+                f"{_markdown_text(output.get('alignment_mode', ''))} | "
+                f"{_markdown_text(_alignment_recipe_label(output.get('alignment_recipe')))} |"
             )
     lines.extend(["", "## Ranking", ""])
+    if not ranked_results:
+        lines.append("Ranking unavailable because no valid aggregate remains.")
+        lines.append("")
     lines.append(
         "| rank | extractor | extractor_type | target_view | label_view | "
         "primary_metric | primary_score | overlap_score | overlap_macro | "
@@ -138,9 +151,16 @@ def render_markdown_report(result: Any) -> str:
         "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | "
         "--- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
     )
-    for rank, item in enumerate(result.ranked_results(), start=1):
+    for rank, item in enumerate(ranked_results, start=1):
         interval = _format_interval(item.stability)
-        weakest = item.weakest_class if item.weakest_class is not None else ""
+        weakest = (
+            label_display(
+                item.weakest_class,
+                item.overlap.metadata.get("label_catalog", []) if item.overlap else [],
+            )
+            if item.weakest_class is not None
+            else ""
+        )
         probe = probe_summary_for_result(item.separatix)
         primary_probe_metric = probe.get("primary_metric") or {}
         embedding_dim = item.embedding_metadata.get("embedding_dim", "")
@@ -154,18 +174,21 @@ def render_markdown_report(result: Any) -> str:
             separatix_recommendation = item.separatix.recommendation or ""
             separatix_confidence = item.separatix.confidence or ""
         lines.append(
-            f"| {rank} | {item.name} | {item.extractor_type} | "
-            f"{target_view} | {label_view} | {item.primary_metric_name} | "
+            f"| {rank} | {_markdown_text(item.name)} | {_markdown_text(item.extractor_type)} | "
+            f"{_markdown_text(target_view)} | {_markdown_text(label_view)} | "
+            f"{_markdown_text(item.primary_metric_name)} | "
             f"{_format_float(item.primary_score)} | "
             f"{_format_float(item.overlap.score if item.overlap else None)} | "
             f"{_format_float(item.overlap.macro_score if item.overlap else None)} | "
             f"{_format_float(item.overlap.weighted_score if item.overlap else None)} | "
-            f"{interval} | {weakest} | "
-            f"{probe.get('best_probe') or ''} | {primary_probe_metric.get('name') or ''} | "
+            f"{_markdown_text(interval)} | {_markdown_text(weakest)} | "
+            f"{_markdown_text(probe.get('best_probe') or '')} | "
+            f"{_markdown_text(primary_probe_metric.get('name') or '')} | "
             f"{_format_float(primary_probe_metric.get('value'))} | "
-            f"{embedding_dim} | {compression_method} | "
-            f"{compressed_dim} | {item.recommendation} | {separatix_recommendation} | "
-            f"{separatix_confidence} |"
+            f"{_markdown_text(embedding_dim)} | {_markdown_text(compression_method)} | "
+            f"{_markdown_text(compressed_dim)} | {_markdown_text(item.recommendation)} | "
+            f"{_markdown_text(separatix_recommendation)} | "
+            f"{_markdown_text(separatix_confidence)} |"
         )
 
     profiled_cohort = [item for item in result.quality_cohort() if item.resource_profile]
@@ -185,7 +208,7 @@ def render_markdown_report(result: Any) -> str:
             if isinstance(profile, DistributedResourceProfile):
                 evaluated_bytes = profile.embedding.evaluated_bytes if profile.embedding else None
                 lines.append(
-                    f"| {item.name} | worker-first | "
+                    f"| {_markdown_text(item.name)} | worker-first | "
                     f"{_format_milliseconds(profile.worker_first_calls.median_seconds)} | "
                     f"{_format_milliseconds(profile.worker_first_calls.p95_seconds)} | "
                     f"{_format_float(profile.aggregate_compute_throughput_samples_per_second)} | "
@@ -199,7 +222,8 @@ def render_markdown_report(result: Any) -> str:
             inference = profile.inference
             evaluated_bytes = profile.embedding.evaluated_bytes if profile.embedding else None
             lines.append(
-                f"| {item.name} | {_format_milliseconds(inference.first_call_seconds)} | "
+                f"| {_markdown_text(item.name)} | "
+                f"{_format_milliseconds(inference.first_call_seconds)} | "
                 f"{_format_milliseconds(inference.warm_median_seconds)} | "
                 f"{_format_milliseconds(inference.warm_p95_seconds)} | "
                 f"{_format_float(inference.throughput_samples_per_second)} | "
@@ -208,37 +232,47 @@ def render_markdown_report(result: Any) -> str:
                 f"{_format_bytes(profile.model.in_memory_bytes)} | "
                 f"{_format_bytes(profile.model.checkpoint_bytes)} | "
                 f"{_format_bytes(evaluated_bytes)} | "
-                f"{inference.batch_sizes} | {profile.context.get('synchronization_status', '')} |"
+                f"{_markdown_text(inference.batch_sizes)} | "
+                f"{_markdown_text(profile.context.get('synchronization_status', ''))} |"
             )
 
     lines.extend(["", "## Per-extractor details", ""])
-    for item in result.ranked_results():
+    for item in ranked_results:
         overlap = item.overlap
         target_metadata = (
             overlap.metadata if overlap else item.metrics[item.primary_metric_name].metadata
         )
+        output_metadata = item.embedding_metadata.get("output_metadata") or {}
+        weakest_class = (
+            label_display(
+                item.weakest_class,
+                target_metadata.get("label_catalog", []),
+            )
+            if item.weakest_class is not None
+            else ""
+        )
         lines.extend(
             [
-                f"### {item.name}",
+                f"### {_markdown_text(item.name)}",
                 "",
-                f"- Extractor type: {item.extractor_type}",
-                f"- Extractor family: {_extractor_family(item.extractor_type)}",
-                f"- Target type: {target_metadata.get('target_type', 'single_label')}",
-                f"- Target view: {(item.target_view or {}).get('name', 'primary')}",
-                f"- Label view: {(item.label_view or {}).get('name', 'primary')}",
-                f"- Modality: {item.embedding_metadata.get('modality', '')}",
-                (
-                    "- Output source: "
-                    f"{item.embedding_metadata.get('output_metadata', {}).get('source', '')}"
-                ),
+                f"- Extractor type: {_markdown_text(item.extractor_type)}",
+                f"- Extractor family: {_markdown_text(_extractor_family(item.extractor_type))}",
+                "- Target type: "
+                f"{_markdown_text(target_metadata.get('target_type', 'single_label'))}",
+                f"- Target view: {_markdown_text((item.target_view or {}).get('name', 'primary'))}",
+                f"- Label view: {_markdown_text((item.label_view or {}).get('name', 'primary'))}",
+                f"- Modality: {_markdown_text(item.embedding_metadata.get('modality', ''))}",
+                f"- Output source: {_markdown_text(output_metadata.get('source', ''))}",
                 f"- Embedding dimension: {item.embedding_metadata.get('embedding_dim', '')}",
-                f"- Compression method: {item.compression_metadata.get('method', 'none')}",
-                f"- Compression precision: {item.compression_metadata.get('precision', '')}",
+                "- Compression method: "
+                f"{_markdown_text(item.compression_metadata.get('method', 'none'))}",
+                "- Compression precision: "
+                f"{_markdown_text(item.compression_metadata.get('precision', ''))}",
                 f"- Compressed dimension: {item.compression_metadata.get('compressed_dim', '')}",
-                f"- Primary metric: {item.primary_metric_name}",
+                f"- Primary metric: {_markdown_text(item.primary_metric_name)}",
                 f"- Primary score: {_format_float(item.primary_score)}",
-                f"- Weakest class: {item.weakest_class or ''}",
-                f"- Recommendation: {item.recommendation}",
+                f"- Weakest class: {_markdown_text(weakest_class)}",
+                f"- Recommendation: {_markdown_text(item.recommendation)}",
             ]
         )
         if item.resource_profile:
@@ -253,7 +287,8 @@ def render_markdown_report(result: Any) -> str:
                 [
                     f"- Overlap macro: {overlap.macro_score:.4f}",
                     f"- Overlap weighted: {_format_float(overlap.weighted_score)}",
-                    f"- Excluded aggregate classes: {overlap.metadata.get('exclude_classes', [])}",
+                    "- Excluded aggregate classes: "
+                    f"{_markdown_text(overlap.metadata.get('exclude_classes', []))}",
                 ]
             )
         segmentation = item.embedding_metadata.get("segmentation")
@@ -264,19 +299,20 @@ def render_markdown_report(result: Any) -> str:
                     f"- Candidate tokens: {segmentation.get('candidate_tokens', '')}",
                     f"- Retained tokens: {segmentation.get('retained_tokens', '')}",
                     f"- Background tokens: {segmentation.get('background_tokens', '')}",
-                    f"- Ignored tokens: {segmentation.get('ignored_tokens', {})}",
-                    f"- Spatial layout: {segmentation.get('layout', {})}",
+                    f"- Ignored tokens: {_markdown_text(segmentation.get('ignored_tokens', {}))}",
+                    f"- Spatial layout: {_markdown_text(segmentation.get('layout', {}))}",
                 ]
             )
         structured = item.embedding_metadata.get("structured")
         if structured:
             lines.extend(
                 [
-                    f"- Structured unit type: {structured.get('unit_type', '')}",
-                    f"- Structured task family: {structured.get('task_family', '')}",
-                    f"- Alignment mode: {structured.get('alignment_mode', '')}",
+                    f"- Structured unit type: {_markdown_text(structured.get('unit_type', ''))}",
+                    "- Structured task family: "
+                    f"{_markdown_text(structured.get('task_family', ''))}",
+                    f"- Alignment mode: {_markdown_text(structured.get('alignment_mode', ''))}",
                     "- Alignment recipe: "
-                    f"{_alignment_recipe_label(structured.get('alignment_recipe'))}",
+                    f"{_markdown_text(_alignment_recipe_label(structured.get('alignment_recipe')))}",
                     f"- Structured parents: {structured.get('n_parents', '')}",
                     f"- Structured units: {structured.get('n_units', '')}",
                 ]
@@ -289,9 +325,9 @@ def render_markdown_report(result: Any) -> str:
         if recipe:
             for key, value in recipe.items():
                 if key in {"params"} and isinstance(value, dict):
-                    lines.append(f"- {key}: {len(value)} captured parameters")
+                    lines.append(f"- {_markdown_text(key)}: {len(value)} captured parameters")
                 else:
-                    lines.append(f"- {key}: {value}")
+                    lines.append(f"- {_markdown_text(key)}: {_markdown_text(value)}")
         else:
             lines.append("No extractor recipe was captured.")
         lines.append("")
@@ -306,15 +342,19 @@ def render_markdown_report(result: Any) -> str:
             "explained_variance_total",
         ):
             if key in compression_metadata:
-                lines.append(f"- {key}: {compression_metadata[key]}")
+                lines.append(
+                    f"- {_markdown_text(key)}: {_markdown_text(compression_metadata[key])}"
+                )
         for warning in compression_metadata.get("warnings", []):
-            lines.append(f"- warning: {warning}")
+            lines.append(f"- warning: {_markdown_text(warning)}")
         lines.extend(["", "#### Metrics", ""])
         for metric_name, metric in item.metrics.items():
             direction = "higher is better" if metric.higher_is_better else "lower is better"
-            lines.append(f"- {metric_name}: {_format_float(metric.score)} ({direction})")
+            lines.append(
+                f"- {_markdown_text(metric_name)}: {_format_float(metric.score)} ({direction})"
+            )
             for warning in metric.warnings:
-                lines.append(f"  - warning: {warning}")
+                lines.append(f"  - warning: {_markdown_text(warning)}")
         lines.extend(["", "#### Per-class scores", ""])
         if overlap is None:
             lines.append("Per-class scores are available only for OverlapIndex scoring.")
@@ -325,8 +365,12 @@ def render_markdown_report(result: Any) -> str:
         elif overlap.per_class_scores:
             lines.append("| class | score |")
             lines.append("| --- | ---: |")
+            catalog = overlap.metadata.get("label_catalog", [])
             for label, score in overlap.per_class_scores.items():
-                lines.append(f"| {label} | {_format_float(score)} |")
+                lines.append(
+                    f"| {_markdown_text(label_display(label, catalog))} | "
+                    f"{_format_float(score)} |"
+                )
             lines.append("")
         else:
             lines.append("No per-class scores were returned.")
@@ -337,7 +381,7 @@ def render_markdown_report(result: Any) -> str:
             summary = item.stability.get("summary", {})
             lines.append(
                 "- "
-                f"{item.stability.get('mode')} stability interval: "
+                f"{_markdown_text(item.stability.get('mode'))} stability interval: "
                 f"{_format_float(summary.get('lower'))} to {_format_float(summary.get('upper'))}; "
                 f"mean {_format_float(summary.get('mean'))}."
             )
@@ -349,27 +393,31 @@ def render_markdown_report(result: Any) -> str:
         if item.separatix is None:
             lines.append("Separatix diagnostics were disabled.")
         elif not item.separatix.ran:
-            lines.append(f"- Skipped: {item.separatix.skipped_reason or ''}")
+            lines.append(f"- Skipped: {_markdown_text(item.separatix.skipped_reason or '')}")
         else:
             probe = probe_summary_for_result(item.separatix)
             primary_probe_metric = probe.get("primary_metric") or {}
             comparison = probe.get("comparison") or {}
             evaluation = probe.get("evaluation") or {}
             sampling = evaluation.get("sampling") or {}
-            lines.append(f"- Recommendation: {item.separatix.recommendation or ''}")
-            lines.append(f"- Recommendation confidence: {item.separatix.confidence or ''}")
-            lines.append(f"- Summary: {(item.separatix.recommendation_text or '').strip()}")
-            lines.append(f"- Probe status: {probe.get('status', '')}")
-            lines.append(f"- Best probe: {probe.get('best_probe') or ''}")
+            lines.append(f"- Recommendation: {_markdown_text(item.separatix.recommendation or '')}")
+            lines.append(
+                "- Recommendation confidence: " f"{_markdown_text(item.separatix.confidence or '')}"
+            )
+            lines.append(
+                f"- Summary: {_markdown_text((item.separatix.recommendation_text or '').strip())}"
+            )
+            lines.append(f"- Probe status: {_markdown_text(probe.get('status', ''))}")
+            lines.append(f"- Best probe: {_markdown_text(probe.get('best_probe') or '')}")
             if primary_probe_metric:
                 lines.append(
                     "- Primary probe metric: "
-                    f"{primary_probe_metric.get('name')}="
+                    f"{_markdown_text(primary_probe_metric.get('name'))}="
                     f"{_format_float(primary_probe_metric.get('value'))}"
                 )
             if probe.get("skip_reason"):
-                lines.append(f"- Probe unavailable: {probe.get('skip_reason')}")
-            lines.append(f"- Probe evaluation mode: {evaluation.get('mode') or ''}")
+                lines.append(f"- Probe unavailable: {_markdown_text(probe.get('skip_reason'))}")
+            lines.append(f"- Probe evaluation mode: {_markdown_text(evaluation.get('mode') or '')}")
             lines.append(f"- Grouped evaluation: {bool(evaluation.get('grouped', False))}")
             if evaluation.get("n_groups") is not None:
                 lines.append(f"- Independence groups: {evaluation.get('n_groups')}")
@@ -385,79 +433,85 @@ def render_markdown_report(result: Any) -> str:
                 lines.append("| probe metric | value |")
                 lines.append("| --- | ---: |")
                 for key, value in probe["metrics"].items():
-                    lines.append(f"| {key} | {_format_float(value)} |")
+                    lines.append(f"| {_markdown_text(key)} | {_format_float(value)} |")
             if comparison:
                 lines.append("")
                 lines.append("- Linear/nonlinear probe comparison:")
                 lines.append(
                     "  - "
-                    f"{comparison.get('linear_probe', 'linear')}: "
+                    f"{_markdown_text(comparison.get('linear_probe', 'linear'))}: "
                     f"{_format_float(comparison.get('linear_value'))}"
                 )
                 lines.append(
                     "  - "
-                    f"{comparison.get('nonlinear_probe', 'nonlinear')}: "
+                    f"{_markdown_text(comparison.get('nonlinear_probe', 'nonlinear'))}: "
                     f"{_format_float(comparison.get('nonlinear_value'))}"
                 )
                 lines.append(
                     "  - "
-                    f"Delta ({comparison.get('metric', '')}): "
+                    f"Delta ({_markdown_text(comparison.get('metric', ''))}): "
                     f"{_format_float(comparison.get('delta'))}; "
-                    f"favored family={comparison.get('favored_family', '')}"
+                    f"favored family={_markdown_text(comparison.get('favored_family', ''))}"
                 )
                 if comparison.get("confidence") is not None:
-                    lines.append("  - Comparison confidence: " f"{comparison.get('confidence')}")
+                    lines.append(
+                        "  - Comparison confidence: "
+                        f"{_markdown_text(comparison.get('confidence'))}"
+                    )
             mlp = ((item.separatix.report or {}).get("metrics", {}) or {}).get("mlp_probes", {})
             if mlp:
-                lines.append(f"- MLP status: {mlp.get('status', '')}")
+                lines.append(f"- MLP status: {_markdown_text(mlp.get('status', ''))}")
                 if mlp.get("reason"):
-                    lines.append(f"- MLP reason: {mlp.get('reason')}")
+                    lines.append(f"- MLP reason: {_markdown_text(mlp.get('reason'))}")
                 trigger = mlp.get("trigger", {}) or {}
                 if trigger.get("reason"):
-                    lines.append(f"- MLP trigger reason: {trigger.get('reason')}")
+                    lines.append(f"- MLP trigger reason: {_markdown_text(trigger.get('reason'))}")
                 backend = mlp.get("backend", {})
                 if backend:
-                    lines.append(
-                        "- MLP backend: "
-                        f"{backend.get('resolved_device') or backend.get('requested_device')}"
+                    backend_device = backend.get("resolved_device") or backend.get(
+                        "requested_device"
                     )
+                    lines.append(f"- MLP backend: {_markdown_text(backend_device)}")
             if item.separatix.decision_path:
                 lines.append("- Decision path:")
                 for step in item.separatix.decision_path:
-                    lines.append(f"  - {step}")
+                    lines.append(f"  - {_markdown_text(step)}")
             if item.separatix.scores:
                 lines.append("")
                 lines.append("| score | value |")
                 lines.append("| --- | ---: |")
                 for key, value in item.separatix.scores.items():
-                    lines.append(f"| {key} | {_format_float(value)} |")
+                    lines.append(f"| {_markdown_text(key)} | {_format_float(value)} |")
             if item.separatix.skipped_diagnostics:
                 lines.append("")
                 lines.append("- Skipped diagnostics:")
                 for entry in item.separatix.skipped_diagnostics:
-                    lines.append(f"  - {entry.get('name', '')}: {entry.get('reason', '')}")
+                    lines.append(
+                        f"  - {_markdown_text(entry.get('name', ''))}: "
+                        f"{_markdown_text(entry.get('reason', ''))}"
+                    )
             if item.separatix.warnings:
                 lines.append("")
                 lines.append("- Warnings:")
                 for warning in item.separatix.warnings:
-                    lines.append(f"  - {warning}")
+                    lines.append(f"  - {_markdown_text(warning)}")
         lines.append("")
 
         warnings = item.warnings
         if warnings:
             lines.extend(["#### Warnings", ""])
             for warning in warnings:
-                lines.append(f"- {warning}")
+                lines.append(f"- {_markdown_text(warning)}")
             lines.append("")
 
     lines.extend(["## OverlapIndex configuration", ""])
     scoring_config = data.get("metadata", {}).get("scoring_config", {})
     for key, value in scoring_config.items():
-        lines.append(f"- {key}: {value}")
+        lines.append(f"- {_markdown_text(key)}: {_markdown_text(value)}")
     lines.extend(["", "## Reproducibility metadata", ""])
     for key, value in data.get("metadata", {}).items():
         if key != "scoring_config":
-            lines.append(f"- {key}: {value}")
+            lines.append(f"- {_markdown_text(key)}: {_markdown_text(value)}")
     lines.append("")
     return "\n".join(lines)
 
@@ -482,7 +536,7 @@ def _distributed_resource_details(profile: DistributedResourceProfile) -> List[s
     model = profile.model
     persisted = embedding.evaluated_persisted if embedding else None
     return [
-        f"- Status: {profile.status}",
+        f"- Status: {_markdown_text(profile.status)}",
         "- Scope: independent distributed worker profiling windows",
         f"- Profiled workers: {profile.profiled_shard_count}/{profile.shard_count}",
         f"- Worker-first calls: {profile.worker_first_calls.count}",
@@ -495,20 +549,21 @@ def _distributed_resource_details(profile: DistributedResourceProfile) -> List[s
         "- Throughput meaning: summed samples divided by summed worker compute seconds; "
         "not cluster wall-clock throughput",
         f"- Maximum worker RSS: {_format_bytes(profile.max_worker_peak_rss_bytes)}",
-        f"- Maximum worker RSS shard: {profile.max_worker_peak_rss_shard_key or ''}",
+        "- Maximum worker RSS shard: "
+        f"{_markdown_text(profile.max_worker_peak_rss_shard_key or '')}",
         "- Maximum worker device allocation: "
         f"{_format_bytes(profile.max_worker_peak_device_allocated_bytes)}",
         "- Logical evaluated embedding bytes: "
         f"{_format_bytes(embedding.evaluated_bytes if embedding else None)}",
         "- Persisted evaluated embedding bytes: "
         f"{_format_bytes(persisted.bytes if persisted else None)}",
-        f"- Persisted evaluated status: {persisted.status if persisted else ''}",
+        f"- Persisted evaluated status: {_markdown_text(persisted.status if persisted else '')}",
         f"- Shard persisted bytes: {_format_bytes(profile.shard_persisted_bytes)}",
         f"- Parameters: {model.parameter_count if model else ''}",
         f"- Model in-memory bytes: " f"{_format_bytes(model.in_memory_bytes if model else None)}",
         f"- Checkpoint bytes: {_format_bytes(model.checkpoint_bytes if model else None)}",
-        f"- Weight dtypes: {model.weight_dtypes if model else []}",
-        *[f"- Warning: {warning}" for warning in profile.warnings],
+        f"- Weight dtypes: {_markdown_text(model.weight_dtypes if model else [])}",
+        *[f"- Warning: {_markdown_text(warning)}" for warning in profile.warnings],
     ]
 
 
@@ -517,8 +572,8 @@ def _local_resource_details(profile: Any) -> List[str]:
     raw_persisted = embedding.raw_persisted if embedding else None
     evaluated_persisted = embedding.evaluated_persisted if embedding else None
     lines = [
-        f"- Status: {profile.status}",
-        f"- Inference status: {profile.inference.status}",
+        f"- Status: {_markdown_text(profile.status)}",
+        f"- Inference status: {_markdown_text(profile.inference.status)}",
         f"- First call: {_format_milliseconds(profile.inference.first_call_seconds)} ms",
         f"- First call includes fit: {profile.inference.first_call_includes_fit}",
         f"- Warm calls: {profile.inference.warm_call_count}",
@@ -529,14 +584,14 @@ def _local_resource_details(profile: Any) -> List[str]:
         f"- Peak host RSS: {_format_bytes(profile.host_memory.peak_rss_bytes)}",
         "- Peak host RSS increase: " f"{_format_bytes(profile.host_memory.peak_increase_bytes)}",
         f"- Peak device allocated: {_format_bytes(profile.device_memory.peak_allocated_bytes)}",
-        f"- Model-footprint status: {profile.model.status}",
+        f"- Model-footprint status: {_markdown_text(profile.model.status)}",
         f"- Parameters: {profile.model.parameter_count or ''}",
         f"- Model in-memory bytes: {_format_bytes(profile.model.in_memory_bytes)}",
         f"- Checkpoint bytes: {_format_bytes(profile.model.checkpoint_bytes)}",
-        f"- Synchronization: {profile.context.get('synchronization_status', '')}",
-        f"- Cache: {profile.context.get('cache_status', '')}",
-        f"- Measurement scope: {profile.context.get('measurement_scope', '')}",
-        f"- Batch sizes: {profile.inference.batch_sizes}",
+        f"- Synchronization: {_markdown_text(profile.context.get('synchronization_status', ''))}",
+        f"- Cache: {_markdown_text(profile.context.get('cache_status', ''))}",
+        f"- Measurement scope: {_markdown_text(profile.context.get('measurement_scope', ''))}",
+        f"- Batch sizes: {_markdown_text(profile.inference.batch_sizes)}",
     ]
     if embedding:
         lines.extend(
@@ -553,9 +608,10 @@ def _local_resource_details(profile: Any) -> List[str]:
     for artifact in profile.model.artifacts:
         lines.append(
             "- Deployment artifact: "
-            f"{artifact.role} {artifact.path} ({artifact.status}, {artifact.bytes} bytes)"
+            f"{_markdown_text(artifact.role)} {_markdown_text(artifact.path)} "
+            f"({_markdown_text(artifact.status)}, {artifact.bytes} bytes)"
         )
-    lines.extend(f"- Warning: {warning}" for warning in profile.warnings)
+    lines.extend(f"- Warning: {_markdown_text(warning)}" for warning in profile.warnings)
     return lines
 
 

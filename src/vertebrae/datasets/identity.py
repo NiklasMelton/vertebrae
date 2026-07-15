@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from vertebrae.cache.fingerprint import canonical_json_exact, hash_json_exact
 
-_IDENTITY_SCHEMA_VERSION = 1
+_IDENTITY_SCHEMA_VERSION = 2
 _IDENTITY_MODES = {"declared", "manifest", "content", "ephemeral", "derived"}
 
 
@@ -33,18 +33,22 @@ class DatasetIdentity:
         if self.mode not in _IDENTITY_MODES:
             raise ValueError(f"Unsupported dataset identity mode {self.mode!r}.")
         if self.mode == "declared":
-            _nonempty(self.dataset_id, "dataset_id")
-            _nonempty(self.revision, "revision")
+            object.__setattr__(self, "dataset_id", _nonempty(self.dataset_id, "dataset_id"))
+            object.__setattr__(self, "revision", _nonempty(self.revision, "revision"))
         elif self.mode == "manifest":
-            _nonempty(self.dataset_id, "dataset_id")
+            object.__setattr__(self, "dataset_id", _nonempty(self.dataset_id, "dataset_id"))
             if not self._manifest_json:
                 raise ValueError("Manifest identities must contain a canonical manifest.")
         elif self.mode == "ephemeral" and not self._nonce:
             raise ValueError("Ephemeral identities must contain a UUID nonce.")
         elif self.mode == "derived":
-            _nonempty(self._parent_key, "parent_key")
-            _nonempty(self._operation, "operation")
-            _nonempty(self._recipe_hash, "recipe_hash")
+            object.__setattr__(self, "_parent_key", _nonempty(self._parent_key, "parent_key"))
+            object.__setattr__(self, "_operation", _nonempty(self._operation, "operation"))
+            object.__setattr__(
+                self,
+                "_recipe_hash",
+                _nonempty(self._recipe_hash, "recipe_hash"),
+            )
 
     @classmethod
     def declared(cls, dataset_id: str, revision: str) -> "DatasetIdentity":
@@ -148,7 +152,11 @@ class DatasetIdentity:
     def descriptor(self, resolved_key: str) -> dict[str, Any]:
         """Return compact JSON-safe identity metadata without exposing manifest contents."""
 
-        result: dict[str, Any] = {"mode": self.mode, "key": resolved_key}
+        result: dict[str, Any] = {
+            "schema_version": _IDENTITY_SCHEMA_VERSION,
+            "mode": self.mode,
+            "key": resolved_key,
+        }
         if self.dataset_id is not None:
             result["dataset_id"] = self.dataset_id
         if self.revision is not None:
@@ -163,7 +171,7 @@ class DatasetIdentity:
 def _nonempty(value: Optional[str], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string.")
-    return value
+    return value.strip()
 
 
 def _safe_exact_hash(value: Any, purpose: str) -> str:

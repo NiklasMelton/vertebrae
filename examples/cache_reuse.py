@@ -23,6 +23,9 @@ def main() -> None:
         name="expensive_domain_features",
         transform_fn=lambda values: values[:, :4] * 1.25,
         modality="tabular",
+        # This lambda is intentionally local and therefore has no portable code
+        # identity. Declare the transformation revision explicitly to opt into reuse.
+        cache_identity="expensive-domain-features-v1",
     )
     kwargs = {
         "scoring_config": OverlapScoringConfig(k=3, min_samples_per_cluster=4),

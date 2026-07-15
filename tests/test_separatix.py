@@ -12,6 +12,7 @@ from vertebrae.scoring.separatix import (
     probe_summary_for_result,
     summarize_probe_diagnostics,
 )
+from vertebrae.utils.semantic_labels import semantic_label_key
 
 
 def test_separatix_config_validates_threshold_and_limits():
@@ -83,6 +84,20 @@ def test_separatix_scorer_passes_groups_without_serializing_ids(fake_separatix):
     assert result.probe_summary["evaluation"]["grouped"] is True
     assert result.probe_summary["evaluation"]["n_groups"] == 4
     assert "image-a" not in json.dumps(result.to_dict())
+
+
+def test_separatix_scorer_uses_exact_semantic_group_keys(fake_separatix):
+    embeddings = np.arange(24, dtype=float).reshape(8, 3)
+    labels = np.array(["a"] * 4 + ["b"] * 4)
+    groups = np.empty(8, dtype=object)
+    groups[:] = [1, 1, "1", "1", True, True, b"1", b"1"]
+
+    result = SeparatixScorer().score(embeddings, labels, groups=groups)
+
+    passed = fake_separatix.ComplexityProfiler.calls[-1]["groups"].tolist()
+    assert passed == [semantic_label_key(value) for value in groups.tolist()]
+    assert len(set(passed)) == 4
+    assert result.metadata["n_groups"] == 4
 
 
 def test_separatix_scorer_passes_regression_target_mode_and_mlp_settings(fake_separatix):

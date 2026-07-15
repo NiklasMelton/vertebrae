@@ -1,6 +1,9 @@
+import numpy as np
 import pytest
+from scipy import sparse
 
 from vertebrae import embedding_output_key, embedding_output_shard_key
+from vertebrae.cache.fingerprint import hash_json
 from vertebrae.cache.keys import (
     named_output_artifact_key,
     named_output_artifact_keys,
@@ -75,3 +78,28 @@ def test_artifact_key_validation_rejects_noncanonical_or_unsafe_keys(key):
 def test_artifact_key_validation_is_lossless_for_benign_double_dots():
     assert validate_artifact_key("runs/a..b/result") == "runs/a..b/result"
     assert validate_artifact_key("runs/a__b/result") == "runs/a__b/result"
+
+
+def test_hash_json_uses_complete_typed_content_without_sampling():
+    first = list(range(101)) + ["left"]
+    second = list(range(101)) + ["right"]
+
+    assert hash_json(first) != hash_json(second)
+    assert hash_json({1: "value"}) != hash_json({"1": "value"})
+    assert hash_json([1, 2]) != hash_json((1, 2))
+
+
+def test_hash_json_hashes_complete_dense_and_sparse_values():
+    dense_a = np.zeros(1_000, dtype=np.float32)
+    dense_b = dense_a.copy()
+    dense_b[777] = 1
+    sparse_a = sparse.csr_matrix(dense_a.reshape(10, 100))
+    sparse_b = sparse.csr_matrix(dense_b.reshape(10, 100))
+
+    assert hash_json(dense_a) != hash_json(dense_b)
+    assert hash_json(sparse_a) != hash_json(sparse_b)
+
+
+def test_hash_json_rejects_opaque_repr_fallbacks():
+    with pytest.raises(TypeError, match="does not support"):
+        hash_json(object())

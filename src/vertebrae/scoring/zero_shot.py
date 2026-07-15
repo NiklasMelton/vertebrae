@@ -120,6 +120,7 @@ class ZeroShotScorer:
         prompt_labels: Sequence[Any],
         template_ids: Optional[Sequence[str]] = None,
         sample_ids: Optional[Sequence[Any]] = None,
+        labels_are_semantic_keys: bool = False,
     ) -> ZeroShotScoreResult:
         """Evaluate exact sample-to-class prototype matching."""
 
@@ -129,14 +130,31 @@ class ZeroShotScorer:
         prompt_matrix = ensure_numeric_matrix(
             prompt_embeddings, "prompt embeddings", allow_sparse=True
         )
-        target = np.asarray(labels, dtype=object)
-        if target.ndim != 1:
+        raw_target = np.asarray(labels, dtype=object)
+        if raw_target.ndim != 1:
             raise ValueError("Zero-shot labels must be a one-dimensional single-label sequence.")
-        classes = tuple(class_labels)
-        prompt_target = tuple(prompt_labels)
-        _validate_semantic_labels(target.tolist(), "labels")
-        _validate_semantic_labels(classes, "class_labels")
-        _validate_semantic_labels(prompt_target, "prompt_labels")
+        raw_classes = tuple(class_labels)
+        raw_prompt_target = tuple(prompt_labels)
+        if not isinstance(labels_are_semantic_keys, bool):
+            raise TypeError("labels_are_semantic_keys must be a bool.")
+        if labels_are_semantic_keys:
+            _validate_semantic_keys(raw_target.tolist(), "labels")
+            _validate_semantic_keys(raw_classes, "class_labels")
+            _validate_semantic_keys(raw_prompt_target, "prompt_labels")
+            target = raw_target
+            classes = raw_classes
+            prompt_target = raw_prompt_target
+            label_catalog: List[Dict[str, Any]] = []
+        else:
+            _validate_semantic_labels(raw_target.tolist(), "labels")
+            _validate_semantic_labels(raw_classes, "class_labels")
+            _validate_semantic_labels(raw_prompt_target, "prompt_labels")
+            target = np.asarray(
+                [semantic_label_key(label) for label in raw_target.tolist()], dtype=object
+            )
+            classes = tuple(semantic_label_key(label) for label in raw_classes)
+            prompt_target = tuple(semantic_label_key(label) for label in raw_prompt_target)
+            label_catalog = semantic_label_catalog(raw_classes)
         if sample_matrix.shape[0] != len(target):
             raise ValueError("sample embeddings and labels must have the same number of rows.")
         if sample_matrix.shape[1] != prompt_matrix.shape[1]:
@@ -147,8 +165,27 @@ class ZeroShotScorer:
             raise ValueError("class_labels must contain exactly the observed sample labels.")
         if len(prompt_target) != prompt_matrix.shape[0] or set(prompt_target) != set(classes):
             raise ValueError("prompt_labels must align with prompts and cover every class exactly.")
-        if template_ids is not None and len(template_ids) != prompt_matrix.shape[0]:
-            raise ValueError("template_ids must align one-to-one with prompt embeddings.")
+        template_values: Optional[Tuple[str, ...]] = None
+        if template_ids is not None:
+            if len(template_ids) != prompt_matrix.shape[0]:
+                raise ValueError("template_ids must align one-to-one with prompt embeddings.")
+            if any(
+                not isinstance(identifier, str) or not identifier.strip()
+                for identifier in template_ids
+            ):
+                raise ValueError("template_ids must contain non-empty strings.")
+            template_values = tuple(template_ids)
+            for template in dict.fromkeys(template_values):
+                covered = [
+                    label
+                    for label, identifier in zip(prompt_target, template_values)
+                    if identifier == template
+                ]
+                expected = list(classes)
+                if len(covered) != len(expected) or set(covered) != set(expected):
+                    raise ValueError(
+                        "Every template_id must occur exactly once for every declared class."
+                    )
         if sample_ids is not None and len(sample_ids) != sample_matrix.shape[0]:
             raise ValueError("sample_ids must align one-to-one with sample embeddings.")
         required_bytes = _working_set_bytes(
@@ -167,10 +204,10 @@ class ZeroShotScorer:
             )
         samples = _owned_float64(sample_matrix)
         prompts = _owned_float64(prompt_matrix)
-        _assert_nonzero_rows(samples, "sample embeddings")
         _assert_nonzero_rows(prompts, "prompt embeddings")
         _normalize_rows_in_place(prompts)
         if self.config.similarity == "cosine":
+            _assert_nonzero_rows(samples, "sample embeddings")
             _normalize_rows_in_place(samples)
 
         prototypes, coherence = _prototypes(prompts, prompt_target, classes)
@@ -194,6 +231,21 @@ class ZeroShotScorer:
             blockwise.top_k_hits,
             self.config.top_k,
         )
+        display_target = target
+        display_predicted = predicted
+        display_classes: Sequence[Any] = classes
+        if not labels_are_semantic_keys and len(set(raw_classes)) == len(raw_classes):
+            display_classes = raw_classes
+            display_target = raw_target
+            display_predicted = np.asarray(
+                [raw_classes[index] for index in blockwise.predicted_indices], dtype=object
+            )
+            per_class = {
+                raw_classes[index]: per_class[label] for index, label in enumerate(classes)
+            }
+            coherence = {
+                raw_classes[index]: coherence[label] for index, label in enumerate(classes)
+            }
         warnings = []
         skipped_top_k = [k for k in self.config.top_k if k > len(classes)]
         if skipped_top_k:
@@ -218,29 +270,25 @@ class ZeroShotScorer:
             "n_prompts": len(prompts),
             "worst_samples": _worst_samples(
                 margins,
-                target,
-                predicted,
+                display_target,
+                display_predicted,
                 sample_ids,
                 self.config.worst_samples,
             ),
         }
         del blockwise, margins, predicted, prototypes
-        if template_ids is not None:
-            template_values = tuple(template_ids)
+        if template_values is not None:
             unique_templates = tuple(dict.fromkeys(template_values))
-            if all(
-                template_values.count(template) == len(classes) for template in unique_templates
-            ):
-                diagnostics["per_template_metrics"] = _template_metrics(
-                    samples,
-                    prompts,
-                    target,
-                    classes,
-                    prompt_target,
-                    template_values,
-                    unique_templates,
-                    self.config,
-                )
+            diagnostics["per_template_metrics"] = _template_metrics(
+                samples,
+                prompts,
+                target,
+                classes,
+                prompt_target,
+                template_values,
+                unique_templates,
+                self.config,
+            )
         return ZeroShotScoreResult(
             score=float(metrics[self.config.primary_metric]),
             primary_metric=self.config.primary_metric,
@@ -251,9 +299,9 @@ class ZeroShotScorer:
             warnings=warnings,
             metadata={
                 "config": asdict(self.config),
-                "class_labels": list(classes),
+                "class_labels": list(display_classes),
                 "label_encoding": LABEL_ENCODING,
-                "label_catalog": semantic_label_catalog(classes),
+                "label_catalog": label_catalog,
                 "prompt_aggregation": "normalized_mean",
                 "similarity": self.config.similarity,
                 "exact": True,
@@ -307,6 +355,8 @@ def _prototypes(
             for index, prompt_label in enumerate(prompt_labels)
             if prompt_label == label and (row_mask is None or bool(row_mask[index]))
         ]
+        if not indices:
+            raise ValueError(f"No prompt rows are available for class {label!r}.")
         prototype = np.zeros((1, prompts.shape[1]), dtype=np.float64)
         for index in indices:
             prototype[0] += prompts[index]
@@ -505,3 +555,8 @@ def _validate_semantic_labels(values: Sequence[Any], name: str) -> None:
             raise ValueError(
                 f"{name} entries must be hashable and have stable semantic identities."
             ) from exc
+
+
+def _validate_semantic_keys(values: Sequence[Any], name: str) -> None:
+    if any(not isinstance(value, str) or not value for value in values):
+        raise ValueError(f"{name} entries must be non-empty semantic-label key strings.")

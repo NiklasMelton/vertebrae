@@ -2,11 +2,21 @@
 
 from typing import Any, Callable, Dict, Optional, Sequence
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
     call_model,
     callable_name,
     maybe_move_to_device,
+    optional_dependency_versions,
+    snapshot_mapping,
     tensor_to_numpy,
+    validate_bool,
+    validate_choice,
+    validate_optional_nonblank_string,
 )
 from vertebrae.utils.validation import ensure_numeric_matrix
 
@@ -29,28 +39,33 @@ class GraphModelExtractor:
         move_batch_to_device: bool = True,
         move_model_to_device: bool = True,
         checkpoint_paths: Optional[Sequence[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        if framework not in {None, "dgl", "pyg"}:
-            raise ValueError("framework must be one of: None, 'pyg', 'dgl'.")
-        if output_level not in {"graph", "node", "edge"}:
-            raise ValueError("output_level must be one of: 'graph', 'node', 'edge'.")
-        self.name = name
+        if framework is not None:
+            framework = validate_choice(framework, "framework", {"dgl", "pyg"})
+        output_level = validate_choice(output_level, "output_level", {"graph", "node", "edge"})
+        if not callable(collate_fn):
+            raise TypeError("collate_fn must be callable.")
+        if output_fn is not None and not callable(output_fn):
+            raise TypeError("output_fn must be callable when provided.")
+        self.name = validate_extractor_name(name)
         self.model = model
         self.collate_fn = collate_fn
         self.output_fn = output_fn
-        self.device = device
+        self.device = validate_optional_nonblank_string(device, "device")
         self.framework = framework
-        self.recipe_data = recipe_data or {}
-        self.allow_sparse = allow_sparse
-        self.streaming_safe = streaming_safe
+        self.recipe_data = snapshot_mapping(recipe_data, "recipe_data")
+        self.allow_sparse = validate_bool(allow_sparse, "allow_sparse")
+        self.streaming_safe = validate_bool(streaming_safe, "streaming_safe")
         self.output_level = output_level
-        self.move_batch_to_device = move_batch_to_device
-        self.move_model_to_device = move_model_to_device
+        self.move_batch_to_device = validate_bool(move_batch_to_device, "move_batch_to_device")
+        self.move_model_to_device = validate_bool(move_model_to_device, "move_model_to_device")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "graph"
         self.extractor_type = "graph_model"
         self._torch: Any = None
         self._model_moved = False
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "GraphModelExtractor":
         return self
@@ -77,7 +92,7 @@ class GraphModelExtractor:
         return self.fit(X, y).transform(X)
 
     def recipe(self) -> Dict[str, Any]:
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -88,11 +103,29 @@ class GraphModelExtractor:
             "device": self.device,
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
+            "dependency_versions": optional_dependency_versions(
+                "torch",
+                *(
+                    ("torch-geometric",)
+                    if self.framework == "pyg"
+                    else (("dgl",) if self.framework == "dgl" else ())
+                ),
+            ),
             "streaming_safe": self.streaming_safe,
             "output_level": self.output_level,
             "move_batch_to_device": self.move_batch_to_device,
             "move_model_to_device": self.move_model_to_device,
         }
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(("collate_fn", self.collate_fn), ("output_fn", self.output_fn)),
+                paths=self.checkpoint_paths,
+                state_required=True,
+                paths_authoritative=False,
+            )
+        )
+        return recipe
 
     def get_resource_profile_adapter(self) -> Any:
         from vertebrae.profiling import TorchResourceProfileAdapter

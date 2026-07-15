@@ -1,6 +1,6 @@
 """Training-free zero-shot semantic-alignment benchmark runner."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -13,9 +13,11 @@ from vertebrae.config import (
     CacheConfig,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
+    MemoryConfig,
     OverlapScoringConfig,
     ResourceProfilingConfig,
     ZeroShotConfig,
+    overlap_scoring_config_recipe,
 )
 from vertebrae.datasets.zero_shot import ZeroShotDataset
 from vertebrae.profiling import (
@@ -25,6 +27,7 @@ from vertebrae.profiling import (
     resource_profile_columns,
     with_embedding_footprint,
 )
+from vertebrae.reports._markdown import markdown_table_row, markdown_text
 from vertebrae.scoring.metrics import MetricResult, OverlapMetric
 from vertebrae.scoring.zero_shot import ZeroShotScorer, ZeroShotScoreResult
 from vertebrae.utils.embedding_batches import encode_endpoint_batches, endpoint_n_rows
@@ -32,6 +35,7 @@ from vertebrae.utils.semantic_labels import (
     label_display,
     portable_json,
     semantic_label_catalog,
+    semantic_label_key,
     semantic_label_keys,
 )
 
@@ -169,6 +173,7 @@ class ZeroShotBenchmark:
         compression_config: Optional[EmbeddingCompressionConfig] = None,
         compression_configs: Optional[Iterable[EmbeddingCompressionConfig]] = None,
         embedding_config: Optional[EmbeddingConfig] = None,
+        memory_config: Optional[MemoryConfig] = None,
         resource_profiling_config: Optional[ResourceProfilingConfig] = None,
     ) -> None:
         if compression_config is not None and compression_configs is not None:
@@ -183,6 +188,7 @@ class ZeroShotBenchmark:
         self.scoring_config = scoring_config or OverlapScoringConfig()
         self.cache_config = cache_config or CacheConfig()
         self.embedding_config = embedding_config or EmbeddingConfig()
+        self.memory_config = memory_config or MemoryConfig()
         self.resource_profiling_config = resource_profiling_config or ResourceProfilingConfig()
         self.compression_configs = list(
             compression_configs or [compression_config or EmbeddingCompressionConfig()]
@@ -198,7 +204,7 @@ class ZeroShotBenchmark:
             else None
         )
         prompts, prompt_labels, template_ids = self.dataset.prompt_rows()
-        class_labels = [spec.label for spec in self.dataset.class_specs]
+        class_labels = list(self.dataset.class_labels())
         label_catalog = semantic_label_catalog(class_labels)
         overlap_labels = semantic_label_keys(self.dataset.labels.tolist())
         results = []
@@ -274,7 +280,7 @@ class ZeroShotBenchmark:
                     template_ids=template_ids,
                     sample_ids=_source_sample_ids(self.dataset),
                 )
-                overlap = OverlapMetric(config=self.scoring_config).score(
+                overlap = OverlapMetric(config=_semantic_overlap_config(self.scoring_config)).score(
                     compressed_samples,
                     overlap_labels,
                     target_metadata={"target_type": "single_label"},
@@ -361,10 +367,11 @@ class ZeroShotBenchmark:
             extractor_results=results,
             metadata={
                 "zero_shot_config": asdict(self.config),
-                "overlap_scoring_config": asdict(self.scoring_config),
+                "overlap_scoring_config": overlap_scoring_config_recipe(self.scoring_config),
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "cache_config": asdict(self.cache_config),
                 "embedding_config": asdict(self.embedding_config),
+                "memory_config": asdict(self.memory_config),
                 "resource_profiling_config": asdict(self.resource_profiling_config),
                 "protocol": self.dataset.protocol_recipe(),
                 "interpretation": (
@@ -392,10 +399,12 @@ class ZeroShotBenchmark:
         cache_metadata: Dict[str, Any] = {
             "enabled": store is not None,
             "hit": False,
+            "cache_status": "miss" if store is not None else "disabled",
             "warnings": [],
         }
         if not cache_safe:
             cache_metadata["enabled"] = False
+            cache_metadata["cache_status"] = "bypassed_unsafe_identity"
             cache_metadata["warnings"].append(
                 "Skipped zero-shot embedding cache because this callable extractor has no "
                 "portable callable identity or explicit cache_identity."
@@ -409,7 +418,9 @@ class ZeroShotBenchmark:
             and store.exists(key)
         ):
             cache_metadata["hit"] = True
-            return store.get_array(key), cache_metadata
+            cache_metadata["cache_status"] = "hit"
+            embeddings, _metadata = store.get_artifact(key)
+            return embeddings, cache_metadata
         encoder = getattr(extractor, "encode_retrieval", None)
         if not callable(encoder):
             raise TypeError(
@@ -427,11 +438,12 @@ class ZeroShotBenchmark:
             owner=f"Zero-shot {side} embeddings",
             profiler=profiler if self.resource_profiling_config.enabled else None,
             call_type=f"encode_zero_shot_{side}",
+            memory_config=self.memory_config,
         )
         if cache_safe and store is not None:
-            store.put_array(key, embeddings)
-            store.put_json(
+            store.put_artifact(
                 key,
+                embeddings,
                 {
                     "artifact_type": "zero_shot_embedding",
                     "side": side,
@@ -517,12 +529,24 @@ def _resolve_candidates(
 
 
 def _source_sample_ids(dataset: ZeroShotDataset) -> List[Any]:
-    values = dataset.dataset.metadata.get("sample_indices")
-    if values is None:
-        return list(range(len(dataset.labels)))
-    if len(values) != len(dataset.labels):
-        raise ValueError("Dataset sample_indices metadata must align with zero-shot samples.")
-    return list(values)
+    return list(dataset.sample_ids())
+
+
+def _semantic_overlap_config(config: OverlapScoringConfig) -> OverlapScoringConfig:
+    k = config.k
+    if isinstance(k, dict):
+        k = {semantic_label_key(label): value for label, value in k.items()}
+    excluded = config.exclude_classes
+    if excluded is not None:
+        if isinstance(excluded, (str, bytes)):
+            excluded_values = [excluded]
+        else:
+            try:
+                excluded_values = list(excluded)
+            except TypeError:
+                excluded_values = [excluded]
+        excluded = [semantic_label_key(label) for label in excluded_values]
+    return replace(config, k=k, exclude_classes=excluded)
 
 
 def render_zero_shot_markdown_report(result: ZeroShotBenchmarkResult) -> str:
@@ -533,10 +557,10 @@ def render_zero_shot_markdown_report(result: ZeroShotBenchmarkResult) -> str:
     summary = data["dataset_summary"]
     lines.extend(
         [
-            f"- Sample modality: {summary['sample_modality']}",
-            f"- Samples: {summary['n_samples']}",
-            f"- Classes: {summary['n_classes']}",
-            f"- Fixed prompts: {summary['n_prompts']}",
+            f"- Sample modality: {markdown_text(summary['sample_modality'])}",
+            f"- Samples: {markdown_text(summary['n_samples'])}",
+            f"- Classes: {markdown_text(summary['n_classes'])}",
+            f"- Fixed prompts: {markdown_text(summary['n_prompts'])}",
             "- Interpretation: zero-shot measures semantic text alignment; overlap is "
             "contextual evidence for frozen sample-embedding structure.",
             "",
@@ -550,11 +574,19 @@ def render_zero_shot_markdown_report(result: ZeroShotBenchmarkResult) -> str:
     for rank, item in enumerate(result.ranked_results(), start=1):
         metrics = item.zero_shot.metrics
         lines.append(
-            f"| {rank} | {item.name} | {item.zero_shot.primary_metric} | "
-            f"{item.primary_score:.4f} | {metrics['accuracy']:.4f} | "
-            f"{metrics['macro_f1']:.4f} | {metrics['balanced_accuracy']:.4f} | "
-            f"{item.overlap.macro_score:.4f} | "
-            f"{item.compression_metadata.get('method', 'none')} |"
+            markdown_table_row(
+                [
+                    rank,
+                    item.name,
+                    item.zero_shot.primary_metric,
+                    f"{item.primary_score:.4f}",
+                    f"{metrics['accuracy']:.4f}",
+                    f"{metrics['macro_f1']:.4f}",
+                    f"{metrics['balanced_accuracy']:.4f}",
+                    f"{item.overlap.macro_score:.4f}",
+                    item.compression_metadata.get("method", "none"),
+                ]
+            )
         )
     cohort = [item for item in result.quality_cohort() if item.resource_profiles]
     if cohort:
@@ -571,33 +603,40 @@ def render_zero_shot_markdown_report(result: ZeroShotBenchmarkResult) -> str:
             ]
         )
         for item in cohort:
-            lines.extend([f"### {item.name}", ""])
+            lines.extend([f"### {markdown_text(item.name)}", ""])
             for endpoint in ("samples", "prompts"):
                 profile = item.resource_profiles.get(endpoint)
                 if profile is not None:
                     lines.extend(_endpoint_resource_markdown(endpoint, profile))
     lines.extend(["", "## Per-extractor details", ""])
     for item in result.ranked_results():
+        correct_class_margin = markdown_text(
+            f"{item.zero_shot.diagnostics['correct_class_margin']['mean']:.4f}"
+        )
+        overlap_score = markdown_text(f"{item.overlap.score:.4f}")
         lines.extend(
             [
-                f"### {item.name}",
+                f"### {markdown_text(item.name)}",
                 "",
-                "- Correct-class margin: "
-                f"{item.zero_shot.diagnostics['correct_class_margin']['mean']:.4f}",
-                f"- Top-score ties: {item.zero_shot.diagnostics['n_top_score_ties']}",
-                f"- Overlap score: {item.overlap.score:.4f}",
+                f"- Correct-class margin: {correct_class_margin}",
+                f"- Top-score ties: "
+                f"{markdown_text(item.zero_shot.diagnostics['n_top_score_ties'])}",
+                f"- Overlap score: {overlap_score}",
                 "- Per-class metrics:",
             ]
         )
         for label, metrics in item.zero_shot.per_class.items():
             catalog = item.zero_shot.metadata.get("label_catalog", [])
+            precision = markdown_text(f"{metrics['precision']:.4f}")
+            recall = markdown_text(f"{metrics['recall']:.4f}")
+            f1 = markdown_text(f"{metrics['f1']:.4f}")
             lines.append(
-                f"  - {label_display(label, catalog)}: precision={metrics['precision']:.4f}, "
-                f"recall={metrics['recall']:.4f}, f1={metrics['f1']:.4f}, "
-                f"support={int(metrics['support'])}"
+                f"  - {markdown_text(label_display(label, catalog))}: "
+                f"precision={precision}, recall={recall}, f1={f1}, "
+                f"support={markdown_text(int(metrics['support']))}"
             )
         for warning in item.warnings:
-            lines.append(f"- Warning: {warning}")
+            lines.append(f"- Warning: {markdown_text(warning)}")
         lines.append("")
     return "\n".join(lines) + "\n"
 

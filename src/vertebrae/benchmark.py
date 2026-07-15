@@ -1,7 +1,9 @@
 """Benchmark runner."""
 
+from copy import deepcopy
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
+from itertools import chain
 from time import perf_counter
 from typing import Any, Iterable, Iterator, List, Optional, Tuple, Union
 
@@ -9,7 +11,7 @@ import numpy as np
 
 from vertebrae._version import __version__
 from vertebrae.cache import ArtifactStore, create_artifact_store
-from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
+from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json_exact
 from vertebrae.cache.keys import named_output_artifact_keys
 from vertebrae.compression import (
     compress_embedding_artifact_key,
@@ -30,6 +32,7 @@ from vertebrae.config import (
     SeparatixConfig,
     StabilityConfig,
     TargetViewConfig,
+    overlap_scoring_config_recipe,
 )
 from vertebrae.execution.base import ExecutionBackend
 from vertebrae.execution.jobs import SampleBatch
@@ -43,15 +46,30 @@ from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.metrics import MetricResult, OverlapMetric, as_embedding_metric
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.scoring.stability import run_stability_analysis
-from vertebrae.utils.labels import REGRESSION_TARGET, label_view_suffix, target_view_suffix
+from vertebrae.utils.labels import (
+    MULTI_LABEL_TARGET,
+    REGRESSION_TARGET,
+    canonical_metric_targets,
+    label_view_suffix,
+    metric_labels,
+    target_view_suffix,
+)
 from vertebrae.utils.memory import (
     EmbeddingMemoryEstimate,
+    IncrementalMatrixReferenceStager,
+    IncrementalMatrixStager,
     assert_within_memory,
     estimate_embedding_from_probe,
     estimate_matrix_resident_bytes,
     estimate_metadata_dense_scoring_bytes,
     estimate_metadata_resident_bytes,
     largest_fitting_subsample_rate,
+    resolve_memory_budget,
+)
+from vertebrae.utils.semantic_labels import (
+    canonical_semantic_array,
+    label_display,
+    semantic_label_key,
 )
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
@@ -146,6 +164,15 @@ class Benchmark:
                 )
             self.scoring_config = self.overlap_metric.config
             self._explicit_scoring_config = self.overlap_metric.config
+        elif provided_overlap:
+            # A config-less OverlapMetric inherits the benchmark's resolved
+            # configuration instead of silently using scorer defaults.
+            unresolved_overlap = self.overlap_metric
+            self.overlap_metric = unresolved_overlap.with_config(self.scoring_config)
+            self.metrics = [
+                self.overlap_metric if metric is unresolved_overlap else metric
+                for metric in self.metrics
+            ]
         available_metrics = [metric.name for metric in self.metrics]
         self.primary_metric = primary_metric or available_metrics[0]
         self.resource_profiling_config = resource_profiling_config or ResourceProfilingConfig()
@@ -189,19 +216,30 @@ class Benchmark:
             )
         if not self.extractors:
             raise ValueError("At least one extractor must be provided.")
+        is_segmentation = getattr(self.dataset, "modality", None) == "segmentation"
+        unit_annotations = getattr(self.dataset, "unit_annotations", None)
+        is_structured = (
+            callable(unit_annotations)
+            and bool(unit_annotations())
+            and any(
+                callable(getattr(extractor, "transform_structured", None))
+                for extractor in self.extractors
+            )
+        )
+        self._validate_view_config_compatibility()
+        if is_segmentation:
+            self._validate_special_output_configuration("spatial_output_specs")
+        elif is_structured:
+            self._validate_special_output_configuration("structured_output_specs")
         if self.execution is not None:
             from vertebrae.execution.benchmark_runner import run_artifact_backed_benchmark
 
             return run_artifact_backed_benchmark(self)
-        if getattr(self.dataset, "modality", None) == "segmentation":
+        if is_segmentation:
             return self._run_segmentation()
-        if self.dataset.unit_annotations() and any(
-            callable(getattr(extractor, "transform_structured", None))
-            for extractor in self.extractors
-        ):
+        if is_structured:
             return self._run_structured()
 
-        self._validate_view_config_compatibility()
         evaluation_datasets, label_view_warnings, target_view_warnings = self._evaluation_datasets()
         self._validate_output_view_mapping()
         extractor_results: List[ExtractorResult] = []
@@ -216,6 +254,8 @@ class Benchmark:
                 extractor_results.extend(result)
             else:
                 extractor_results.append(result)
+        if not extractor_results:
+            raise ValueError("Benchmark produced no scoreable extractor outputs.")
         recommendations = recommendations_for_benchmark(
             extractor_results,
             quality_tolerance=(
@@ -228,30 +268,19 @@ class Benchmark:
             dataset_summary=self.dataset.summary(),
             extractor_results=extractor_results,
             recommendations=recommendations,
-            metadata={
-                "vertebrae_version": __version__,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "scoring_config": asdict(self.scoring_config),
-                "stability_config": asdict(self.stability_config),
-                "label_view_config": asdict(self.label_view_config),
-                "target_view_config": asdict(self.target_view_config),
-                "separatix_config": asdict(self.separatix_config),
-                "cache_config": asdict(self.cache_config),
-                "compression_configs": [asdict(config) for config in self.compression_configs],
-                "embedding_config": asdict(self.embedding_config),
-                "memory_config": asdict(self.memory_config),
-                "metrics": [metric.recipe() for metric in self.metrics],
-                "primary_metric": self.primary_metric,
-                "resource_profiling_config": asdict(self.resource_profiling_config),
-                "label_view_warnings": label_view_warnings,
-                "target_view_warnings": target_view_warnings,
-            },
+            metadata=self._result_metadata(
+                scoring_config=self.scoring_config,
+                extra={
+                    "label_view_warnings": label_view_warnings,
+                    "target_view_warnings": target_view_warnings,
+                },
+            ),
         )
 
     def _run_segmentation(self) -> BenchmarkResult:
         from vertebrae.cache import create_artifact_store
         from vertebrae.extractors import PrecomputedExtractor
-        from vertebrae.segmentation import materialize_segmentation_outputs
+        from vertebrae.segmentation import iter_materialize_segmentation_outputs
 
         extractor_results: List[ExtractorResult] = []
         materialization_summaries = []
@@ -260,20 +289,40 @@ class Benchmark:
             **self.cache_config.storage_options,
         )
         for extractor in self.extractors:
+            if not callable(getattr(extractor, "transform_spatial", None)):
+                raise ValueError(
+                    f"Extractor '{extractor.name}' does not support spatial outputs. "
+                    "Use an extractor implementing transform_spatial(...)."
+                )
             profiler = ResourceProfiler(
                 self.resource_profiling_config,
                 extractor,
                 streaming=True,
             )
-            materializations = materialize_segmentation_outputs(
+            materializations = iter_materialize_segmentation_outputs(
                 dataset=self.dataset,
                 extractor=extractor,
                 config=self.segmentation_config,
                 batch_size=self.embedding_config.batch_size,
                 resource_profiler=(profiler if self.resource_profiling_config.enabled else None),
+                memory_config=self.memory_config,
             )
+            try:
+                first_materialization = next(materializations)
+            except StopIteration as exc:
+                raise ValueError(
+                    f"Spatial extractor {extractor.name!r} produced no outputs."
+                ) from exc
             source_profile = profiler.finish() if self.resource_profiling_config.enabled else None
-            for materialization in materializations:
+            materialization_iter = chain((first_materialization,), materializations)
+            del first_materialization
+            for materialization in materialization_iter:
+                precomputed = PrecomputedExtractor(
+                    name=_qualified_output_name(extractor.name, materialization.name)
+                )
+                precomputed.cache_embeddings = self._cache_embeddings_enabled(  # type: ignore[attr-defined]
+                    extractor
+                ) and bool(materialization.metadata.get("cache_safe", True))
                 scoring_config = _classification_scoring_config(self.scoring_config)
                 if self.segmentation_config.background_mode == "include_excluded":
                     exclusions = _normalized_excluded_classes(scoring_config.exclude_classes)
@@ -286,11 +335,7 @@ class Benchmark:
                     )
                 result = Benchmark(
                     dataset=materialization.dataset,
-                    extractors=[
-                        PrecomputedExtractor(
-                            name=_qualified_output_name(extractor.name, materialization.name)
-                        )
-                    ],
+                    extractors=[precomputed],
                     scoring_config=scoring_config,
                     stability_config=self.stability_config,
                     target_view_config=self.target_view_config,
@@ -312,12 +357,20 @@ class Benchmark:
                     item.extractor_type = getattr(extractor, "extractor_type", "spatial")
                     item.embedding_metadata["segmentation"] = materialization.metadata
                     item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
+                    item.embedding_metadata["resolved_scoring_config"] = (
+                        overlap_scoring_config_recipe(scoring_config)
+                    )
+                    provenance = _selected_provenance(
+                        materialization.provenance,
+                        item.embedding_metadata,
+                    )
                     provenance_key = f"{item.embedding_metadata['cache_key']}/provenance"
                     item.embedding_metadata["provenance_key"] = provenance_key
-                    if self.cache_config.enabled:
+                    item.embedding_metadata["provenance_rows"] = len(provenance)
+                    if item.embedding_metadata.get("cache_eligible", False):
                         store.put_json(
                             provenance_key,
-                            {"rows": materialization.provenance},
+                            {"rows": provenance},
                         )
                     extractor_results.append(item)
                 materialization_summaries.append(
@@ -327,7 +380,10 @@ class Benchmark:
                         **materialization.metadata,
                     }
                 )
+                del result, materialization
 
+        if not extractor_results:
+            raise ValueError("Segmentation benchmark produced no scoreable outputs.")
         recommendations = recommendations_for_benchmark(
             extractor_results,
             quality_tolerance=(
@@ -343,24 +399,21 @@ class Benchmark:
             },
             extractor_results=extractor_results,
             recommendations=recommendations,
-            metadata={
-                "vertebrae_version": __version__,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "scoring_config": asdict(scoring_config),
-                "segmentation_config": asdict(self.segmentation_config),
-                "separatix_config": asdict(self.separatix_config),
-                "compression_configs": [asdict(config) for config in self.compression_configs],
-                "embedding_config": asdict(self.embedding_config),
-                "memory_config": asdict(self.memory_config),
-                "metrics": [metric.recipe() for metric in self.metrics],
-                "primary_metric": self.primary_metric,
-                "resource_profiling_config": asdict(self.resource_profiling_config),
-            },
+            metadata=self._result_metadata(
+                scoring_config=scoring_config,
+                extra={
+                    "segmentation_config": asdict(self.segmentation_config),
+                    "resolved_scoring_configs": {
+                        item.name: item.embedding_metadata["resolved_scoring_config"]
+                        for item in extractor_results
+                    },
+                },
+            ),
         )
 
     def _run_structured(self) -> BenchmarkResult:
         from vertebrae.extractors import PrecomputedExtractor
-        from vertebrae.structured import materialize_structured_outputs
+        from vertebrae.structured import iter_materialize_structured_outputs
 
         extractor_results: List[ExtractorResult] = []
         materialization_summaries = []
@@ -378,17 +431,26 @@ class Benchmark:
                 extractor,
                 streaming=True,
             )
-            materializations = materialize_structured_outputs(
+            materializations = iter_materialize_structured_outputs(
                 dataset=self.dataset,
                 extractor=extractor,
                 batch_size=self.embedding_config.batch_size,
                 aligners=self.structured_aligners,
                 resource_profiler=(profiler if self.resource_profiling_config.enabled else None),
+                memory_config=self.memory_config,
             )
+            try:
+                first_materialization = next(materializations)
+            except StopIteration as exc:
+                raise ValueError(
+                    f"Structured extractor {extractor.name!r} produced no outputs."
+                ) from exc
             source_profile = profiler.finish() if self.resource_profiling_config.enabled else None
-            for materialization in materializations:
+            materialization_iter = chain((first_materialization,), materializations)
+            del first_materialization
+            for materialization in materialization_iter:
                 output_dataset: Any = materialization.dataset
-                if materialization.name in self.target_view_config.output_views:
+                if self._output_has_view_mapping(materialization.name):
                     output_dataset = self._mapped_output_dataset(
                         dataset=materialization.dataset,
                         output_name=materialization.name,
@@ -396,14 +458,17 @@ class Benchmark:
                         target_view_warnings=[],
                     )
                     if output_dataset is None:
+                        del materialization
                         continue
+                precomputed = PrecomputedExtractor(
+                    name=_qualified_output_name(extractor.name, materialization.name)
+                )
+                precomputed.cache_embeddings = self._cache_embeddings_enabled(  # type: ignore[attr-defined]
+                    extractor
+                ) and bool(materialization.metadata.get("cache_safe", True))
                 result = Benchmark(
                     dataset=output_dataset,
-                    extractors=[
-                        PrecomputedExtractor(
-                            name=_qualified_output_name(extractor.name, materialization.name)
-                        )
-                    ],
+                    extractors=[precomputed],
                     scoring_config=self._resolved_scoring_config(output_dataset),
                     stability_config=self.stability_config,
                     target_view_config=(
@@ -429,10 +494,18 @@ class Benchmark:
                     item.extractor_type = getattr(extractor, "extractor_type", "structured")
                     item.embedding_metadata["structured"] = materialization.metadata
                     item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
+                    item.embedding_metadata["resolved_scoring_config"] = (
+                        overlap_scoring_config_recipe(self._resolved_scoring_config(output_dataset))
+                    )
+                    provenance = _selected_provenance(
+                        materialization.provenance,
+                        item.embedding_metadata,
+                    )
                     provenance_key = f"{item.embedding_metadata['cache_key']}/provenance"
                     item.embedding_metadata["provenance_key"] = provenance_key
-                    if self.cache_config.enabled:
-                        store.put_json(provenance_key, {"rows": materialization.provenance})
+                    item.embedding_metadata["provenance_rows"] = len(provenance)
+                    if item.embedding_metadata.get("cache_eligible", False):
+                        store.put_json(provenance_key, {"rows": provenance})
                     extractor_results.append(item)
                 materialization_summaries.append(
                     {
@@ -441,7 +514,10 @@ class Benchmark:
                         **materialization.metadata,
                     }
                 )
+                del result, output_dataset, materialization
 
+        if not extractor_results:
+            raise ValueError("Structured benchmark produced no scoreable outputs.")
         recommendations = recommendations_for_benchmark(
             extractor_results,
             quality_tolerance=(
@@ -457,18 +533,18 @@ class Benchmark:
             },
             extractor_results=extractor_results,
             recommendations=recommendations,
-            metadata={
-                "vertebrae_version": __version__,
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "scoring_config": asdict(self.scoring_config),
-                "separatix_config": asdict(self.separatix_config),
-                "compression_configs": [asdict(config) for config in self.compression_configs],
-                "embedding_config": asdict(self.embedding_config),
-                "memory_config": asdict(self.memory_config),
-                "metrics": [metric.recipe() for metric in self.metrics],
-                "primary_metric": self.primary_metric,
-                "resource_profiling_config": asdict(self.resource_profiling_config),
-            },
+            metadata=self._result_metadata(
+                scoring_config=self.scoring_config,
+                extra={
+                    "structured_aligners": {
+                        name: aligner.recipe() for name, aligner in self.structured_aligners.items()
+                    },
+                    "resolved_scoring_configs": {
+                        item.name: item.embedding_metadata["resolved_scoring_config"]
+                        for item in extractor_results
+                    },
+                },
+            ),
         )
 
     def _run_extractor(
@@ -651,13 +727,20 @@ class Benchmark:
             target_metadata = dict(dataset.metadata)
             target_metadata["target_type"] = dataset.metadata.get("target_type", "auto")
             groups = dataset.groups() if callable(getattr(dataset, "groups", None)) else None
+            canonical_labels = canonical_metric_targets(
+                dataset.y,
+                label_names=dataset.metadata.get("label_names"),
+                target_type=target_metadata["target_type"],
+                target_names=dataset.metadata.get("target_names"),
+            )
+            canonical_groups = None if groups is None else canonical_semantic_array(groups)
             metric_results: dict[str, MetricResult] = {}
             for metric in self.metrics:
                 metric_result = metric.score(
                     compressed_embeddings,
-                    dataset.y,
+                    canonical_labels,
                     target_metadata=target_metadata,
-                    groups=groups,
+                    groups=canonical_groups,
                 )
                 metric_result.metadata = {**target_metadata, **metric_result.metadata}
                 metric_results[metric.name] = metric_result
@@ -698,6 +781,7 @@ class Benchmark:
             weakest_class, weakest_score = _weakest_class(
                 overlap.per_class_scores,
                 excluded_classes=overlap.metadata.get("exclude_classes"),
+                label_catalog=overlap.metadata.get("label_catalog"),
             )
             recommendation = (
                 recommendation_for_extractor(
@@ -785,14 +869,22 @@ class Benchmark:
                 overlap_score=overlap_score,
                 threshold=threshold,
             )
-        diagnostic_embeddings, diagnostic_labels, diagnostic_groups = self._diagnostic_inputs(
+        (
+            diagnostic_embeddings,
+            diagnostic_labels,
+            diagnostic_groups,
+            diagnostic_label_names,
+        ) = self._diagnostic_inputs(
             embeddings,
             labels,
             groups,
             target_type=target_type,
             scoring_config=scoring_config,
+            label_names=label_names,
         )
-        if len(diagnostic_labels) == 0:
+        if len(diagnostic_labels) == 0 or (
+            target_type == MULTI_LABEL_TARGET and np.asarray(diagnostic_labels).shape[1] == 0
+        ):
             return scorer.skipped_result(
                 reason="Skipped Separatix because all classes were excluded from diagnostics.",
                 overlap_score=overlap_score,
@@ -802,7 +894,7 @@ class Benchmark:
             return scorer.score(
                 diagnostic_embeddings,
                 diagnostic_labels,
-                label_names=label_names,
+                label_names=diagnostic_label_names,
                 target_type=target_type,
                 target_names=target_names,
                 groups=diagnostic_groups,
@@ -823,19 +915,51 @@ class Benchmark:
         groups: Optional[Any],
         target_type: str,
         scoring_config: Union[OverlapScoringConfig, ContinuousOverlapScoringConfig],
-    ) -> Tuple[Any, Any, Optional[Any]]:
+        label_names: Optional[Any] = None,
+    ) -> Tuple[Any, Any, Optional[Any], Optional[Any]]:
         if target_type == REGRESSION_TARGET:
-            return embeddings, labels, groups
+            return embeddings, labels, groups, label_names
         excluded = _normalized_excluded_classes(_scoring_excluded_classes(scoring_config))
+        if target_type == MULTI_LABEL_TARGET:
+            label_array, label_metadata = metric_labels(
+                labels,
+                label_names=label_names,
+                target_type=MULTI_LABEL_TARGET,
+            )
+            names = tuple(label_metadata.get("label_names") or ())
+            if not excluded:
+                return embeddings, label_array, groups, names
+            if len(names) != label_array.shape[1]:
+                raise ValueError("Multi-label exclusions require one label name per target column.")
+            excluded_keys = {semantic_label_key(item) for item in excluded}
+            known_keys = {semantic_label_key(item) for item in names}
+            unknown = excluded_keys - known_keys
+            if unknown:
+                missing = [item for item in excluded if semantic_label_key(item) in unknown]
+                raise ValueError(
+                    "exclude_classes contains labels absent from the multi-label target: "
+                    f"{missing!r}."
+                )
+            keep = [
+                index
+                for index, name in enumerate(names)
+                if semantic_label_key(name) not in excluded_keys
+            ]
+            return (
+                embeddings,
+                label_array[:, keep],
+                groups,
+                tuple(names[index] for index in keep),
+            )
         if not excluded:
-            return embeddings, labels, groups
+            return embeddings, labels, groups, label_names
         label_array = np.asarray(labels)
         mask = np.asarray(
             [not _label_is_excluded_exact(label, excluded) for label in label_array],
             dtype=bool,
         )
         filtered_groups = None if groups is None else np.asarray(groups)[mask]
-        return embeddings[mask], label_array[mask], filtered_groups
+        return embeddings[mask], label_array[mask], filtered_groups, label_names
 
     def _prepare_dataset_for_extractor(
         self,
@@ -849,8 +973,18 @@ class Benchmark:
             "subsample_reason": None,
             "requested_subsample_rate": self.memory_config.subsample_rate,
             "effective_subsample_rate": 1.0,
+            "manual_subsample_rate": 1.0,
+            "automatic_subsample_rate": 1.0,
+            "cumulative_subsample_rate": 1.0,
+            "original_n_samples": int(len(dataset.y)),
             "parent_n_samples": int(len(dataset.y)),
         }
+        recipe = extractor.recipe()
+        if self.cache_config.enabled and recipe.get("cache_safe") is False:
+            warnings.append(
+                f"Extractor '{extractor.name}' has no stable cache identity; embedding and "
+                "derived compression cache reuse is bypassed. Provide cache_identity to opt in."
+            )
         if self.memory_config.subsample_rate < 1.0:
             dataset, user_metadata, warning = self._subsample_dataset(
                 dataset,
@@ -858,6 +992,7 @@ class Benchmark:
                 reason="user_requested",
             )
             metadata.update(user_metadata)
+            metadata["manual_subsample_rate"] = user_metadata["effective_subsample_rate"]
             warnings.append(warning)
 
         if self._should_stream_embeddings(extractor):
@@ -872,9 +1007,15 @@ class Benchmark:
                     reason="memory_limit",
                 )
                 metadata.update(auto_metadata)
-                metadata["parent_n_samples"] = int(len(self.dataset.y))
+                metadata["automatic_subsample_rate"] = auto_metadata["effective_subsample_rate"]
                 warnings.append(warning)
                 probe_plan = None
+
+        metadata["final_n_samples"] = int(len(dataset.y))
+        metadata["cumulative_subsample_rate"] = int(len(dataset.y)) / int(
+            metadata["original_n_samples"]
+        )
+        metadata["effective_subsample_rate"] = metadata["cumulative_subsample_rate"]
 
         return dataset, warnings, metadata, probe_plan
 
@@ -938,6 +1079,88 @@ class Benchmark:
             raise ValueError(
                 "LabelViewConfig and TargetViewConfig cannot be combined in one benchmark yet."
             )
+
+    def _validate_special_output_configuration(self, spec_method: str) -> None:
+        workflow = "segmentation" if spec_method == "spatial_output_specs" else "structured"
+        output_names: set[str] = set()
+        for extractor in self.extractors:
+            method = getattr(extractor, spec_method, None)
+            if not callable(method):
+                raise ValueError(
+                    f"Extractor '{extractor.name}' does not declare {workflow} output specs."
+                )
+            specs = list(method())
+            raw_names = [getattr(spec, "name", None) for spec in specs]
+            if not raw_names or any(
+                not isinstance(name, str) or not name.strip() for name in raw_names
+            ):
+                raise ValueError(
+                    f"Extractor '{extractor.name}' must declare non-empty {workflow} output names."
+                )
+            names = [name for name in raw_names if isinstance(name, str)]
+            if len(names) != len(set(names)):
+                raise ValueError(
+                    f"Extractor '{extractor.name}' declares duplicate {workflow} output names."
+                )
+            output_names.update(names)
+
+        if workflow == "segmentation" and (
+            self._requires_label_hierarchy() or self._requires_target_views()
+        ):
+            raise ValueError(
+                "LabelViewConfig and TargetViewConfig are not supported for segmentation "
+                "materialization. Configure background handling through SegmentationConfig."
+            )
+        if workflow == "structured" and self._requires_label_hierarchy():
+            raise ValueError(
+                "LabelViewConfig is not supported for structured unit materialization because "
+                "unit annotations do not declare a hierarchy. Use named target views instead."
+            )
+
+        requested_outputs = set(self.target_view_config.output_views)
+        unknown = sorted(requested_outputs - output_names)
+        if unknown:
+            raise ValueError(
+                f"Configured {workflow} output mappings contain unknown outputs: {unknown}."
+            )
+        if requested_outputs:
+            available = set(self.dataset.target_view_names())
+            missing = sorted(set(self.target_view_config.output_views.values()) - available)
+            if missing:
+                raise ValueError(
+                    "TargetViewConfig.output_views contains unknown target views: " f"{missing}."
+                )
+        if workflow == "structured":
+            unknown_aligners = sorted(set(self.structured_aligners) - output_names)
+            if unknown_aligners:
+                raise ValueError(
+                    f"Structured aligners contain unknown output names: {unknown_aligners}."
+                )
+
+    def _result_metadata(
+        self,
+        *,
+        scoring_config: Union[OverlapScoringConfig, ContinuousOverlapScoringConfig],
+        extra: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "vertebrae_version": __version__,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "scoring_config": overlap_scoring_config_recipe(scoring_config),
+            "stability_config": asdict(self.stability_config),
+            "label_view_config": asdict(self.label_view_config),
+            "target_view_config": asdict(self.target_view_config),
+            "separatix_config": asdict(self.separatix_config),
+            "cache_config": asdict(self.cache_config),
+            "compression_configs": [asdict(config) for config in self.compression_configs],
+            "embedding_config": asdict(self.embedding_config),
+            "memory_config": asdict(self.memory_config),
+            "metrics": [metric.recipe() for metric in self.metrics],
+            "primary_metric": self.primary_metric,
+            "resource_profiling_config": asdict(self.resource_profiling_config),
+        }
+        metadata.update(extra or {})
+        return metadata
 
     def _validate_output_view_mapping(self) -> None:
         if not self._has_output_view_mappings():
@@ -1069,15 +1292,31 @@ class Benchmark:
             return 1.0, None
         if not self.memory_config.auto_subsample_on_memory_exceeded:
             return 1.0, None
-        extractor.fit(dataset.X, dataset.y)
+        reuse_probe = bool(getattr(extractor, "already_fitted", False))
+        if reuse_probe:
+            probe_extractor = extractor
+        else:
+            try:
+                probe_extractor = deepcopy(extractor)
+            except Exception:
+                # Fitting the live instance here could train on rows an automatic
+                # subsample later discards. If cloning is unsupported, defer to the
+                # normal one-fit path and its memory admission error.
+                return 1.0, None
+            probe_extractor.fit(dataset.X, dataset.y)
         first_batch = next(
             dataset.iter_batches(
                 batch_size=min(self.embedding_config.batch_size, len(dataset.y)),
                 shard=None,
             )
         )
-        if self._supports_transform_many(extractor):
-            first_outputs = self._embed_batch_many(extractor, first_batch, materialized=False)
+        if self._supports_transform_many(probe_extractor):
+            first_outputs = self._embed_batch_many(
+                probe_extractor,
+                first_batch,
+                materialized=False,
+                profiled=reuse_probe,
+            )
             estimates, aggregate = self._estimate_multi_output_memory(
                 first_outputs,
                 n_samples=len(dataset.y),
@@ -1091,11 +1330,26 @@ class Benchmark:
             except ValueError:
                 rate = largest_fitting_subsample_rate(required, self.memory_config)
                 if rate <= 0.0:
-                    return 1.0, (first_batch, first_outputs, {"per_output": estimates, **aggregate})
+                    probe_plan = (
+                        first_batch,
+                        first_outputs,
+                        {"per_output": estimates, **aggregate},
+                    )
+                    return 1.0, probe_plan if reuse_probe else None
                 return min(1.0, rate), None
-            return 1.0, (first_batch, first_outputs, {"per_output": estimates, **aggregate})
+            probe_plan = (
+                first_batch,
+                first_outputs,
+                {"per_output": estimates, **aggregate},
+            )
+            return 1.0, probe_plan if reuse_probe else None
 
-        first_embeddings = self._embed_batch(extractor, first_batch, materialized=False)
+        first_embeddings = self._embed_batch(
+            probe_extractor,
+            first_batch,
+            materialized=False,
+            profiled=reuse_probe,
+        )
         estimate = estimate_embedding_from_probe(
             first_embeddings,
             n_samples=len(dataset.y),
@@ -1110,9 +1364,11 @@ class Benchmark:
         except ValueError:
             rate = largest_fitting_subsample_rate(required, self.memory_config)
             if rate <= 0.0:
-                return 1.0, (first_batch, first_embeddings, estimate)
+                single_probe_plan = (first_batch, first_embeddings, estimate)
+                return 1.0, single_probe_plan if reuse_probe else None
             return min(1.0, rate), None
-        return 1.0, (first_batch, first_embeddings, estimate)
+        single_probe_plan = (first_batch, first_embeddings, estimate)
+        return 1.0, single_probe_plan if reuse_probe else None
 
     def _embedding_cache_available(self, extractor: Any, dataset: Any) -> bool:
         if not self._cache_embeddings_enabled(extractor) or self.cache_config.force_recompute:
@@ -1174,10 +1430,12 @@ class Benchmark:
             and not self.cache_config.force_recompute
             and store.exists(cache_key)
         ):
-            metadata = store.get_json(cache_key)
+            self._admit_cached_embedding_load(store.get_json(cache_key))
+            embeddings, metadata = store.get_artifact(cache_key)
             self._admit_cached_embedding_load(metadata)
-            embeddings = store.get_array(cache_key)
+            metadata = dict(metadata)
             metadata["cache_hit"] = True
+            metadata["cache_status"] = "hit"
             metadata.update(subsampling_metadata or {})
             return embeddings, metadata
 
@@ -1189,10 +1447,8 @@ class Benchmark:
                 cache_key,
                 recipe,
                 probe_plan,
+                subsampling_metadata,
             )
-            metadata.update(subsampling_metadata or {})
-            if embedding_cache_enabled:
-                store.put_json(cache_key, metadata)
             return embeddings, metadata
 
         embeddings = self._measure_resource_call(
@@ -1226,8 +1482,7 @@ class Benchmark:
         )
         metadata.update(subsampling_metadata or {})
         if embedding_cache_enabled:
-            store.put_array(cache_key, embeddings)
-            store.put_json(cache_key, metadata)
+            store.put_artifact(cache_key, embeddings, metadata)
         return embeddings, metadata
 
     def _get_or_compute_multi_embeddings(
@@ -1245,15 +1500,14 @@ class Benchmark:
         embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
         if embedding_cache_enabled and not self.cache_config.force_recompute:
             if all(store.exists(cache_key) for cache_key in cache_keys.values()):
-                variants = []
-                for spec in specs:
-                    metadata = store.get_json(cache_keys[spec.name])
-                    self._admit_cached_embedding_load(metadata)
-                    embeddings = store.get_array(cache_keys[spec.name])
-                    metadata["cache_hit"] = True
-                    metadata.update(subsampling_metadata or {})
-                    variants.append({"embeddings": embeddings, "metadata": metadata})
-                return variants
+                return self._load_cached_multi_embeddings(
+                    extractor=extractor,
+                    dataset=dataset,
+                    store=store,
+                    specs=specs,
+                    cache_keys=cache_keys,
+                    subsampling_metadata=subsampling_metadata,
+                )
 
         if self._should_stream_embeddings(extractor):
             variants = self._stream_multi_embeddings(
@@ -1263,12 +1517,8 @@ class Benchmark:
                 cache_keys=cache_keys,
                 recipe=recipe,
                 probe_plan=probe_plan,
+                subsampling_metadata=subsampling_metadata,
             )
-            for variant in variants:
-                variant["metadata"].update(subsampling_metadata or {})
-            if embedding_cache_enabled:
-                for variant in variants:
-                    store.put_json(variant["metadata"]["cache_key"], variant["metadata"])
             return variants
 
         extractor.fit(dataset.X, dataset.y)
@@ -1301,10 +1551,123 @@ class Benchmark:
             )
             metadata.update(subsampling_metadata or {})
             if embedding_cache_enabled:
-                store.put_array(cache_key, output.embeddings)
-                store.put_json(cache_key, metadata)
+                store.put_artifact(cache_key, output.embeddings, metadata)
             variants.append({"embeddings": output.embeddings, "metadata": metadata})
         return variants
+
+    def _load_cached_multi_embeddings(
+        self,
+        *,
+        extractor: Any,
+        dataset: Any,
+        store: ArtifactStore,
+        specs: List[Any],
+        cache_keys: dict[str, str],
+        subsampling_metadata: Optional[dict],
+    ) -> List[dict]:
+        """Preflight and load cached named outputs without retaining aggregate RAM."""
+
+        preflight = {spec.name: dict(store.get_json(cache_keys[spec.name])) for spec in specs}
+        resident_sizes = []
+        for metadata in preflight.values():
+            self._admit_cached_embedding_load(metadata)
+            self._admit_scoring_memory(metadata)
+            resident = estimate_metadata_resident_bytes(metadata)
+            if resident is not None:
+                resident_sizes.append(resident)
+        aggregate_resident = sum(resident_sizes) if len(resident_sizes) == len(specs) else None
+        force_disk = False
+        if aggregate_resident is not None:
+            budget = resolve_memory_budget(self.memory_config).max_memory_bytes
+            force_disk = aggregate_resident > budget
+            if force_disk and not self.memory_config.allow_disk_spill:
+                assert_within_memory(
+                    aggregate_resident,
+                    self.memory_config,
+                    purpose="Cached multi-output embedding artifacts",
+                )
+
+        if not force_disk:
+            variants = []
+            for spec in specs:
+                embeddings, metadata = store.get_artifact(cache_keys[spec.name])
+                self._admit_cached_embedding_load(metadata)
+                metadata = self._cached_embedding_metadata(
+                    metadata,
+                    subsampling_metadata=subsampling_metadata,
+                )
+                variants.append({"embeddings": embeddings, "metadata": metadata})
+            return variants
+
+        committed_metadata: dict[str, dict] = {}
+        variants = []
+        with (
+            IncrementalMatrixStager(
+                self.memory_config,
+                purpose=f"Extractor '{extractor.name}' cached multi-output staging",
+            ) as stager,
+            IncrementalMatrixReferenceStager(
+                self.memory_config,
+                purpose=f"Extractor '{extractor.name}' cached multi-output staging",
+                matrix_stager=stager,
+            ) as reference_stager,
+        ):
+            for spec in specs:
+                embeddings, metadata = store.get_artifact(cache_keys[spec.name])
+                self._admit_cached_embedding_load(metadata)
+                embeddings = ensure_numeric_matrix(
+                    embeddings,
+                    f"Extractor '{extractor.name}' cached output '{spec.name}'",
+                    allow_sparse=True,
+                )
+                if embeddings.shape[0] != len(dataset.y):
+                    raise ValueError(
+                        f"Cached extractor output '{spec.name}' has {embeddings.shape[0]} "
+                        f"rows for {len(dataset.y)} labels."
+                    )
+                for row_index in range(len(dataset.y)):
+                    reference_stager.append(
+                        spec.name,
+                        row_index,
+                        stager.append(
+                            spec.name,
+                            embeddings[row_index : row_index + 1],
+                        ),
+                    )
+                committed_metadata[spec.name] = self._cached_embedding_metadata(
+                    metadata,
+                    subsampling_metadata=subsampling_metadata,
+                )
+                del embeddings
+
+            for spec in specs:
+                assembly = reference_stager.assemble(
+                    spec.name,
+                    expected_rows=len(dataset.y),
+                    purpose=f"Extractor '{extractor.name}' cached output '{spec.name}'",
+                    force_disk=True,
+                )
+                metadata = committed_metadata[spec.name]
+                metadata["materialization"] = {
+                    "strategy": assembly.strategy,
+                    "required_bytes": assembly.required_bytes,
+                    "budget_bytes": assembly.budget_bytes,
+                    "staging_strategy": assembly.staging_strategy,
+                }
+                variants.append({"embeddings": assembly.matrix, "metadata": metadata})
+        return variants
+
+    @staticmethod
+    def _cached_embedding_metadata(
+        metadata: dict,
+        *,
+        subsampling_metadata: Optional[dict],
+    ) -> dict:
+        committed = dict(metadata)
+        committed["cache_hit"] = True
+        committed["cache_status"] = "hit"
+        committed.update(subsampling_metadata or {})
+        return committed
 
     def _get_or_compute_compressed_embeddings(
         self,
@@ -1320,30 +1683,37 @@ class Benchmark:
 
         source_key = embedding_metadata["cache_key"]
         compression_key = compress_embedding_artifact_key(source_key, config)
+        cache_eligible = bool(embedding_metadata.get("cache_eligible", False))
         if (
-            self.cache_config.enabled
+            cache_eligible
             and not self.cache_config.force_recompute
             and store.exists(compression_key)
         ):
-            metadata = store.get_json(compression_key)
+            self._admit_cached_embedding_load(store.get_json(compression_key))
+            compressed_embeddings, metadata = store.get_artifact(compression_key)
+            self._admit_cached_embedding_load(metadata)
+            metadata = dict(metadata)
             metadata["cache_hit"] = True
-            return store.get_array(compression_key), metadata
+            metadata["cache_status"] = "hit"
+            return compressed_embeddings, metadata
 
         compression_result = compress_embeddings(embeddings, config=config, y=labels)
         metadata = dict(compression_result.metadata)
         metadata["cache_key"] = compression_key
         metadata["cache_hit"] = False
-        if self.cache_config.enabled:
-            store.put_array(compression_key, compression_result.embeddings)
-            store.put_json(compression_key, metadata)
+        metadata["cache_eligible"] = cache_eligible
+        metadata["source_cache_status"] = embedding_metadata.get("cache_status")
+        metadata["cache_status"] = (
+            "miss" if cache_eligible else embedding_metadata.get("cache_status", "disabled")
+        )
+        if cache_eligible:
+            store.put_artifact(compression_key, compression_result.embeddings, metadata)
         return compression_result.embeddings, metadata
 
     def _should_stream_embeddings(self, extractor: Any) -> bool:
         if not self.embedding_config.streaming_enabled:
             return False
-        return bool(getattr(extractor, "streaming_safe", False)) or bool(
-            getattr(extractor, "already_fitted", False)
-        )
+        return bool(getattr(extractor, "streaming_safe", False))
 
     def _stream_embeddings(
         self,
@@ -1353,6 +1723,7 @@ class Benchmark:
         cache_key: str,
         recipe: dict,
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None,
+        subsampling_metadata: Optional[dict] = None,
     ) -> Tuple[Any, dict]:
         n_samples = len(dataset.y)
         embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
@@ -1391,14 +1762,31 @@ class Benchmark:
             first_embeddings,
             self._embedding_batches_from(extractor, batch_iterator),
         )
+        single_output_spec = self._single_output_spec(extractor)
         if embedding_cache_enabled:
-            store.put_array_batches(
+            metadata = self._embedding_metadata(
+                extractor=extractor,
+                dataset=dataset,
+                embeddings=first_embeddings,
+                cache_key=cache_key,
+                recipe=recipe,
+                output_name=(single_output_spec.name if single_output_spec is not None else None),
+                output_metadata=(
+                    dict(single_output_spec.metadata) if single_output_spec is not None else None
+                ),
+            )
+            metadata["streamed"] = True
+            metadata["stream_batch_size"] = self.embedding_config.batch_size
+            metadata["memory_estimate"] = memory_estimate.to_dict()
+            metadata.update(subsampling_metadata or {})
+            store.put_artifact_batches(
                 cache_key,
                 batch_pairs,
                 n_samples=n_samples,
+                metadata=metadata,
                 require_complete=True,
             )
-            embeddings = store.get_array(cache_key)
+            embeddings, metadata = store.get_artifact(cache_key)
         else:
             if memory_estimate.strategy == "stream_to_disk":
                 raise ValueError(
@@ -1410,21 +1798,21 @@ class Benchmark:
                 batch_pairs,
                 n_samples=n_samples,
             )
-        single_output_spec = self._single_output_spec(extractor)
-        metadata = self._embedding_metadata(
-            extractor=extractor,
-            dataset=dataset,
-            embeddings=embeddings,
-            cache_key=cache_key,
-            recipe=recipe,
-            output_name=single_output_spec.name if single_output_spec is not None else None,
-            output_metadata=(
-                dict(single_output_spec.metadata) if single_output_spec is not None else None
-            ),
-        )
-        metadata["streamed"] = True
-        metadata["stream_batch_size"] = self.embedding_config.batch_size
-        metadata["memory_estimate"] = memory_estimate.to_dict()
+            metadata = self._embedding_metadata(
+                extractor=extractor,
+                dataset=dataset,
+                embeddings=embeddings,
+                cache_key=cache_key,
+                recipe=recipe,
+                output_name=(single_output_spec.name if single_output_spec is not None else None),
+                output_metadata=(
+                    dict(single_output_spec.metadata) if single_output_spec is not None else None
+                ),
+            )
+            metadata["streamed"] = True
+            metadata["stream_batch_size"] = self.embedding_config.batch_size
+            metadata["memory_estimate"] = memory_estimate.to_dict()
+            metadata.update(subsampling_metadata or {})
         return embeddings, metadata
 
     def _stream_multi_embeddings(
@@ -1435,6 +1823,7 @@ class Benchmark:
         cache_keys: dict[str, str],
         recipe: dict,
         probe_plan: Optional[Tuple[SampleBatch, Any, Any]] = None,
+        subsampling_metadata: Optional[dict] = None,
     ) -> List[dict]:
         n_samples = len(dataset.y)
         embedding_cache_enabled = self._cache_embeddings_enabled(extractor)
@@ -1469,47 +1858,102 @@ class Benchmark:
             if not np.array_equal(skipped_batch.indices, first_batch.indices):
                 raise ValueError("Reusable embedding probe does not match streaming batch order.")
 
-        collected = {
-            output.name: [(first_batch.indices, output.embeddings)] for output in first_outputs
-        }
         output_metadata = {output.name: dict(output.metadata) for output in first_outputs}
+        output_contracts = {
+            output.name: {
+                "recipe": hash_json_exact(dict(output.recipe)),
+                "metadata": hash_json_exact(dict(output.metadata)),
+            }
+            for output in first_outputs
+        }
         output_recipe = {
             output.name: self._qualified_output_recipe(recipe, output) for output in first_outputs
         }
-        for batch in batch_iterator:
-            outputs = self._embed_batch_many(extractor, batch)
+
+        def stage_outputs(
+            stager: IncrementalMatrixStager,
+            reference_stager: IncrementalMatrixReferenceStager,
+            batch: SampleBatch,
+            outputs: List[EmbeddingOutput],
+        ) -> None:
+            indices = _strict_batch_indices(batch.indices)
+            if len(indices) and (indices.min() < 0 or indices.max() >= n_samples):
+                raise ValueError("Embedding batch indices are outside the dataset row range.")
             for output in outputs:
-                if output.name not in collected:
+                contract = {
+                    "recipe": hash_json_exact(dict(output.recipe)),
+                    "metadata": hash_json_exact(dict(output.metadata)),
+                }
+                if contract != output_contracts[output.name]:
                     raise ValueError(
-                        f"Extractor '{extractor.name}' returned unexpected output '{output.name}'."
+                        f"Extractor '{extractor.name}' output '{output.name}' changed its "
+                        "recipe or metadata between streaming batches."
                     )
-                collected[output.name].append((batch.indices, output.embeddings))
+                for row_index, sample_index in enumerate(indices):
+                    position = int(sample_index)
+                    reference_stager.append(
+                        output.name,
+                        position,
+                        stager.append(
+                            output.name,
+                            output.embeddings[row_index : row_index + 1],
+                        ),
+                    )
 
         variants = []
-        for output_name, batches in collected.items():
-            embeddings = _combine_embedding_batches(batches, n_samples=n_samples)
-            cache_key = cache_keys[output_name]
-            metadata = self._embedding_metadata(
-                extractor=extractor,
-                dataset=dataset,
-                embeddings=embeddings,
-                cache_key=cache_key,
-                recipe=output_recipe[output_name],
-                extractor_name=_qualified_output_name(extractor.name, output_name),
-                parent_extractor_name=extractor.name,
-                output_name=output_name,
-                extractor_recipe=recipe,
-                output_metadata=output_metadata[output_name],
-            )
-            metadata["streamed"] = True
-            metadata["stream_batch_size"] = self.embedding_config.batch_size
-            metadata["memory_estimate"] = estimates[output_name].to_dict()
-            metadata["multi_output_memory_estimate"] = {
-                key: value for key, value in aggregate.items() if key != "per_output"
-            }
-            if embedding_cache_enabled:
-                store.put_array(cache_key, embeddings)
-            variants.append({"embeddings": embeddings, "metadata": metadata})
+        with (
+            IncrementalMatrixStager(
+                self.memory_config,
+                purpose=f"Extractor '{extractor.name}' local multi-output staging",
+            ) as stager,
+            IncrementalMatrixReferenceStager(
+                self.memory_config,
+                purpose=f"Extractor '{extractor.name}' local multi-output staging",
+                matrix_stager=stager,
+            ) as reference_stager,
+        ):
+            stage_outputs(stager, reference_stager, first_batch, first_outputs)
+            for batch in batch_iterator:
+                outputs = self._embed_batch_many(extractor, batch)
+                stage_outputs(stager, reference_stager, batch, outputs)
+
+            for output_name in output_metadata:
+                assembly = reference_stager.assemble(
+                    output_name,
+                    expected_rows=n_samples,
+                    purpose=f"Extractor '{extractor.name}' output '{output_name}' embeddings",
+                    force_disk=aggregate["strategy"] == "stream_to_disk",
+                )
+                embeddings = assembly.matrix
+                cache_key = cache_keys[output_name]
+                metadata = self._embedding_metadata(
+                    extractor=extractor,
+                    dataset=dataset,
+                    embeddings=embeddings,
+                    cache_key=cache_key,
+                    recipe=output_recipe[output_name],
+                    extractor_name=_qualified_output_name(extractor.name, output_name),
+                    parent_extractor_name=extractor.name,
+                    output_name=output_name,
+                    extractor_recipe=recipe,
+                    output_metadata=output_metadata[output_name],
+                )
+                metadata["streamed"] = True
+                metadata["stream_batch_size"] = self.embedding_config.batch_size
+                metadata["memory_estimate"] = estimates[output_name].to_dict()
+                metadata["multi_output_memory_estimate"] = {
+                    key: value for key, value in aggregate.items() if key != "per_output"
+                }
+                metadata["materialization"] = {
+                    "strategy": assembly.strategy,
+                    "required_bytes": assembly.required_bytes,
+                    "budget_bytes": assembly.budget_bytes,
+                    "staging_strategy": assembly.staging_strategy,
+                }
+                metadata.update(subsampling_metadata or {})
+                if embedding_cache_enabled:
+                    store.put_artifact(cache_key, embeddings, metadata)
+                variants.append({"embeddings": embeddings, "metadata": metadata})
         return variants
 
     def _embedding_batches_from(
@@ -1526,12 +1970,20 @@ class Benchmark:
         batch: SampleBatch,
         *,
         materialized: bool = True,
+        profiled: bool = True,
     ) -> Any:
-        embeddings = self._measure_resource_call(
-            lambda: extractor.transform(batch.X),
-            samples=len(batch.indices),
-            call_type="transform",
-            materialized=materialized,
+        def call() -> Any:
+            return extractor.transform(batch.X)
+
+        embeddings = (
+            self._measure_resource_call(
+                call,
+                samples=len(batch.indices),
+                call_type="transform",
+                materialized=materialized,
+            )
+            if profiled
+            else call()
         )
         embeddings = ensure_numeric_matrix(
             embeddings,
@@ -1551,12 +2003,20 @@ class Benchmark:
         batch: SampleBatch,
         *,
         materialized: bool = True,
+        profiled: bool = True,
     ) -> List[EmbeddingOutput]:
-        outputs = self._measure_resource_call(
-            lambda: extractor.transform_many(batch.X),
-            samples=len(batch.indices),
-            call_type="transform_many",
-            materialized=materialized,
+        def call() -> Any:
+            return extractor.transform_many(batch.X)
+
+        outputs = (
+            self._measure_resource_call(
+                call,
+                samples=len(batch.indices),
+                call_type="transform_many",
+                materialized=materialized,
+            )
+            if profiled
+            else call()
         )
         return self._validate_multi_outputs(
             extractor=extractor,
@@ -1616,6 +2076,15 @@ class Benchmark:
         output_metadata: Optional[dict] = None,
     ) -> dict:
         sparse_embeddings = is_sparse_matrix(embeddings)
+        cache_eligible = self._cache_embeddings_enabled(extractor)
+        recipe_cache_safe = recipe.get("cache_safe")
+        cache_status = (
+            "miss"
+            if cache_eligible
+            else "bypassed_unsafe_identity"
+            if recipe_cache_safe is False
+            else "disabled"
+        )
         return {
             "extractor_name": extractor_name or extractor.name,
             "parent_extractor_name": parent_extractor_name,
@@ -1623,6 +2092,8 @@ class Benchmark:
             "extractor_type": getattr(extractor, "extractor_type", "unknown"),
             "modality": getattr(extractor, "modality", dataset.modality),
             "cache_hit": False,
+            "cache_eligible": cache_eligible,
+            "cache_status": cache_status,
             "cache_key": cache_key,
             "shape": list(embeddings.shape),
             "n_samples": int(embeddings.shape[0]),
@@ -1800,7 +2271,15 @@ class Benchmark:
         materialized = list(outputs)
         expected_names = [spec.name for spec in self._output_specs(extractor)]
         actual_names = [output.name for output in materialized]
-        if set(actual_names) != set(expected_names):
+        if actual_names and any(not isinstance(name, str) or not name for name in actual_names):
+            raise ValueError(
+                f"Extractor '{extractor.name}' returned a blank or non-string output name."
+            )
+        if len(actual_names) != len(set(actual_names)):
+            raise ValueError(
+                f"Extractor '{extractor.name}' returned duplicate output names for {context}."
+            )
+        if len(actual_names) != len(expected_names) or set(actual_names) != set(expected_names):
             raise ValueError(
                 f"Extractor '{extractor.name}' returned outputs {sorted(actual_names)} for "
                 f"{context}, expected {sorted(expected_names)}."
@@ -1841,8 +2320,12 @@ class Benchmark:
             )
             for output in outputs
         }
+        resident_bytes = sum(estimate.resident_bytes for estimate in estimates.values())
+        aggregate_exceeds_budget = (
+            resident_bytes > resolve_memory_budget(self.memory_config).max_memory_bytes
+        )
         aggregate = {
-            "resident_bytes": sum(estimate.resident_bytes for estimate in estimates.values()),
+            "resident_bytes": resident_bytes,
             "dense_scoring_bytes": max(
                 estimate.dense_scoring_bytes for estimate in estimates.values()
             ),
@@ -1851,7 +2334,8 @@ class Benchmark:
             ),
             "strategy": (
                 "stream_to_disk"
-                if any(estimate.strategy == "stream_to_disk" for estimate in estimates.values())
+                if aggregate_exceeds_budget
+                or any(estimate.strategy == "stream_to_disk" for estimate in estimates.values())
                 else "in_memory"
             ),
         }
@@ -1868,11 +2352,12 @@ class Benchmark:
             self.memory_config,
             purpose="Embedding batch",
         )
-        assert_within_memory(
-            int(aggregate["resident_bytes"]),
-            self.memory_config,
-            purpose="Resident embedding artifacts",
-        )
+        if aggregate["strategy"] == "in_memory" or not self.memory_config.allow_disk_spill:
+            assert_within_memory(
+                int(aggregate["resident_bytes"]),
+                self.memory_config,
+                purpose="Resident embedding artifacts",
+            )
         assert_within_memory(
             int(aggregate["dense_scoring_bytes"]),
             self.memory_config,
@@ -1880,7 +2365,10 @@ class Benchmark:
         )
 
     def _cache_embeddings_enabled(self, extractor: Any) -> bool:
-        return self.cache_config.enabled and bool(getattr(extractor, "cache_embeddings", True))
+        if not self.cache_config.enabled or not bool(getattr(extractor, "cache_embeddings", True)):
+            return False
+        recipe = extractor.recipe()
+        return recipe.get("cache_safe") is not False
 
     def _qualified_output_recipe(self, recipe: dict, output: EmbeddingOutput) -> dict:
         qualified = dict(recipe)
@@ -1924,17 +2412,19 @@ def _scoring_excluded_classes(
 def _weakest_class(
     per_class_scores: dict,
     excluded_classes: Optional[Any] = None,
+    label_catalog: Optional[Any] = None,
 ) -> Any:
     excluded = _normalized_excluded_classes(excluded_classes)
     numeric_scores = {
-        str(label): float(score)
+        label: float(score)
         for label, score in per_class_scores.items()
-        if isinstance(score, (int, float, np.number)) and not _label_is_excluded(label, excluded)
+        if isinstance(score, (int, float, np.number))
+        and not _label_is_excluded(label, excluded, label_catalog)
     }
     if not numeric_scores:
         return None, None
     label, score = min(numeric_scores.items(), key=lambda item: item[1])
-    return label, score
+    return label_display(label, label_catalog or []), score
 
 
 def _normalized_excluded_classes(value: Any) -> List[Any]:
@@ -1948,14 +2438,41 @@ def _normalized_excluded_classes(value: Any) -> List[Any]:
         return [value]
 
 
-def _label_is_excluded(label: Any, excluded: List[Any]) -> bool:
+def _label_is_excluded(
+    label: Any,
+    excluded: List[Any],
+    label_catalog: Optional[Any] = None,
+) -> bool:
     label_value = label.item() if hasattr(label, "item") else label
-    return any(label_value == item or str(label_value) == str(item) for item in excluded)
+    catalog_keys = {
+        item.get("key")
+        for item in (label_catalog or [])
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
+    label_key = (
+        label_value
+        if isinstance(label_value, str) and label_value in catalog_keys
+        else semantic_label_key(label_value)
+    )
+    for item in excluded:
+        item_value = item.item() if hasattr(item, "item") else item
+        item_key = (
+            item_value
+            if isinstance(item_value, str) and item_value in catalog_keys
+            else semantic_label_key(item_value)
+        )
+        if label_key == item_key:
+            return True
+    return False
 
 
 def _label_is_excluded_exact(label: Any, excluded: List[Any]) -> bool:
     label_value = label.item() if hasattr(label, "item") else label
-    return any(label_value == item for item in excluded)
+    label_key = semantic_label_key(label_value)
+    return any(
+        label_key == semantic_label_key(item.item() if hasattr(item, "item") else item)
+        for item in excluded
+    )
 
 
 def _variant_extractor_name(name: str, compression_metadata: dict) -> str:
@@ -1982,22 +2499,30 @@ def _combine_embedding_batches(
     if not collected:
         raise ValueError("At least one embedding batch is required.")
     first = collected[0][1]
+    expected_contract = _embedding_batch_contract(first)
     written = np.zeros(n_samples, dtype=bool)
     if is_sparse_matrix(first):
         from scipy import sparse
 
         rows = []
+        row_indices = []
         for indices, batch in collected:
             if not is_sparse_matrix(batch):
                 raise ValueError("Cannot mix sparse and dense embedding batches.")
+            _validate_embedding_batch_contract(batch, expected_contract)
             _check_batch_indices(indices, batch.shape[0], written)
             rows.append(batch)
+            row_indices.append(_strict_batch_indices(indices))
         if not bool(np.all(written)):
             missing = np.flatnonzero(~written)
             raise ValueError(
                 f"Embedding batches did not cover all samples; missing {missing[:10]}."
             )
-        return sparse.vstack(rows, format="csr")
+        stacked = sparse.vstack(rows, format=expected_contract["storage_format"])
+        encountered = np.concatenate(row_indices)
+        inverse = np.empty(n_samples, dtype=int)
+        inverse[encountered] = np.arange(n_samples, dtype=int)
+        return stacked[inverse]
 
     first_arr = np.asarray(first)
     output = np.empty((n_samples, first_arr.shape[1]), dtype=first_arr.dtype)
@@ -2005,8 +2530,9 @@ def _combine_embedding_batches(
         if is_sparse_matrix(batch):
             raise ValueError("Cannot mix sparse and dense embedding batches.")
         arr = np.asarray(batch)
+        _validate_embedding_batch_contract(arr, expected_contract)
         _check_batch_indices(indices, arr.shape[0], written)
-        output[np.asarray(indices, dtype=int)] = arr
+        output[_strict_batch_indices(indices)] = arr
     if not bool(np.all(written)):
         missing = np.flatnonzero(~written)
         raise ValueError(f"Embedding batches did not cover all samples; missing {missing[:10]}.")
@@ -2014,13 +2540,73 @@ def _combine_embedding_batches(
 
 
 def _check_batch_indices(indices: np.ndarray, n_rows: int, written: np.ndarray) -> None:
-    indices = np.asarray(indices, dtype=int)
+    indices = _strict_batch_indices(indices)
     if len(indices) != n_rows:
         raise ValueError("Batch index count must match embedding row count.")
+    if len(indices) and (indices.min() < 0 or indices.max() >= len(written)):
+        raise ValueError("Embedding batch indices are outside the dataset row range.")
     if np.any(written[indices]):
         duplicates = indices[written[indices]]
         raise ValueError(f"Duplicate embedding rows for sample indices {duplicates[:10]}.")
     written[indices] = True
+
+
+def _strict_batch_indices(indices: Any) -> np.ndarray:
+    raw = np.asarray(indices)
+    if raw.ndim != 1:
+        raise ValueError("Embedding batch indices must be one-dimensional.")
+    if np.issubdtype(raw.dtype, np.bool_) or not np.issubdtype(raw.dtype, np.integer):
+        raise TypeError("Embedding batch indices must contain non-boolean integers.")
+    return raw.astype(int, copy=False)
+
+
+def _embedding_batch_contract(batch: Any) -> dict[str, Any]:
+    sparse = is_sparse_matrix(batch)
+    shape = getattr(batch, "shape", None)
+    if shape is None or len(shape) != 2:
+        raise ValueError("Embedding batches must be two-dimensional matrices.")
+    return {
+        "embedding_dim": int(shape[1]),
+        "dtype": str(batch.dtype),
+        "sparse": sparse,
+        "storage_format": batch.getformat() if sparse else "dense",
+    }
+
+
+def _validate_embedding_batch_contract(batch: Any, expected: dict[str, Any]) -> None:
+    actual = _embedding_batch_contract(batch)
+    if actual != expected:
+        raise ValueError(
+            "Embedding batches changed matrix contract; expected feature width "
+            f"{expected['embedding_dim']}, dtype {expected['dtype']}, sparse="
+            f"{expected['sparse']}, format {expected['storage_format']}, but received "
+            f"width {actual['embedding_dim']}, dtype {actual['dtype']}, sparse="
+            f"{actual['sparse']}, format {actual['storage_format']}."
+        )
+
+
+def _selected_provenance(
+    rows: List[dict[str, Any]],
+    metadata: dict[str, Any],
+) -> List[dict[str, Any]]:
+    expected_rows = int(metadata.get("n_samples", len(rows)))
+    indices = metadata.get("sample_indices")
+    if indices is None:
+        if expected_rows != len(rows):
+            raise ValueError(
+                "Materialized provenance cannot be aligned with the evaluated embeddings."
+            )
+        return list(rows)
+    resolved = _strict_batch_indices(indices)
+    if len(resolved) != expected_rows:
+        raise ValueError(
+            "Materialized provenance index count does not match evaluated embedding rows."
+        )
+    if len(resolved) and (resolved.min() < 0 or resolved.max() >= len(rows)):
+        raise ValueError("Materialized provenance indices are outside the available rows.")
+    if len(set(resolved.tolist())) != len(resolved):
+        raise ValueError("Materialized provenance indices must be unique.")
+    return [rows[int(index)] for index in resolved]
 
 
 def _prepend_batch(

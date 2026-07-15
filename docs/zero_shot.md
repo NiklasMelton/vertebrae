@@ -32,7 +32,10 @@ result = ZeroShotBenchmark(
 
 The source dataset must have single-label targets. Every observed class requires one
 or more non-empty prompts. Prompt order is preserved in the protocol fingerprint;
-duplicate prompts are rejected. For a prompt ensemble, vertebrae L2-normalizes each
+duplicate prompts are rejected. Template strings are parsed with `string.Formatter`
+and may reference only the `label` field; positional, conversion, format-spec, and
+unknown fields are rejected. Template IDs must be nonempty and the protocol must have
+exact class-by-template coverage before scoring. For a prompt ensemble, vertebrae L2-normalizes each
 prompt embedding, averages all prompts for a class with equal weight, then normalizes
 the class prototype. It never chooses the best prompt after observing labels.
 
@@ -95,6 +98,10 @@ coherence, correct-class margins, and deterministic tie warnings.
 Euclidean distance, so larger scores correspond to closer prototypes just as larger
 cosine and dot-product scores correspond to better matches.
 
+Cosine scoring requires nonzero sample rows and nonzero prompt/prototype rows. Sample
+zero vectors remain valid for dot-product and squared-L2 scoring; prompt groups must
+always be nonempty and produce a nonzero prototype.
+
 | zero-shot | overlap | interpretation |
 | --- | --- | --- |
 | strong | strong | Text-addressable and well-structured frozen representation. |
@@ -119,12 +126,19 @@ configured score block. If that block does not fit, lower `sample_batch_size`, c
 the embeddings, or raise the explicit limit. Dense and sparse inputs use the same
 admission check before conversion or scoring.
 
+`ZeroShotBenchmark(memory_config=...)` separately bounds local sample and prompt
+embedding materialization. Streaming batches spill to temporary local staging when
+allowed; otherwise the run fails as soon as the next batch would exceed the resident
+budget instead of accumulating the complete endpoint first.
+
 ## Compression and artifact workflows
 
 Compression variants are supported. Vertebrae fits the label-free compressor on sample
 embeddings and applies the same fitted transform to prompt embeddings before building
 prototypes. Sample embedding cache keys use the source dataset identity, so changing
-only prompts can reuse sample embeddings.
+only prompts can reuse sample embeddings when the source dataset and extractor have a
+stable cache identity and raw caching is enabled. An unsafe or explicitly disabled raw
+cache also makes every paired compressed variant ineligible for reuse.
 
 For `CallableRetrievalExtractor`, top-level importable callables are recorded in its
 recipe and cache key. Lambdas or nested callables must supply `cache_identity` to use

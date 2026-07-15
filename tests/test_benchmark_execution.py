@@ -22,6 +22,8 @@ from vertebrae import (
     SeparatixConfig,
     StabilityConfig,
 )
+from vertebrae.cache import LocalArtifactStore
+from vertebrae.execution import embedding_artifact_key
 from vertebrae.extractors import CallableExtractor, MultiOutputExtractor
 
 
@@ -65,6 +67,29 @@ class FitOnceExtractor:
 
     def recipe(self):
         return {"name": self.name, "extractor_type": self.extractor_type}
+
+
+class CachePolicyExtractor:
+    name = "cache_policy"
+    extractor_type = "test"
+    streaming_safe = True
+
+    def __init__(self, *, cache_embeddings=True, cache_safe=True):
+        self.cache_embeddings = cache_embeddings
+        self.cache_safe = cache_safe
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return np.asarray(X)[:, :2]
+
+    def recipe(self):
+        return {
+            "name": self.name,
+            "extractor_type": self.extractor_type,
+            "cache_safe": self.cache_safe,
+        }
 
 
 def _dataset():
@@ -127,13 +152,27 @@ def test_explicit_backend_runs_artifact_pipeline_and_matches_direct(tmp_path, fa
     dataset = _dataset()
     direct = Benchmark(
         dataset,
-        [CallableExtractor("identity", np.asarray, streaming_safe=True)],
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
         **_kwargs(tmp_path / "direct"),
     ).run()
     backend = RecordingBackend()
     dispatched = Benchmark(
         dataset,
-        [CallableExtractor("identity", np.asarray, streaming_safe=True)],
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
         execution=backend,
         execution_config=ExecutionConfig(total_shards=3),
         **_kwargs(tmp_path / "dispatched"),
@@ -153,7 +192,14 @@ def test_explicit_backend_runs_artifact_pipeline_and_matches_direct(tmp_path, fa
 def test_local_parallel_backend_runs_end_to_end(tmp_path, fake_overlapindex):
     result = Benchmark(
         _dataset(),
-        [CallableExtractor("identity", np.asarray, streaming_safe=True)],
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
         execution=LocalBackend(n_jobs=2, joblib_backend="threading"),
         execution_config=ExecutionConfig(total_shards=3),
         **_kwargs(tmp_path),
@@ -181,7 +227,14 @@ def test_dispatch_stages_can_keep_embedding_on_driver(tmp_path, fake_overlapinde
     backend = RecordingBackend()
     Benchmark(
         _dataset(),
-        [CallableExtractor("identity", np.asarray, streaming_safe=True)],
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
         execution=backend,
         execution_config=ExecutionConfig(total_shards=2, dispatch_stages=("scoring",)),
         **_kwargs(tmp_path),
@@ -198,9 +251,86 @@ def test_cache_hit_prunes_embedding_jobs(tmp_path, fake_overlapindex):
         **_kwargs(tmp_path),
         "cache_config": config,
     }
+    first = Benchmark(
+        dataset,
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
+        execution=first_backend,
+        execution_config=ExecutionConfig(total_shards=2),
+        **common,
+    ).run()
+    first_metadata = first.extractor_results[0].embedding_metadata
+    assert first_metadata["cache_hit"] is False
+    assert first_metadata["cache_eligible"] is True
+    assert first_metadata["cache_status"] == "miss"
+    assert (
+        LocalArtifactStore(str(tmp_path)).get_json(first_metadata["cache_key"])["cache_status"]
+        == "miss"
+    )
+    second_backend = RecordingBackend()
+    second = Benchmark(
+        dataset,
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
+        execution=second_backend,
+        execution_config=ExecutionConfig(total_shards=2),
+        **common,
+    ).run()
+
+    assert len(first_backend.calls) == 2
+    assert len(second_backend.calls) == 0
+    second_metadata = second.extractor_results[0].embedding_metadata
+    assert second_metadata["cache_hit"] is True
+    assert second_metadata["cache_eligible"] is True
+    assert second_metadata["cache_status"] == "hit"
+    assert (
+        LocalArtifactStore(str(tmp_path)).get_json(second_metadata["cache_key"])["cache_status"]
+        == "miss"
+    )
+
+
+def test_cache_hit_reuses_compression_scoring_and_diagnostics(
+    tmp_path,
+    fake_overlapindex,
+    fake_separatix,
+):
+    dataset = _dataset()
+    common = {
+        "scoring_config": OverlapScoringConfig(k=1),
+        "stability_config": StabilityConfig(repeats=2),
+        "separatix_config": SeparatixConfig(enabled=True, overlap_threshold=0.0),
+        "cache_config": CacheConfig(enabled=True, cache_dir=str(tmp_path)),
+        "compression_config": EmbeddingCompressionConfig(
+            enabled=True,
+            method="prefix_truncate",
+            n_components=2,
+            assume_matryoshka=True,
+        ),
+        "embedding_config": EmbeddingConfig(batch_size=2),
+    }
+    first_backend = RecordingBackend()
     Benchmark(
         dataset,
-        [CallableExtractor("identity", np.asarray, streaming_safe=True)],
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
         execution=first_backend,
         execution_config=ExecutionConfig(total_shards=2),
         **common,
@@ -208,14 +338,113 @@ def test_cache_hit_prunes_embedding_jobs(tmp_path, fake_overlapindex):
     second_backend = RecordingBackend()
     Benchmark(
         dataset,
-        [CallableExtractor("identity", np.asarray, streaming_safe=True)],
+        [
+            CallableExtractor(
+                "identity",
+                np.asarray,
+                streaming_safe=True,
+                cache_identity="identity-v1",
+            )
+        ],
         execution=second_backend,
         execution_config=ExecutionConfig(total_shards=2),
         **common,
     ).run()
 
-    assert len(first_backend.calls) == 2
-    assert len(second_backend.calls) == 1
+    assert len(first_backend.calls) == 5
+    assert len(second_backend.calls) == 0
+
+
+def test_multi_output_cache_status_reaches_parent_outputs_and_results(tmp_path, fake_overlapindex):
+    dataset = _dataset()
+    extractor = MultiOutputExtractor(
+        "multi-cache",
+        output_specs=[EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")],
+        transform_many_fn=lambda values: {
+            "left": np.asarray(values)[:, :2],
+            "right": np.asarray(values)[:, 1:3],
+        },
+        streaming_safe=True,
+        cache_identity="multi-cache-v1",
+    )
+    common = {
+        **_kwargs(tmp_path),
+        "cache_config": CacheConfig(enabled=True, cache_dir=str(tmp_path)),
+    }
+    first = Benchmark(
+        dataset,
+        [extractor],
+        execution=LocalBackend(),
+        execution_config=ExecutionConfig(total_shards=2),
+        **common,
+    ).run()
+    store = LocalArtifactStore(str(tmp_path))
+    parent_key = embedding_artifact_key(dataset, extractor)
+    first_parent = store.get_json(parent_key)
+
+    assert first_parent["cache_status"] == "miss"
+    assert {item.embedding_metadata["cache_status"] for item in first.extractor_results} == {"miss"}
+    assert all(
+        store.get_json(output["output_key"])["cache_status"] == "miss"
+        for output in first_parent["outputs"]
+    )
+
+    second = Benchmark(
+        dataset,
+        [extractor],
+        execution=LocalBackend(),
+        execution_config=ExecutionConfig(total_shards=2),
+        **common,
+    ).run()
+    second_parent = store.get_json(parent_key)
+    # Cache-access status belongs to the current result, not the immutable reusable artifact.
+    assert second_parent["cache_status"] == "miss"
+    assert {item.embedding_metadata["cache_status"] for item in second.extractor_results} == {"hit"}
+    assert all(
+        store.get_json(output["output_key"])["cache_status"] == "miss"
+        for output in second_parent["outputs"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("extractor_kwargs", "expected_cache_status"),
+    [
+        ({"cache_embeddings": False, "cache_safe": True}, "disabled"),
+        (
+            {"cache_embeddings": True, "cache_safe": False},
+            "bypassed_unsafe_identity",
+        ),
+    ],
+)
+def test_artifact_pipeline_honors_per_extractor_cache_policy(
+    tmp_path,
+    fake_overlapindex,
+    extractor_kwargs,
+    expected_cache_status,
+):
+    common = {
+        **_kwargs(tmp_path),
+        "cache_config": CacheConfig(enabled=True, cache_dir=str(tmp_path)),
+    }
+    dataset = _dataset()
+    for _ in range(2):
+        backend = RecordingBackend()
+        result = Benchmark(
+            dataset,
+            [CachePolicyExtractor(**extractor_kwargs)],
+            execution=backend,
+            execution_config=ExecutionConfig(total_shards=2),
+            **common,
+        ).run()
+        assert len(backend.calls) == 2
+        metadata = result.extractor_results[0].embedding_metadata
+        assert metadata["cache_hit"] is False
+        assert metadata["cache_eligible"] is False
+        assert metadata["cache_status"] == expected_cache_status
+
+    assert not Path(tmp_path, "embeddings").exists()
+    runs_dir = Path(tmp_path, "runs")
+    assert not runs_dir.exists() or not any(runs_dir.iterdir())
 
 
 def test_uncached_artifacts_can_be_retained_for_inspection(tmp_path, fake_overlapindex):

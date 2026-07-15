@@ -5,6 +5,16 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
+from vertebrae.extractors._outputs import validate_named_output_mapping
+from vertebrae.extractors.base import (
+    normalize_optional_output_integer,
+    normalize_output_metadata,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
 
 
@@ -16,6 +26,24 @@ class StructuredOutputSpec:
     unit_type: str
     hidden_layer: Optional[int] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", validate_extractor_name(self.name))
+        if not isinstance(self.unit_type, str) or not self.unit_type.strip():
+            raise ValueError("StructuredOutputSpec.unit_type must be a non-empty string.")
+        object.__setattr__(self, "unit_type", self.unit_type.strip())
+        object.__setattr__(
+            self,
+            "hidden_layer",
+            normalize_optional_output_integer(
+                self.hidden_layer, "StructuredOutputSpec.hidden_layer"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "metadata",
+            normalize_output_metadata(self.metadata, "StructuredOutputSpec.metadata"),
+        )
 
 
 @dataclass(frozen=True)
@@ -41,8 +69,9 @@ class CallableStructuredExtractor:
         streaming_safe: bool = True,
         modality: str = "unknown",
         extractor_type: str = "custom_structured",
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
+        self.name = validate_extractor_name(name)
         self.transform_fn = transform_fn
         self._output_specs = list(output_specs)
         if not self._output_specs:
@@ -52,6 +81,8 @@ class CallableStructuredExtractor:
         self.streaming_safe = streaming_safe
         self.modality = modality
         self.extractor_type = extractor_type
+        self.cache_identity = validate_cache_identity(cache_identity)
+        self._precomputed = False
 
     def fit(self, X: Any, y: Any = None) -> "CallableStructuredExtractor":
         return self
@@ -62,7 +93,11 @@ class CallableStructuredExtractor:
     def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
         raw = self.transform_fn(X)
         if isinstance(raw, dict):
-            values = raw
+            values = validate_named_output_mapping(
+                raw,
+                [spec.name for spec in self._output_specs],
+                "CallableStructuredExtractor",
+            )
         elif len(self._output_specs) == 1:
             values = {self._output_specs[0].name: raw}
         else:
@@ -71,8 +106,6 @@ class CallableStructuredExtractor:
             )
         outputs = []
         for spec in self._output_specs:
-            if spec.name not in values:
-                raise ValueError(f"Missing structured output {spec.name!r}.")
             embeddings = _per_parent_structured_values(values[spec.name], spec.unit_type)
             outputs.append(
                 StructuredEmbeddingOutput(
@@ -86,7 +119,7 @@ class CallableStructuredExtractor:
         return outputs
 
     def recipe(self) -> Dict[str, Any]:
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -95,6 +128,9 @@ class CallableStructuredExtractor:
             "recipe_data": self.recipe_data,
             "streaming_safe": self.streaming_safe,
         }
+        callables = () if self._precomputed else (("transform_fn", self.transform_fn),)
+        recipe.update(cache_identity_fields(explicit=self.cache_identity, callables=callables))
+        return recipe
 
 
 class PrecomputedStructuredExtractor(CallableStructuredExtractor):
@@ -114,6 +150,7 @@ class PrecomputedStructuredExtractor(CallableStructuredExtractor):
             modality=modality,
             extractor_type="precomputed_structured",
         )
+        self._precomputed = True
 
 
 def _per_parent_structured_values(value: Any, unit_type: str) -> List[Any]:
@@ -148,7 +185,10 @@ def _ensure_unique_names(specs: List[StructuredOutputSpec]) -> None:
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:
-    return f"{getattr(fn, '__module__', '<unknown>')}.{getattr(fn, '__qualname__', repr(fn))}"
+    value_type = type(fn)
+    module = getattr(fn, "__module__", value_type.__module__)
+    qualname = getattr(fn, "__qualname__", value_type.__qualname__)
+    return f"{module}.{qualname}"
 
 
 def _spec_dict(spec: StructuredOutputSpec) -> Dict[str, Any]:

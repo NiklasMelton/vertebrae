@@ -1,12 +1,18 @@
 """Command line interface for distributed vertebrae workflows."""
 
 import argparse
+import hashlib
 import json
+import os
 import pickle
+import re
+import shlex
 import sys
-from dataclasses import asdict
+import tempfile
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
+from uuid import uuid4
 
 from vertebrae.cache import create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
@@ -15,6 +21,7 @@ from vertebrae.config import (
     OverlapScoringConfig,
     ResourceProfilingConfig,
     RetrievalConfig,
+    SeparatixConfig,
     ZeroShotConfig,
 )
 from vertebrae.execution import (
@@ -59,8 +66,6 @@ from vertebrae.execution import (
     plan_zero_shot_embedding_shard_jobs,
     retrieval_benchmark_result_from_artifacts,
     retrieval_compression_artifact_key,
-    retrieval_embedding_artifact_key,
-    retrieval_embedding_shard_key,
     retrieval_scoring_artifact_key,
     score_embedding_artifact,
     score_embedding_artifacts,
@@ -70,11 +75,11 @@ from vertebrae.execution import (
     separatix_artifact_key,
     zero_shot_benchmark_result_from_artifacts,
     zero_shot_compression_artifact_key,
-    zero_shot_embedding_artifact_key,
     zero_shot_protocol_artifact_key,
     zero_shot_scoring_artifact_key,
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
+from vertebrae.extractors._identity import extractor_cache_reuse_decision
 from vertebrae.scoring.metrics import CallableMetric
 from vertebrae.structured import (
     drop_special_rows,
@@ -82,6 +87,21 @@ from vertebrae.structured import (
     select_frame_rows,
 )
 from vertebrae.utils.serialization import json_dumps_strict
+
+_TRUSTED_PICKLE_WARNING = (
+    "TRUSTED INPUT ONLY: loading a Python pickle can execute arbitrary code; "
+    "never use a file from an untrusted source."
+)
+_TRUSTED_PICKLE_OUTPUT_WARNING = (
+    "The generated pickle is TRUSTED INPUT ONLY when loaded; protect it from "
+    "untrusted modification."
+)
+_EMBEDDING_PLAN_TYPE = "embedding_shard_plan"
+_EMBEDDING_PLAN_SCHEMA_VERSION = 2
+
+
+def _trusted_pickle_help(description: str) -> str:
+    return f"{description} {_TRUSTED_PICKLE_WARNING}"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -122,10 +142,36 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--output-json")
     plan.set_defaults(func=_cmd_plan)
 
+    fit = subparsers.add_parser(
+        "fit-extractor",
+        help="Fit an extractor once and write a dataset-bound bundle for shard workers.",
+    )
+    _add_object_args(
+        fit,
+        extractor_description="Pickled unfitted source extractor object.",
+    )
+    fit.add_argument(
+        "--output-pickle",
+        required=True,
+        help=(
+            "Output path for the fitted, dataset-bound extractor bundle. "
+            f"{_TRUSTED_PICKLE_OUTPUT_WARNING}"
+        ),
+    )
+    fit.add_argument("--force", action="store_true")
+    fit.add_argument("--output-json")
+    fit.set_defaults(func=_cmd_fit_extractor)
+
     embed = subparsers.add_parser("embed-shard", help="Materialize one embedding shard.")
-    _add_object_args(embed)
+    _add_object_args(
+        embed,
+        extractor_description=(
+            "Pickled fitted-extractor bundle created by `vertebrae fit-extractor`."
+        ),
+    )
     _add_cache_arg(embed)
-    embed.add_argument("--total-shards", type=int, required=True)
+    embed.add_argument("--plan-json")
+    embed.add_argument("--total-shards", type=int)
     embed.add_argument("--shard-index", type=int, required=True)
     embed.add_argument("--batch-size", type=int, default=128)
     _add_resource_profiling_arg(embed)
@@ -161,8 +207,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_object_args(retrieval_embed)
     _add_cache_arg(retrieval_embed)
     retrieval_embed.add_argument("--side", choices=["query", "gallery"], required=True)
+    retrieval_embed.add_argument("--plan-json")
     retrieval_embed.add_argument("--branch")
-    retrieval_embed.add_argument("--total-shards", type=int, required=True)
+    retrieval_embed.add_argument("--total-shards", type=int)
     retrieval_embed.add_argument("--shard-index", type=int, required=True)
     retrieval_embed.add_argument("--batch-size", type=int, default=128)
     _add_resource_profiling_arg(retrieval_embed)
@@ -226,21 +273,33 @@ def build_parser() -> argparse.ArgumentParser:
     zero_protocol = subparsers.add_parser(
         "write-zero-shot-protocol", help="Materialize a ZeroShotDataset prompt protocol."
     )
-    zero_protocol.add_argument("--dataset-pickle", required=True)
+    zero_protocol.add_argument(
+        "--dataset-pickle",
+        required=True,
+        help=_trusted_pickle_help("Pickled ZeroShotDataset."),
+    )
     _add_cache_arg(zero_protocol)
     zero_protocol.add_argument("--output-key")
     zero_protocol.add_argument("--output-json")
     zero_protocol.set_defaults(func=_cmd_write_zero_shot_protocol)
 
     labels = subparsers.add_parser("write-labels", help="Materialize dataset labels.")
-    labels.add_argument("--dataset-pickle", required=True)
+    labels.add_argument(
+        "--dataset-pickle",
+        required=True,
+        help=_trusted_pickle_help("Pickled BenchmarkDataset."),
+    )
     _add_cache_arg(labels)
     labels.add_argument("--output-key")
     labels.add_argument("--output-json")
     labels.set_defaults(func=_cmd_write_labels)
 
     groups = subparsers.add_parser("write-groups", help="Materialize dataset groups.")
-    groups.add_argument("--dataset-pickle", required=True)
+    groups.add_argument(
+        "--dataset-pickle",
+        required=True,
+        help=_trusted_pickle_help("Pickled BenchmarkDataset."),
+    )
     _add_cache_arg(groups)
     groups.add_argument("--output-key")
     groups.add_argument("--output-json")
@@ -252,7 +311,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_object_args(segmentation)
     _add_cache_arg(segmentation)
-    segmentation.add_argument("--segmentation-config-pickle")
+    segmentation.add_argument(
+        "--segmentation-config-pickle",
+        help=_trusted_pickle_help("Optional pickled SegmentationConfig."),
+    )
     segmentation.add_argument("--batch-size", type=int, default=16)
     _add_resource_profiling_arg(segmentation)
     segmentation.add_argument("--output-json")
@@ -287,7 +349,10 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--groups-key")
     score.add_argument("--output-key")
     score.add_argument("--plan-json")
-    score.add_argument("--scoring-config-pickle")
+    score.add_argument(
+        "--scoring-config-pickle",
+        help=_trusted_pickle_help("Optional pickled overlap scoring configuration."),
+    )
     score.add_argument(
         "--metric",
         action="append",
@@ -319,7 +384,10 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval_score.add_argument("--gallery-embedding-key", required=True)
     retrieval_score.add_argument("--relevance-key", required=True)
     retrieval_score.add_argument("--exclusions-key")
-    retrieval_score.add_argument("--retrieval-config-pickle")
+    retrieval_score.add_argument(
+        "--retrieval-config-pickle",
+        help=_trusted_pickle_help("Optional pickled RetrievalConfig."),
+    )
     retrieval_score.add_argument("--output-key")
     retrieval_score.add_argument("--output-json")
     retrieval_score.set_defaults(func=_cmd_score_retrieval)
@@ -330,7 +398,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(retrieval_compress)
     retrieval_compress.add_argument("--query-embedding-key", required=True)
     retrieval_compress.add_argument("--gallery-embedding-key", required=True)
-    retrieval_compress.add_argument("--compression-config-pickle", required=True)
+    retrieval_compress.add_argument(
+        "--compression-config-pickle",
+        required=True,
+        help=_trusted_pickle_help("Pickled EmbeddingCompressionConfig."),
+    )
     retrieval_compress.add_argument("--output-prefix")
     retrieval_compress.add_argument("--output-json")
     retrieval_compress.set_defaults(func=_cmd_compress_retrieval)
@@ -339,7 +411,11 @@ def build_parser() -> argparse.ArgumentParser:
         "write-retrieval-relevance",
         help="Materialize a RetrievalDataset relevance artifact.",
     )
-    relevance.add_argument("--dataset-pickle", required=True)
+    relevance.add_argument(
+        "--dataset-pickle",
+        required=True,
+        help=_trusted_pickle_help("Pickled RetrievalDataset."),
+    )
     _add_cache_arg(relevance)
     relevance.add_argument("--output-key")
     relevance.add_argument("--output-json")
@@ -352,8 +428,14 @@ def build_parser() -> argparse.ArgumentParser:
     zero_score.add_argument("--sample-embedding-key", required=True)
     zero_score.add_argument("--prompt-embedding-key", required=True)
     zero_score.add_argument("--protocol-key", required=True)
-    zero_score.add_argument("--zero-shot-config-pickle")
-    zero_score.add_argument("--scoring-config-pickle")
+    zero_score.add_argument(
+        "--zero-shot-config-pickle",
+        help=_trusted_pickle_help("Optional pickled ZeroShotConfig."),
+    )
+    zero_score.add_argument(
+        "--scoring-config-pickle",
+        help=_trusted_pickle_help("Optional pickled overlap scoring configuration."),
+    )
     zero_score.add_argument("--output-key")
     zero_score.add_argument("--output-json")
     zero_score.set_defaults(func=_cmd_score_zero_shot)
@@ -364,7 +446,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_cache_arg(zero_compress)
     zero_compress.add_argument("--sample-embedding-key", required=True)
     zero_compress.add_argument("--prompt-embedding-key", required=True)
-    zero_compress.add_argument("--compression-config-pickle", required=True)
+    zero_compress.add_argument(
+        "--compression-config-pickle",
+        required=True,
+        help=_trusted_pickle_help("Pickled EmbeddingCompressionConfig."),
+    )
     zero_compress.add_argument("--output-prefix")
     zero_compress.add_argument("--output-json")
     zero_compress.set_defaults(func=_cmd_compress_zero_shot)
@@ -402,7 +488,10 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose.add_argument("--labels-key")
     diagnose.add_argument("--score-key")
     diagnose.add_argument("--plan-json")
-    diagnose.add_argument("--separatix-config-pickle")
+    diagnose.add_argument(
+        "--separatix-config-pickle",
+        help=_trusted_pickle_help("Optional pickled SeparatixConfig."),
+    )
     diagnose.add_argument("--groups-key")
     diagnose.add_argument("--output-key")
     diagnose.add_argument("--output-json")
@@ -446,7 +535,10 @@ def build_parser() -> argparse.ArgumentParser:
     repeats.add_argument("--seed", action="append", type=int, default=[])
     repeats.add_argument("--repeats", type=int)
     repeats.add_argument("--random-state", type=int, default=42)
-    repeats.add_argument("--scoring-config-pickle")
+    repeats.add_argument(
+        "--scoring-config-pickle",
+        help=_trusted_pickle_help("Optional pickled overlap scoring configuration."),
+    )
     repeats.add_argument("--metric", action="append", default=[])
     repeats.add_argument("--metric-name", action="append", default=[])
     repeats.add_argument("--metric-config-json", action="append", default=[])
@@ -480,7 +572,10 @@ def build_parser() -> argparse.ArgumentParser:
     artifacts.add_argument("--output-json")
     artifacts.set_defaults(func=_cmd_benchmark_from_artifacts)
 
-    slurm = subparsers.add_parser("slurm-array", help="Generate a SLURM array script.")
+    slurm = subparsers.add_parser(
+        "slurm-array",
+        help="Generate the SLURM fit/plan/array submission workflow files.",
+    )
     _add_object_args(slurm)
     _add_cache_arg(slurm)
     slurm.add_argument("--total-shards", type=int, required=True)
@@ -535,7 +630,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
-    extractor = _load_pickle(args.extractor_pickle)
+    extractor, fitted_extractor_path = _load_or_create_fitted_extractor(
+        args.extractor_pickle, dataset
+    )
+    fitted_extractor_path = str(Path(fitted_extractor_path).resolve())
     resource_config = _resource_profiling_config_from_args(args)
     jobs = plan_embedding_shard_jobs(
         dataset=dataset,
@@ -544,25 +642,43 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
         batch_size=args.batch_size,
         resource_profiling_config=resource_config,
     )
-    base_key = embedding_artifact_key(dataset, extractor)
+    base_key = jobs[0].output_key.rsplit("/shards/", 1)[0]
+    labels_key = labels_artifact_key(dataset)
+    groups_key = (
+        groups_artifact_key(dataset)
+        if callable(getattr(dataset, "groups", None)) and dataset.groups() is not None
+        else None
+    )
+    default_scoring_config = OverlapScoringConfig()
     plan = {
-        "dataset_pickle": str(Path(args.dataset_pickle)),
-        "extractor_pickle": str(Path(args.extractor_pickle)),
+        "artifact_type": _EMBEDDING_PLAN_TYPE,
+        "schema_version": _EMBEDDING_PLAN_SCHEMA_VERSION,
+        "dataset_identity_key": dataset.identity_key(),
+        "fitted_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+        "fitted_bundle_sha256": _sha256_file(Path(fitted_extractor_path)),
+        "dataset_pickle": str(Path(args.dataset_pickle).resolve()),
+        "extractor_pickle": fitted_extractor_path,
         "cache_dir": args.cache_dir,
         "storage_options": _artifact_store_options_from_args(args),
         "base_key": base_key,
         "output_key": base_key,
-        "labels_key": labels_artifact_key(dataset),
-        "groups_key": (
-            groups_artifact_key(dataset)
-            if callable(getattr(dataset, "groups", None)) and dataset.groups() is not None
-            else None
+        "labels_key": labels_key,
+        "groups_key": groups_key,
+        "score_key": scoring_artifact_key(
+            base_key,
+            labels_key=labels_key,
+            groups_key=groups_key,
+            scoring_config=default_scoring_config,
+            metrics=(),
+            primary_metric="overlap",
         ),
-        "score_key": scoring_artifact_key(base_key),
         "n_samples": int(len(dataset.y)),
-        "total_shards": args.total_shards,
+        "requested_total_shards": args.total_shards,
+        "total_shards": len(jobs),
         "batch_size": args.batch_size,
         "backend": args.backend,
+        "cache_eligible": jobs[0].cache_eligible,
+        "cache_status": jobs[0].cache_status,
         "resource_profiling_config": asdict(resource_config),
         "shard_jobs": [
             {
@@ -579,7 +695,14 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "name": output_name,
                 "output_key": embedding_output_key(base_key, output_name),
-                "score_key": scoring_artifact_key(embedding_output_key(base_key, output_name)),
+                "score_key": scoring_artifact_key(
+                    embedding_output_key(base_key, output_name),
+                    labels_key=labels_key,
+                    groups_key=groups_key,
+                    scoring_config=default_scoring_config,
+                    metrics=(),
+                    primary_metric="overlap",
+                ),
                 "shard_keys": [
                     embedding_output_shard_key(job["output_key"], output_name)
                     for job in plan["shard_jobs"]
@@ -590,22 +713,244 @@ def _cmd_plan(args: argparse.Namespace) -> dict[str, Any]:
     return plan
 
 
+def _validated_embedding_plan_entry(
+    plan: Any,
+    *,
+    dataset: Any,
+    extractor: Any,
+    extractor_pickle: str,
+    shard_index: int,
+    total_shards: Optional[int],
+    output_key: Optional[str],
+) -> dict[str, Any]:
+    """Validate a schema-v2 embedding plan before a shard can publish data."""
+
+    if not isinstance(plan, dict):
+        raise TypeError("--plan-json must contain a JSON object.")
+    if (
+        plan.get("artifact_type") != _EMBEDDING_PLAN_TYPE
+        or plan.get("schema_version") != _EMBEDDING_PLAN_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "--plan-json is stale or invalid; embed-shard requires an embedding "
+            "shard plan with schema_version=2."
+        )
+
+    dataset_identity_key = dataset.identity_key()
+    if plan.get("dataset_identity_key") != dataset_identity_key:
+        raise ValueError("--plan-json belongs to a different dataset identity.")
+    fitted_recipe_hash = fingerprint_extractor_recipe(extractor.recipe())
+    if plan.get("fitted_recipe_hash") != fitted_recipe_hash:
+        raise ValueError("--plan-json belongs to a different fitted extractor recipe.")
+
+    planned_bundle = plan.get("extractor_pickle")
+    if not isinstance(planned_bundle, str) or not planned_bundle:
+        raise ValueError("--plan-json is missing its fitted extractor bundle path.")
+    actual_bundle_path = Path(extractor_pickle).resolve()
+    if actual_bundle_path != Path(planned_bundle).resolve():
+        raise ValueError(
+            "--extractor-pickle differs from the fitted extractor bundle bound to " "--plan-json."
+        )
+    expected_cache_eligible, expected_cache_status = extractor_cache_reuse_decision(
+        extractor.recipe()
+    )
+    if type(plan.get("cache_eligible")) is not bool or (
+        plan["cache_eligible"] is not expected_cache_eligible
+    ):
+        raise ValueError("--plan-json has an invalid cache-eligibility contract.")
+    if plan.get("cache_status") != expected_cache_status:
+        raise ValueError("--plan-json has an invalid cache-status contract.")
+
+    n_samples = _validated_positive_int(plan.get("n_samples"), "plan n_samples")
+    if n_samples != int(len(dataset.y)):
+        raise ValueError("--plan-json has a sample count inconsistent with the dataset.")
+    requested_total_shards = _validated_positive_int(
+        plan.get("requested_total_shards"), "plan requested_total_shards"
+    )
+    planned_total_shards = _validated_positive_int(plan.get("total_shards"), "plan total_shards")
+    _validated_positive_int(plan.get("batch_size"), "plan batch_size")
+    expected_total_shards = (
+        min(requested_total_shards, n_samples)
+        if bool(getattr(extractor, "streaming_safe", False))
+        else 1
+    )
+    if planned_total_shards != expected_total_shards:
+        raise ValueError("--plan-json has an invalid effective shard count.")
+
+    canonical_base_key = embedding_artifact_key(dataset, extractor)
+    base_key = plan.get("base_key")
+    if not isinstance(base_key, str) or not base_key:
+        raise ValueError("--plan-json is missing its embedding base key.")
+    if expected_cache_eligible:
+        if base_key != canonical_base_key:
+            raise ValueError("--plan-json has a noncanonical embedding base key.")
+    else:
+        suffix = f"/{canonical_base_key}"
+        run_prefix = base_key[: -len(suffix)] if base_key.endswith(suffix) else ""
+        if re.fullmatch(r"runs/[0-9a-f]{32}", run_prefix) is None:
+            raise ValueError("--plan-json has an invalid run-scoped embedding base key.")
+    if plan.get("output_key") != base_key:
+        raise ValueError("--plan-json output_key must equal its canonical base_key.")
+
+    shard_jobs = plan.get("shard_jobs")
+    if not isinstance(shard_jobs, list) or len(shard_jobs) != planned_total_shards:
+        raise ValueError("--plan-json has an incomplete shard job list.")
+    validated_entries: dict[int, dict[str, Any]] = {}
+    canonical_shard_keys: list[str] = []
+    for item in shard_jobs:
+        if not isinstance(item, dict):
+            raise ValueError("--plan-json shard jobs must be JSON objects.")
+        item_total = _validated_positive_int(item.get("total_shards"), "plan shard total_shards")
+        item_index = item.get("shard_index")
+        if (
+            isinstance(item_index, bool)
+            or not isinstance(item_index, int)
+            or item_index < 0
+            or item_index >= planned_total_shards
+        ):
+            raise ValueError("--plan-json contains an invalid shard index.")
+        if item_total != planned_total_shards or item_index in validated_entries:
+            raise ValueError("--plan-json contains inconsistent or duplicate shard jobs.")
+        shard = ShardSpec(total_shards=item_total, shard_index=item_index)
+        expected_shard_key = embedding_shard_key(base_key, shard)
+        if item.get("output_key") != expected_shard_key:
+            raise ValueError("--plan-json contains a noncanonical shard output key.")
+        validated_entries[item_index] = item
+        canonical_shard_keys.append(expected_shard_key)
+    if set(validated_entries) != set(range(planned_total_shards)):
+        raise ValueError("--plan-json does not cover every planned shard exactly once.")
+
+    output_names = _multi_output_plan_names(extractor)
+    outputs = plan.get("outputs")
+    if output_names:
+        if not isinstance(outputs, list) or len(outputs) != len(output_names):
+            raise ValueError("--plan-json has an incomplete multi-output contract.")
+        for index, name in enumerate(output_names):
+            output = outputs[index]
+            if not isinstance(output, dict) or output.get("name") != name:
+                raise ValueError("--plan-json has inconsistent multi-output names.")
+            if output.get("output_key") != embedding_output_key(base_key, name):
+                raise ValueError("--plan-json has a noncanonical named-output key.")
+            expected_output_shards = [
+                embedding_output_shard_key(key, name) for key in canonical_shard_keys
+            ]
+            if output.get("shard_keys") != expected_output_shards:
+                raise ValueError("--plan-json has noncanonical named-output shard keys.")
+    elif outputs not in (None, []):
+        raise ValueError("--plan-json declares outputs for a single-output extractor.")
+
+    if output_key is not None:
+        raise ValueError("--output-key cannot be combined with --plan-json.")
+    selected = validated_entries.get(shard_index)
+    if selected is None:
+        raise ValueError("--plan-json does not contain the requested shard index.")
+    if total_shards is not None and total_shards != selected["total_shards"]:
+        raise ValueError("--total-shards conflicts with the selected plan entry.")
+    return selected
+
+
+def _cmd_fit_extractor(args: argparse.Namespace) -> dict[str, Any]:
+    dataset = _load_pickle(args.dataset_pickle)
+    extractor, bundle_path = _fit_extractor_bundle(
+        source_path=Path(args.extractor_pickle),
+        dataset=dataset,
+        bundle_path=Path(args.output_pickle),
+        overwrite=bool(args.force),
+    )
+    bundle = _load_pickle(bundle_path)
+    _validated_fitted_extractor_bundle(bundle, dataset)
+    return {
+        "artifact_type": _FITTED_EXTRACTOR_BUNDLE_TYPE,
+        "dataset_identity_key": dataset.identity_key(),
+        "source_recipe_hash": bundle["source_recipe_hash"],
+        "fitted_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+        "output_pickle": bundle_path,
+    }
+
+
 def _cmd_embed_shard(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
-    extractor = _load_pickle(args.extractor_pickle)
-    shard = ShardSpec(total_shards=args.total_shards, shard_index=args.shard_index)
-    output_key = args.output_key or embedding_shard_key(
-        embedding_artifact_key(dataset, extractor),
-        shard,
-    )
-    job = EmbeddingShardJob(
-        dataset=dataset,
-        extractor=extractor,
-        shard=shard,
-        output_key=output_key,
-        batch_size=args.batch_size,
-        resource_profiling_config=_resource_profiling_config_from_args(args),
-    )
+    plan = _load_json(args.plan_json) if args.plan_json else None
+    if plan is not None:
+        if not isinstance(plan, dict):
+            raise TypeError("--plan-json must contain a JSON object.")
+        if (
+            plan.get("artifact_type") != _EMBEDDING_PLAN_TYPE
+            or plan.get("schema_version") != _EMBEDDING_PLAN_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "--plan-json is stale or invalid; embed-shard requires an embedding "
+                "shard plan with schema_version=2."
+            )
+        planned_bundle = plan.get("extractor_pickle")
+        if not isinstance(planned_bundle, str) or not planned_bundle:
+            raise ValueError("--plan-json is missing its fitted extractor bundle path.")
+        if Path(args.extractor_pickle).resolve() != Path(planned_bundle).resolve():
+            raise ValueError(
+                "--extractor-pickle differs from the fitted extractor bundle bound to "
+                "--plan-json."
+            )
+        planned_bundle_sha256 = plan.get("fitted_bundle_sha256")
+        if (
+            not isinstance(planned_bundle_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", planned_bundle_sha256) is None
+        ):
+            raise ValueError("--plan-json has an invalid fitted extractor bundle digest.")
+        extractor = _load_planned_fitted_extractor_bundle(
+            args.extractor_pickle,
+            dataset,
+            expected_sha256=planned_bundle_sha256,
+        )
+    else:
+        extractor = _load_fitted_extractor_bundle(args.extractor_pickle, dataset)
+    if plan is not None:
+        planned = _validated_embedding_plan_entry(
+            plan,
+            dataset=dataset,
+            extractor=extractor,
+            extractor_pickle=args.extractor_pickle,
+            shard_index=args.shard_index,
+            total_shards=args.total_shards,
+            output_key=args.output_key,
+        )
+        shard = ShardSpec(
+            total_shards=planned["total_shards"],
+            shard_index=planned["shard_index"],
+        )
+        batch_size = int(plan.get("batch_size", args.batch_size))
+        job = EmbeddingShardJob(
+            dataset=dataset,
+            extractor=extractor,
+            shard=shard,
+            output_key=planned["output_key"],
+            batch_size=batch_size,
+            streaming_enabled=bool(getattr(extractor, "streaming_safe", False)),
+            cache_eligible=bool(plan.get("cache_eligible", True)),
+            cache_status=str(plan.get("cache_status", "miss")),
+            resource_profiling_config=_resource_profiling_config_from_args(args, plan),
+        )
+    else:
+        if args.total_shards is None:
+            raise ValueError("embed-shard requires --total-shards without --plan-json.")
+        jobs = plan_embedding_shard_jobs(
+            dataset,
+            extractor,
+            total_shards=args.total_shards,
+            batch_size=args.batch_size,
+            resource_profiling_config=_resource_profiling_config_from_args(args),
+        )
+        try:
+            job = jobs[args.shard_index]
+        except IndexError as exc:
+            raise ValueError(
+                f"shard-index {args.shard_index} is outside the effective {len(jobs)} shards."
+            ) from exc
+        if args.output_key is not None:
+            if not job.cache_eligible and not args.output_key.startswith("runs/"):
+                raise ValueError(
+                    "Unsafe extractor identities require --output-key beneath 'runs/'."
+                )
+            job = replace(job, output_key=args.output_key)
     return materialize_embedding_shard(job, _store_from_args(args))
 
 
@@ -632,8 +977,16 @@ def _cmd_merge_embeddings(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
-    extractor = _load_pickle(args.extractor_pickle)
+    if args.query_branch is None or args.gallery_branch is None:
+        extractor, extractor_pickle = _load_or_create_fitted_retrieval_extractor(
+            args.extractor_pickle,
+            dataset,
+        )
+    else:
+        extractor = _load_pickle(args.extractor_pickle)
+        extractor_pickle = str(Path(args.extractor_pickle))
     resource_config = _resource_profiling_config_from_args(args)
+    run_prefix = f"runs/{uuid4().hex}" if extractor.recipe().get("cache_safe") is False else None
     query_jobs = plan_retrieval_embedding_shard_jobs(
         dataset,
         extractor,
@@ -642,6 +995,7 @@ def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
         branch=args.query_branch,
         batch_size=args.batch_size,
         resource_profiling_config=resource_config,
+        run_prefix=run_prefix,
     )
     gallery_jobs = plan_retrieval_embedding_shard_jobs(
         dataset,
@@ -651,11 +1005,13 @@ def _cmd_plan_retrieval(args: argparse.Namespace) -> dict[str, Any]:
         branch=args.gallery_branch,
         batch_size=args.batch_size,
         resource_profiling_config=resource_config,
+        run_prefix=run_prefix,
     )
     return {
         "artifact_type": "retrieval_embedding_plan",
         "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+        "extractor_pickle": extractor_pickle,
         "resource_profiling_config": asdict(resource_config),
         "endpoints": {
             "query": _retrieval_endpoint_plan(query_jobs),
@@ -669,15 +1025,17 @@ def _retrieval_endpoint_plan(jobs: Sequence[RetrievalEmbeddingShardJob]) -> dict
     if not jobs:
         raise ValueError("Retrieval endpoint planning requires at least one shard job.")
     first = jobs[0]
-    values = first.dataset.queries if first.side == "query" else first.dataset.gallery
-    base_key = retrieval_embedding_artifact_key(
-        first.dataset, first.extractor, first.side, first.branch
+    values = (
+        first.dataset.query_values() if first.side == "query" else first.dataset.gallery_values()
     )
+    base_key = first.output_key.rsplit("/shards/", 1)[0]
     return {
         "side": first.side,
         "branch": first.branch,
         "n_samples": len(values),
         "output_key": base_key,
+        "cache_eligible": first.cache_eligible,
+        "cache_status": first.cache_status,
         "shards": [
             {
                 "side": job.side,
@@ -694,21 +1052,77 @@ def _retrieval_endpoint_plan(jobs: Sequence[RetrievalEmbeddingShardJob]) -> dict
 def _cmd_embed_retrieval_shard(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
-    shard = ShardSpec(total_shards=args.total_shards, shard_index=args.shard_index)
-    base_key = retrieval_embedding_artifact_key(dataset, extractor, args.side, args.branch)
-    return materialize_retrieval_embedding_shard(
-        RetrievalEmbeddingShardJob(
+    fitted_bundle = False
+    if isinstance(extractor, dict) and extractor.get("artifact_type") == (
+        _FITTED_RETRIEVAL_EXTRACTOR_BUNDLE_TYPE
+    ):
+        extractor = _validated_fitted_retrieval_extractor_bundle(extractor, dataset)
+        fitted_bundle = True
+    elif args.branch is None and getattr(extractor, "already_fitted", True) is False:
+        raise TypeError(
+            "Standard retrieval shard workers require a fitted retrieval bundle. "
+            "Run plan-retrieval first and use its extractor_pickle."
+        )
+    plan = _load_json(args.plan_json) if args.plan_json else None
+    if plan is not None:
+        endpoint = plan.get("endpoints", {}).get(args.side)
+        if endpoint is None:
+            raise ValueError("--plan-json does not contain the requested retrieval endpoint.")
+        planned = next(
+            (
+                item
+                for item in endpoint.get("shards", [])
+                if item.get("shard", {}).get("shard_index") == args.shard_index
+            ),
+            None,
+        )
+        if planned is None:
+            raise ValueError("--plan-json does not contain the requested retrieval shard.")
+        if args.branch is not None and args.branch != planned.get("branch"):
+            raise ValueError("--branch conflicts with the selected retrieval plan entry.")
+        if args.total_shards is not None and args.total_shards != planned["shard"]["total_shards"]:
+            raise ValueError("--total-shards conflicts with the retrieval plan entry.")
+        job = RetrievalEmbeddingShardJob(
             dataset=dataset,
             extractor=extractor,
             side=args.side,
+            branch=planned.get("branch"),
+            shard=ShardSpec(**planned["shard"]),
+            output_key=args.output_key or planned["output_key"],
+            batch_size=int(planned.get("batch_size", args.batch_size)),
+            streaming_enabled=bool(getattr(extractor, "streaming_safe", False)),
+            cache_eligible=bool(endpoint.get("cache_eligible", True)),
+            cache_status=str(endpoint.get("cache_status", "miss")),
+            fitted_bundle=fitted_bundle,
+            resource_profiling_config=_resource_profiling_config_from_args(args, plan),
+        )
+    else:
+        if args.total_shards is None:
+            raise ValueError("embed-retrieval-shard requires --total-shards without --plan-json.")
+        jobs = plan_retrieval_embedding_shard_jobs(
+            dataset,
+            extractor,
+            args.total_shards,
+            side=args.side,
             branch=args.branch,
-            shard=shard,
-            output_key=args.output_key or retrieval_embedding_shard_key(base_key, shard),
             batch_size=args.batch_size,
             resource_profiling_config=_resource_profiling_config_from_args(args),
-        ),
-        _store_from_args(args),
-    )
+        )
+        try:
+            job = jobs[args.shard_index]
+        except IndexError as exc:
+            raise ValueError(
+                f"shard-index {args.shard_index} is outside the effective {len(jobs)} shards."
+            ) from exc
+        if args.output_key is not None:
+            if not job.cache_eligible and not args.output_key.startswith("runs/"):
+                raise ValueError(
+                    "Unsafe extractor identities require --output-key beneath 'runs/'."
+                )
+            job = replace(job, output_key=args.output_key)
+        if fitted_bundle:
+            job = replace(job, fitted_bundle=True)
+    return materialize_retrieval_embedding_shard(job, _store_from_args(args))
 
 
 def _cmd_merge_retrieval_embeddings(args: argparse.Namespace) -> dict[str, Any]:
@@ -738,6 +1152,7 @@ def _cmd_plan_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     extractor = _load_pickle(args.extractor_pickle)
     resource_config = _resource_profiling_config_from_args(args)
+    run_prefix = f"runs/{uuid4().hex}" if extractor.recipe().get("cache_safe") is False else None
     sample_jobs = plan_zero_shot_embedding_shard_jobs(
         dataset,
         extractor,
@@ -746,6 +1161,7 @@ def _cmd_plan_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
         branch=args.sample_branch,
         batch_size=args.batch_size,
         resource_profiling_config=resource_config,
+        run_prefix=run_prefix,
     )
     prompt_jobs = plan_zero_shot_embedding_shard_jobs(
         dataset,
@@ -755,6 +1171,7 @@ def _cmd_plan_zero_shot(args: argparse.Namespace) -> dict[str, Any]:
         branch=args.text_branch,
         batch_size=args.batch_size,
         resource_profiling_config=resource_config,
+        run_prefix=run_prefix,
     )
     return {
         "artifact_type": "zero_shot_embedding_plan",
@@ -774,14 +1191,14 @@ def _zero_shot_endpoint_plan(jobs: Sequence[ZeroShotEmbeddingShardJob]) -> dict[
         raise ValueError("Zero-shot endpoint planning requires at least one shard job.")
     first = jobs[0]
     values = first.dataset.samples if first.side == "samples" else first.dataset.prompt_rows()[0]
-    base_key = zero_shot_embedding_artifact_key(
-        first.dataset, first.extractor, first.side, first.branch
-    )
+    base_key = first.output_key.rsplit("/shards/", 1)[0]
     return {
         "side": first.side,
         "branch": first.branch,
         "n_samples": len(values),
         "output_key": base_key,
+        "cache_eligible": first.cache_eligible,
+        "cache_status": first.cache_status,
         "shards": [
             {
                 "side": job.side,
@@ -822,18 +1239,40 @@ def _cmd_embed_zero_shot_shard(args: argparse.Namespace) -> dict[str, Any]:
         shard = ShardSpec(**planned["shard"])
         output_key = args.output_key or planned["output_key"]
         batch_size = int(planned.get("batch_size", args.batch_size))
+        cache_eligible = bool(endpoint.get("cache_eligible", True))
+        cache_status = str(endpoint.get("cache_status", "miss"))
     else:
         if not args.branch or args.total_shards is None:
             raise ValueError(
                 "embed-zero-shot-shard requires --branch and --total-shards without --plan-json."
             )
-        branch = args.branch
-        shard = ShardSpec(total_shards=args.total_shards, shard_index=args.shard_index)
-        base_key = zero_shot_embedding_artifact_key(dataset, extractor, args.side, branch)
-        output_key = args.output_key or (
-            f"{base_key}/shards/{args.shard_index:05d}-of-{args.total_shards:05d}"
+        jobs = plan_zero_shot_embedding_shard_jobs(
+            dataset,
+            extractor,
+            args.total_shards,
+            side=args.side,
+            branch=args.branch,
+            batch_size=args.batch_size,
+            resource_profiling_config=_resource_profiling_config_from_args(args),
         )
-        batch_size = args.batch_size
+        try:
+            selected_job = jobs[args.shard_index]
+        except IndexError as exc:
+            raise ValueError(
+                f"shard-index {args.shard_index} is outside the effective {len(jobs)} shards."
+            ) from exc
+        if args.output_key is not None:
+            if not selected_job.cache_eligible and not args.output_key.startswith("runs/"):
+                raise ValueError(
+                    "Unsafe extractor identities require --output-key beneath 'runs/'."
+                )
+            selected_job = replace(selected_job, output_key=args.output_key)
+        branch = selected_job.branch
+        shard = selected_job.shard
+        output_key = selected_job.output_key
+        batch_size = selected_job.batch_size
+        cache_eligible = selected_job.cache_eligible
+        cache_status = selected_job.cache_status
     return materialize_zero_shot_embedding_shard(
         ZeroShotEmbeddingShardJob(
             dataset=dataset,
@@ -843,6 +1282,9 @@ def _cmd_embed_zero_shot_shard(args: argparse.Namespace) -> dict[str, Any]:
             shard=shard,
             output_key=output_key,
             batch_size=batch_size,
+            streaming_enabled=bool(getattr(extractor, "streaming_safe", False)),
+            cache_eligible=cache_eligible,
+            cache_status=cache_status,
             resource_profiling_config=_resource_profiling_config_from_args(args, plan),
         ),
         _store_from_args(args),
@@ -928,11 +1370,21 @@ def _cmd_materialize_structured(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_score(args: argparse.Namespace) -> dict[str, Any]:
     embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
-    output_key = args.output_key or scoring_artifact_key(embedding_key, seed=args.seed)
     scoring_config = (
-        _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
+        _load_pickle(args.scoring_config_pickle)
+        if args.scoring_config_pickle
+        else OverlapScoringConfig()
     )
     metrics = _metrics_from_args(args)
+    output_key = args.output_key or scoring_artifact_key(
+        embedding_key,
+        seed=args.seed,
+        labels_key=labels_key,
+        groups_key=groups_key,
+        scoring_config=scoring_config,
+        metrics=metrics,
+        primary_metric=args.primary_metric,
+    )
     return score_embedding_artifact(
         ScoringJob(
             embedding_key=embedding_key,
@@ -957,7 +1409,11 @@ def _cmd_score_retrieval(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(config, RetrievalConfig):
         raise TypeError("--retrieval-config-pickle must contain a RetrievalConfig.")
     output_key = args.output_key or retrieval_scoring_artifact_key(
-        args.query_embedding_key, args.gallery_embedding_key
+        args.query_embedding_key,
+        args.gallery_embedding_key,
+        relevance_key=args.relevance_key,
+        exclusions_key=args.exclusions_key,
+        retrieval_config=config,
     )
     return score_retrieval_artifact(
         RetrievalScoringJob(
@@ -994,19 +1450,28 @@ def _cmd_compress_retrieval(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_write_retrieval_relevance(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
     if not all(
-        hasattr(dataset, attribute) for attribute in ("relevance", "query_ids", "gallery_ids")
+        callable(getattr(dataset, attribute, None))
+        for attribute in (
+            "query_id_values",
+            "gallery_id_values",
+            "normalized_relevance",
+            "normalized_exclusions",
+        )
     ):
         raise TypeError("--dataset-pickle must contain a RetrievalDataset.")
+    query_ids = dataset.query_id_values()
+    gallery_ids = dataset.gallery_id_values()
     output_key = args.output_key or f"retrieval/relevance/{dataset.identity_key()}"
     payload = {
         "artifact_type": "retrieval_relevance",
-        "query_ids": list(dataset.query_ids),
-        "gallery_ids": list(dataset.gallery_ids),
-        "n_queries": len(dataset.query_ids),
-        "n_gallery": len(dataset.gallery_ids),
-        "relevance": dataset.relevance,
-        "exclusions": sorted(dataset.exclusions or ()),
+        "query_ids": list(query_ids),
+        "gallery_ids": list(gallery_ids),
+        "n_queries": len(query_ids),
+        "n_gallery": len(gallery_ids),
+        "relevance": dataset.normalized_relevance(),
+        "exclusions": sorted(dataset.normalized_exclusions()),
         "dataset_identity_key": dataset.identity_key(),
+        "protocol_fingerprint": dataset.identity_key(),
     }
     _store_from_args(args).put_json(output_key, payload)
     return {"output_key": output_key, **payload}
@@ -1134,11 +1599,24 @@ def _cmd_diagnose_complexity(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("diagnose-complexity requires --embedding-key or --plan-json.")
     if labels_key is None:
         raise ValueError("diagnose-complexity requires --labels-key or --plan-json.")
-    score_key = args.score_key or _resolve_score_key_from_plan(plan, embedding_key)
-    separatix_config = (
-        _load_pickle(args.separatix_config_pickle) if args.separatix_config_pickle else None
+    score_key = args.score_key or _resolve_score_key_from_plan(
+        plan,
+        embedding_key,
+        labels_key=labels_key,
+        groups_key=groups_key,
     )
-    output_key = args.output_key or separatix_artifact_key(embedding_key)
+    separatix_config = (
+        _load_pickle(args.separatix_config_pickle)
+        if args.separatix_config_pickle
+        else SeparatixConfig()
+    )
+    output_key = args.output_key or separatix_artifact_key(
+        embedding_key,
+        labels_key=labels_key,
+        groups_key=groups_key,
+        score_key=score_key,
+        separatix_config=separatix_config,
+    )
     return diagnose_embedding_artifact(
         SeparatixJob(
             embedding_key=embedding_key,
@@ -1176,7 +1654,9 @@ def _cmd_score_repeats(args: argparse.Namespace) -> dict[str, Any]:
     embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
     seeds = args.seed or _repeat_seeds(args.repeats, args.random_state)
     scoring_config = (
-        _load_pickle(args.scoring_config_pickle) if args.scoring_config_pickle else None
+        _load_pickle(args.scoring_config_pickle)
+        if args.scoring_config_pickle
+        else OverlapScoringConfig()
     )
     jobs = plan_scoring_jobs(
         embedding_key=embedding_key,
@@ -1252,29 +1732,77 @@ def _cmd_benchmark_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
 
 def _cmd_slurm_array(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
-    extractor = _load_pickle(args.extractor_pickle)
-    base_key = embedding_artifact_key(dataset, extractor)
-    script = _render_slurm_array_script(
-        args=args,
-        output_key=base_key,
-        labels_key=labels_artifact_key(dataset),
-        n_samples=len(dataset.y),
+    extractor, fitted_extractor_path, needs_fit = _planned_fitted_extractor(
+        args.extractor_pickle, dataset
+    )
+    requested_shards = _validated_positive_int(args.total_shards, "total_shards")
+    batch_size = _validated_positive_int(args.batch_size, "batch_size")
+    planned_shards = (
+        min(requested_shards, len(dataset.y))
+        if bool(getattr(extractor, "streaming_safe", False))
+        else 1
     )
     target = Path(args.script_output)
     target.parent.mkdir(parents=True, exist_ok=True)
+    plan_target = target.with_name(f"{target.stem}.plan.json")
+    rendered_args = argparse.Namespace(
+        **{
+            **vars(args),
+            "extractor_pickle": fitted_extractor_path,
+            "total_shards": planned_shards,
+            "batch_size": batch_size,
+        }
+    )
+    script = _render_slurm_array_script(
+        args=rendered_args,
+        plan_json=str(plan_target),
+    )
     target.write_text(script, encoding="utf-8")
+    fit_target = target.with_name(f"{target.stem}.fit{target.suffix}")
+    submit_target = target.with_name(f"{target.stem}.submit.sh")
+    if needs_fit:
+        fit_target.write_text(
+            _render_slurm_fit_script(
+                args,
+                fitted_extractor_path,
+                plan_json=str(plan_target),
+                planned_shards=planned_shards,
+            ),
+            encoding="utf-8",
+        )
+        submit_target.write_text(
+            _render_slurm_dependency_submission(fit_target, target),
+            encoding="utf-8",
+        )
+    else:
+        plan_args = argparse.Namespace(
+            **{
+                **vars(rendered_args),
+                "backend": "local",
+            }
+        )
+        _write_json_file(_cmd_plan(plan_args), str(plan_target))
+        submit_target.write_text(
+            "#!/usr/bin/env bash\nset -euo pipefail\n" f"sbatch {_shell_quote(target)}\n",
+            encoding="utf-8",
+        )
     return {
         "script_path": str(target),
-        "output_key": base_key,
+        "fit_script_path": str(fit_target) if needs_fit else None,
+        "submit_script_path": str(submit_target),
+        "fitted_extractor_pickle": fitted_extractor_path,
+        "plan_json": str(plan_target),
+        "output_key": None,
         "n_samples": int(len(dataset.y)),
-        "total_shards": args.total_shards,
-        "batch_size": args.batch_size,
+        "requested_total_shards": args.total_shards,
+        "total_shards": planned_shards,
+        "batch_size": batch_size,
     }
 
 
 def _cmd_run_embedding_shards(args: argparse.Namespace) -> dict[str, Any]:
     dataset = _load_pickle(args.dataset_pickle)
-    extractor = _load_pickle(args.extractor_pickle)
+    extractor, _ = _load_or_create_fitted_extractor(args.extractor_pickle, dataset)
     jobs = plan_embedding_shard_jobs(
         dataset=dataset,
         extractor=extractor,
@@ -1310,80 +1838,88 @@ def _cmd_slurm_score_array(args: argparse.Namespace) -> dict[str, Any]:
         "embedding_key": embedding_key,
         "labels_key": labels_key,
         "groups_key": groups_key,
-        "score_keys": [scoring_artifact_key(embedding_key, seed=seed) for seed in seeds],
+        "score_keys": [
+            scoring_artifact_key(
+                embedding_key,
+                seed=seed,
+                labels_key=labels_key,
+                groups_key=groups_key,
+                scoring_config=OverlapScoringConfig(),
+                metrics=(),
+                primary_metric="overlap",
+            )
+            for seed in seeds
+        ],
         "seeds": seeds,
     }
 
 
 def _render_slurm_array_script(
     args: argparse.Namespace,
-    output_key: str,
-    labels_key: str,
-    n_samples: int,
+    plan_json: str,
 ) -> str:
+    total_shards = _validated_positive_int(args.total_shards, "total_shards")
+    batch_size = _validated_positive_int(args.batch_size, "batch_size")
+    job_name = _validated_slurm_value(args.job_name, "job_name")
+    time_limit = _validated_slurm_value(args.time, "time")
+    memory = _validated_slurm_value(args.mem, "mem")
+    cpus = _validated_positive_int(args.cpus_per_task, "cpus_per_task")
     lines = [
         "#!/usr/bin/env bash",
-        f"#SBATCH --job-name={args.job_name}",
-        f"#SBATCH --array=0-{args.total_shards - 1}",
-        f"#SBATCH --time={args.time}",
-        f"#SBATCH --mem={args.mem}",
-        f"#SBATCH --cpus-per-task={args.cpus_per_task}",
+        f"#SBATCH --job-name={job_name}",
+        f"#SBATCH --array=0-{total_shards - 1}",
+        f"#SBATCH --time={time_limit}",
+        f"#SBATCH --mem={memory}",
+        f"#SBATCH --cpus-per-task={cpus}",
     ]
-    if args.partition:
-        lines.append(f"#SBATCH --partition={args.partition}")
+    if args.partition is not None:
+        lines.append(f"#SBATCH --partition={_validated_slurm_value(args.partition, 'partition')}")
     lines.extend(
         [
             "set -euo pipefail",
             "",
-            f"{args.python_executable} -m vertebrae.cli embed-shard \\",
-            f"  --dataset-pickle {args.dataset_pickle} \\",
-            f"  --extractor-pickle {args.extractor_pickle} \\",
-            f"  --cache-dir {args.cache_dir} \\",
+            f"{_shell_quote(args.python_executable)} -m vertebrae.cli embed-shard \\",
+            f"  --dataset-pickle {_shell_quote(args.dataset_pickle)} \\",
+            f"  --extractor-pickle {_shell_quote(args.extractor_pickle)} \\",
+            f"  --cache-dir {_shell_quote(args.cache_dir)} \\",
             *_cache_flag_lines(args),
-            f"  --total-shards {args.total_shards} \\",
-            "  --shard-index ${SLURM_ARRAY_TASK_ID} \\",
+            f"  --plan-json {_shell_quote(plan_json)} \\",
+            '  --shard-index "${SLURM_ARRAY_TASK_ID}" \\',
             *(
                 [
                     "  --resource-profiling-config-pickle "
-                    f"{args.resource_profiling_config_pickle} \\",
+                    f"{_shell_quote(args.resource_profiling_config_pickle)} \\",
                 ]
                 if args.resource_profiling_config_pickle
                 else []
             ),
-            f"  --batch-size {args.batch_size}",
+            f"  --batch-size {batch_size}",
             "",
             "# After the array completes, merge the shards with:",
-            f"# {args.python_executable} -m vertebrae.cli merge-embeddings \\",
-            f"#   --cache-dir {args.cache_dir} \\",
+            f"# {_shell_quote(args.python_executable)} -m vertebrae.cli merge-embeddings \\",
+            f"#   --cache-dir {_shell_quote(args.cache_dir)} \\",
             *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
-            f"#   --output-key {output_key} \\",
-            f"#   --n-samples {n_samples} \\",
+            f"#   --plan-json {_shell_quote(plan_json)}",
         ]
     )
-    for shard_index in range(args.total_shards):
-        shard = ShardSpec(total_shards=args.total_shards, shard_index=shard_index)
-        suffix = " \\" if shard_index < args.total_shards - 1 else ""
-        lines.append(f"#   --shard-key {embedding_shard_key(output_key, shard)}{suffix}")
     lines.extend(
         [
             "#",
             "# Then materialize labels and score:",
-            f"# {args.python_executable} -m vertebrae.cli write-labels \\",
-            f"#   --dataset-pickle {args.dataset_pickle} \\",
-            f"#   --cache-dir {args.cache_dir} \\",
+            f"# {_shell_quote(args.python_executable)} -m vertebrae.cli write-labels \\",
+            f"#   --dataset-pickle {_shell_quote(args.dataset_pickle)} \\",
+            f"#   --cache-dir {_shell_quote(args.cache_dir)} \\",
             *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
-            f"# {args.python_executable} -m vertebrae.cli score \\",
-            f"#   --cache-dir {args.cache_dir} \\",
+            f"# {_shell_quote(args.python_executable)} -m vertebrae.cli score \\",
+            f"#   --cache-dir {_shell_quote(args.cache_dir)} \\",
             *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
-            f"#   --embedding-key {output_key} \\",
-            f"#   --labels-key {labels_key}",
+            f"#   --plan-json {_shell_quote(plan_json)}",
             "#",
             "# For distributed stability scoring, generate a scoring array with:",
-            f"# {args.python_executable} -m vertebrae.cli slurm-score-array \\",
-            f"#   --cache-dir {args.cache_dir} \\",
+            f"# {_shell_quote(args.python_executable)} -m vertebrae.cli slurm-score-array \\",
+            f"#   --cache-dir {_shell_quote(args.cache_dir)} \\",
             *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
-            f"#   --embedding-key {output_key} \\",
-            f"#   --labels-key {labels_key} \\",
+            f"#   --plan-json {_shell_quote(plan_json)} \\",
             "#   --repeats 20 \\",
             "#   --script-output vertebrae_score.sbatch",
             "",
@@ -1392,61 +1928,153 @@ def _render_slurm_array_script(
     return "\n".join(lines)
 
 
-def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int]) -> str:
-    embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
+def _render_slurm_fit_script(
+    args: argparse.Namespace,
+    output_pickle: str,
+    *,
+    plan_json: str,
+    planned_shards: int,
+) -> str:
+    planned_shards = _validated_positive_int(planned_shards, "total_shards")
+    batch_size = _validated_positive_int(args.batch_size, "batch_size")
+    job_name = _validated_slurm_value(f"{args.job_name}-fit", "job_name")
+    time_limit = _validated_slurm_value(args.time, "time")
+    memory = _validated_slurm_value(args.mem, "mem")
+    cpus = _validated_positive_int(args.cpus_per_task, "cpus_per_task")
     lines = [
         "#!/usr/bin/env bash",
-        f"#SBATCH --job-name={args.job_name}",
-        f"#SBATCH --array=0-{len(seeds) - 1}",
-        f"#SBATCH --time={args.time}",
-        f"#SBATCH --mem={args.mem}",
-        f"#SBATCH --cpus-per-task={args.cpus_per_task}",
+        f"#SBATCH --job-name={job_name}",
+        f"#SBATCH --time={time_limit}",
+        f"#SBATCH --mem={memory}",
+        f"#SBATCH --cpus-per-task={cpus}",
     ]
-    if args.partition:
-        lines.append(f"#SBATCH --partition={args.partition}")
+    if args.partition is not None:
+        lines.append(f"#SBATCH --partition={_validated_slurm_value(args.partition, 'partition')}")
+    lines.extend(
+        [
+            "set -euo pipefail",
+            "",
+            f"{_shell_quote(args.python_executable)} -m vertebrae.cli fit-extractor \\",
+            f"  --dataset-pickle {_shell_quote(args.dataset_pickle)} \\",
+            f"  --extractor-pickle {_shell_quote(args.extractor_pickle)} \\",
+            f"  --output-pickle {_shell_quote(output_pickle)}",
+            "",
+            f"{_shell_quote(args.python_executable)} -m vertebrae.cli plan \\",
+            f"  --dataset-pickle {_shell_quote(args.dataset_pickle)} \\",
+            f"  --extractor-pickle {_shell_quote(output_pickle)} \\",
+            f"  --cache-dir {_shell_quote(args.cache_dir)} \\",
+            *_cache_flag_lines(args),
+            f"  --total-shards {planned_shards} \\",
+            f"  --batch-size {batch_size} \\",
+            *(
+                [
+                    "  --resource-profiling-config-pickle "
+                    f"{_shell_quote(args.resource_profiling_config_pickle)} \\",
+                ]
+                if args.resource_profiling_config_pickle
+                else []
+            ),
+            f"  --output-json {_shell_quote(plan_json)}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_slurm_dependency_submission(fit_script: Path, array_script: Path) -> str:
+    return "\n".join(
+        [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            f'FIT_JOB_ID="$(sbatch --parsable {_shell_quote(fit_script)})"',
+            f'sbatch --dependency="afterok:${{FIT_JOB_ID}}" {_shell_quote(array_script)}',
+            "",
+        ]
+    )
+
+
+def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int]) -> str:
+    embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
+    job_name = _validated_slurm_value(args.job_name, "job_name")
+    time_limit = _validated_slurm_value(args.time, "time")
+    memory = _validated_slurm_value(args.mem, "mem")
+    cpus = _validated_positive_int(args.cpus_per_task, "cpus_per_task")
+    lines = [
+        "#!/usr/bin/env bash",
+        f"#SBATCH --job-name={job_name}",
+        f"#SBATCH --array=0-{len(seeds) - 1}",
+        f"#SBATCH --time={time_limit}",
+        f"#SBATCH --mem={memory}",
+        f"#SBATCH --cpus-per-task={cpus}",
+    ]
+    if args.partition is not None:
+        lines.append(f"#SBATCH --partition={_validated_slurm_value(args.partition, 'partition')}")
     seed_values = " ".join(str(seed) for seed in seeds)
     lines.extend(
         [
             "set -euo pipefail",
             f"SEEDS=({seed_values})",
-            "SEED=${SEEDS[${SLURM_ARRAY_TASK_ID}]}",
+            'SEED="${SEEDS[${SLURM_ARRAY_TASK_ID}]}"',
             "",
-            f"{args.python_executable} -m vertebrae.cli score \\",
-            f"  --cache-dir {args.cache_dir} \\",
+            f"{_shell_quote(args.python_executable)} -m vertebrae.cli score \\",
+            f"  --cache-dir {_shell_quote(args.cache_dir)} \\",
             *_cache_flag_lines(args),
-            f"  --embedding-key {embedding_key} \\",
-            f"  --labels-key {labels_key} \\",
+            f"  --embedding-key {_shell_quote(embedding_key)} \\",
+            f"  --labels-key {_shell_quote(labels_key)} \\",
         ]
     )
     if groups_key is not None:
-        lines.append(f"  --groups-key {groups_key} \\")
+        lines.append(f"  --groups-key {_shell_quote(groups_key)} \\")
     lines.extend(
         [
-            "  --seed ${SEED}",
+            '  --seed "${SEED}"',
             "",
             "# After the array completes, collect scores with:",
-            f"# {args.python_executable} -m vertebrae.cli collect-scores \\",
-            f"#   --cache-dir {args.cache_dir} \\",
+            f"# {_shell_quote(args.python_executable)} -m vertebrae.cli collect-scores \\",
+            f"#   --cache-dir {_shell_quote(args.cache_dir)} \\",
             *[f"#   {line}" for line in _cache_flag_lines(args, indent=False)],
-            f"#   --output-key {embedding_key}/scores/stability \\",
+            f"#   --output-key {_shell_quote(f'{embedding_key}/scores/stability')} \\",
         ]
     )
     for index, seed in enumerate(seeds):
         suffix = " \\" if index < len(seeds) - 1 else ""
-        lines.append(f"#   --score-key {scoring_artifact_key(embedding_key, seed=seed)}{suffix}")
+        score_key = scoring_artifact_key(
+            embedding_key,
+            seed=seed,
+            labels_key=labels_key,
+            groups_key=groups_key,
+            scoring_config=OverlapScoringConfig(),
+            metrics=(),
+            primary_metric="overlap",
+        )
+        lines.append(f"#   --score-key {_shell_quote(score_key)}{suffix}")
     lines.append("")
     return "\n".join(lines)
 
 
-def _add_object_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--dataset-pickle", required=True)
-    parser.add_argument("--extractor-pickle", required=True)
+def _add_object_args(
+    parser: argparse.ArgumentParser,
+    *,
+    extractor_description: str = "Pickled extractor object.",
+) -> None:
+    parser.add_argument(
+        "--dataset-pickle",
+        required=True,
+        help=_trusted_pickle_help("Pickled dataset object."),
+    )
+    parser.add_argument(
+        "--extractor-pickle",
+        required=True,
+        help=_trusted_pickle_help(extractor_description),
+    )
 
 
 def _add_resource_profiling_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--resource-profiling-config-pickle",
-        help="Pickled ResourceProfilingConfig propagated to extraction workers.",
+        help=_trusted_pickle_help(
+            "Pickled ResourceProfilingConfig propagated to extraction workers."
+        ),
     )
 
 
@@ -1473,6 +2101,341 @@ def _add_backend_args(
 def _load_pickle(path: str) -> Any:
     with Path(path).open("rb") as f:
         return pickle.load(f)
+
+
+_FITTED_EXTRACTOR_BUNDLE_TYPE = "vertebrae_fitted_extractor_v1"
+_FITTED_RETRIEVAL_EXTRACTOR_BUNDLE_TYPE = "vertebrae_fitted_retrieval_extractor_v1"
+
+
+def _load_or_create_fitted_retrieval_extractor(
+    path: str,
+    dataset: Any,
+) -> tuple[Any, str]:
+    """Fit a standard retrieval extractor once on the gallery and publish a bundle."""
+
+    source_path = Path(path)
+    loaded = _load_pickle(path)
+    if isinstance(loaded, dict) and loaded.get("artifact_type") == (
+        _FITTED_RETRIEVAL_EXTRACTOR_BUNDLE_TYPE
+    ):
+        return _validated_fitted_retrieval_extractor_bundle(loaded, dataset), str(source_path)
+    if not callable(getattr(loaded, "fit", None)) or not callable(
+        getattr(loaded, "transform", None)
+    ):
+        raise TypeError(
+            "Standard retrieval execution requires an extractor with fit() and transform()."
+        )
+    recipe = loaded.recipe()
+    source_recipe_hash = fingerprint_extractor_recipe(recipe)
+    # Unsafe recipes cannot prove that their serialized source state is covered
+    # by the recipe hash. Keep one fitted bundle shared by this plan's workers,
+    # but never reuse it as a fitted-state cache in a later driver invocation.
+    run_scope = f"-{uuid4().hex}" if recipe.get("cache_safe") is False else ""
+    bundle_path = source_path.with_name(
+        f"{source_path.name}.vertebrae-retrieval-fitted-"
+        f"{dataset.identity_key()[:16]}-{source_recipe_hash[:16]}{run_scope}.pkl"
+    )
+    lock_path = bundle_path.with_suffix(bundle_path.suffix + ".lock")
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        if bundle_path.exists():
+            bundle = _load_pickle(str(bundle_path))
+            return (
+                _validated_fitted_retrieval_extractor_bundle(
+                    bundle,
+                    dataset,
+                    expected_source_recipe_hash=source_recipe_hash,
+                ),
+                str(bundle_path),
+            )
+        gallery = (
+            dataset.gallery_values()
+            if callable(getattr(dataset, "gallery_values", None))
+            else dataset.gallery
+        )
+        loaded.fit(gallery, y=None)
+        bundle = {
+            "artifact_type": _FITTED_RETRIEVAL_EXTRACTOR_BUNDLE_TYPE,
+            "dataset_identity_key": dataset.identity_key(),
+            "fit_side": "gallery",
+            "source_recipe_hash": source_recipe_hash,
+            "fitted_recipe_hash": fingerprint_extractor_recipe(loaded.recipe()),
+            "extractor": loaded,
+        }
+        _write_pickle_atomic(bundle_path, bundle)
+        return loaded, str(bundle_path)
+
+
+def _validated_fitted_retrieval_extractor_bundle(
+    bundle: Any,
+    dataset: Any,
+    *,
+    expected_source_recipe_hash: Optional[str] = None,
+) -> Any:
+    """Validate dataset binding and fitted recipe identity for retrieval workers."""
+
+    if not isinstance(bundle, dict) or bundle.get("artifact_type") != (
+        _FITTED_RETRIEVAL_EXTRACTOR_BUNDLE_TYPE
+    ):
+        raise TypeError("Extractor pickle is not a fitted retrieval-extractor bundle.")
+    if bundle.get("dataset_identity_key") != dataset.identity_key():
+        raise ValueError("Fitted retrieval extractor belongs to a different dataset identity.")
+    if bundle.get("fit_side") != "gallery":
+        raise ValueError("Fitted retrieval extractor bundle has an invalid fit-side contract.")
+    if (
+        expected_source_recipe_hash is not None
+        and bundle.get("source_recipe_hash") != expected_source_recipe_hash
+    ):
+        raise ValueError("Fitted retrieval extractor belongs to a different source recipe.")
+    extractor = bundle.get("extractor")
+    if extractor is None or not callable(getattr(extractor, "transform", None)):
+        raise TypeError("Fitted retrieval bundle does not contain a valid extractor.")
+    if bundle.get("fitted_recipe_hash") != fingerprint_extractor_recipe(extractor.recipe()):
+        raise ValueError("Fitted retrieval bundle recipe fingerprint is inconsistent.")
+    return extractor
+
+
+def _planned_fitted_extractor(path: str, dataset: Any) -> tuple[Any, str, bool]:
+    """Resolve the bundle path for a scheduler without fitting during script generation."""
+
+    source_path = Path(path)
+    loaded = _load_pickle(path)
+    if isinstance(loaded, dict) and loaded.get("artifact_type") == _FITTED_EXTRACTOR_BUNDLE_TYPE:
+        return _validated_fitted_extractor_bundle(loaded, dataset), str(source_path), False
+    if (
+        not callable(getattr(loaded, "fit", None))
+        or not callable(getattr(loaded, "transform", None))
+        or not callable(getattr(loaded, "recipe", None))
+    ):
+        raise TypeError(
+            "Source pickle must contain an extractor with fit(), transform(), and recipe()."
+        )
+    return loaded, str(_default_fitted_bundle_path(source_path, dataset, loaded)), True
+
+
+def _load_or_create_fitted_extractor(path: str, dataset: Any) -> tuple[Any, str]:
+    """Load a fitted bundle, or fit once under a shared filesystem lock and create it."""
+
+    source_path = Path(path)
+    loaded = _load_pickle(path)
+    if isinstance(loaded, dict) and loaded.get("artifact_type") == _FITTED_EXTRACTOR_BUNDLE_TYPE:
+        return _validated_fitted_extractor_bundle(loaded, dataset), str(source_path)
+
+    bundle_path = _default_fitted_bundle_path(source_path, dataset, loaded)
+    return _fit_extractor_bundle(
+        source_path=source_path,
+        dataset=dataset,
+        bundle_path=bundle_path,
+        overwrite=False,
+    )
+
+
+def _default_fitted_bundle_path(source_path: Path, dataset: Any, extractor: Any) -> Path:
+    recipe = extractor.recipe()
+    source_recipe_hash = fingerprint_extractor_recipe(recipe)
+    dataset_identity_key = dataset.identity_key()
+    # An unsafe recipe cannot prove that this hash covers fitted/live state. Give
+    # each driver invocation its own bundle so workers share one fit without a
+    # later invocation reusing it as a cache entry.
+    run_scope = f"-{uuid4().hex}" if recipe.get("cache_safe") is False else ""
+    return source_path.with_name(
+        f"{source_path.name}.vertebrae-fitted-"
+        f"{dataset_identity_key[:16]}-{source_recipe_hash[:16]}{run_scope}.pkl"
+    )
+
+
+def _fit_extractor_bundle(
+    *,
+    source_path: Path,
+    dataset: Any,
+    bundle_path: Path,
+    overwrite: bool,
+) -> tuple[Any, str]:
+    """Fit one source extractor and atomically publish a validated bundle."""
+
+    if source_path.resolve(strict=False) == bundle_path.resolve(strict=False):
+        raise ValueError("The fitted bundle output must differ from the source extractor pickle.")
+    loaded = _load_pickle(str(source_path))
+    if isinstance(loaded, dict) and loaded.get("artifact_type") == _FITTED_EXTRACTOR_BUNDLE_TYPE:
+        raise TypeError("fit-extractor requires an unfitted source extractor pickle.")
+    if not callable(getattr(loaded, "fit", None)) or not callable(
+        getattr(loaded, "transform", None)
+    ):
+        raise TypeError("Source pickle must contain an extractor with fit() and transform().")
+    source_recipe_hash = fingerprint_extractor_recipe(loaded.recipe())
+    dataset_identity_key = dataset.identity_key()
+    lock_path = bundle_path.with_suffix(bundle_path.suffix + ".lock")
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        except ImportError:
+            pass
+        if bundle_path.exists() and not overwrite:
+            bundle = _load_pickle(str(bundle_path))
+            return (
+                _validated_fitted_extractor_bundle(
+                    bundle,
+                    dataset,
+                    expected_source_recipe_hash=source_recipe_hash,
+                ),
+                str(bundle_path),
+            )
+        loaded.fit(dataset.X, dataset.y)
+        bundle = {
+            "artifact_type": _FITTED_EXTRACTOR_BUNDLE_TYPE,
+            "dataset_identity_key": dataset_identity_key,
+            "source_recipe_hash": source_recipe_hash,
+            "fitted_recipe_hash": fingerprint_extractor_recipe(loaded.recipe()),
+            "extractor": loaded,
+        }
+        _write_pickle_atomic(bundle_path, bundle)
+        return loaded, str(bundle_path)
+
+
+def _load_fitted_extractor_bundle(path: str, dataset: Any) -> Any:
+    """Require and validate a fitted bundle at a shard-worker boundary."""
+
+    bundle = _load_pickle(path)
+    if not isinstance(bundle, dict) or bundle.get("artifact_type") != _FITTED_EXTRACTOR_BUNDLE_TYPE:
+        raise TypeError(
+            "embed-shard requires a fitted extractor bundle; create one with "
+            "`vertebrae fit-extractor`."
+        )
+    return _validated_fitted_extractor_bundle(bundle, dataset)
+
+
+def _load_planned_fitted_extractor_bundle(
+    path: str,
+    dataset: Any,
+    *,
+    expected_sha256: str,
+) -> Any:
+    """Hash and load one planned bundle from the same open file description."""
+
+    with Path(path).open("rb") as file:
+        actual_sha256 = _sha256_stream(file)
+        if actual_sha256 != expected_sha256:
+            raise ValueError("The fitted extractor bundle content does not match --plan-json.")
+        file.seek(0)
+        bundle = pickle.load(file)
+    if not isinstance(bundle, dict) or bundle.get("artifact_type") != (
+        _FITTED_EXTRACTOR_BUNDLE_TYPE
+    ):
+        raise TypeError(
+            "embed-shard requires a fitted extractor bundle; create one with "
+            "`vertebrae fit-extractor`."
+        )
+    return _validated_fitted_extractor_bundle(bundle, dataset)
+
+
+def _validated_fitted_extractor_bundle(
+    bundle: Any,
+    dataset: Any,
+    *,
+    expected_source_recipe_hash: Optional[str] = None,
+) -> Any:
+    if not isinstance(bundle, dict) or bundle.get("artifact_type") != _FITTED_EXTRACTOR_BUNDLE_TYPE:
+        raise TypeError("Extractor pickle is not a valid vertebrae fitted-extractor bundle.")
+    if bundle.get("dataset_identity_key") != dataset.identity_key():
+        raise ValueError("Fitted extractor bundle belongs to a different dataset identity.")
+    if (
+        expected_source_recipe_hash is not None
+        and bundle.get("source_recipe_hash") != expected_source_recipe_hash
+    ):
+        raise ValueError("Fitted extractor bundle belongs to a different source recipe.")
+    extractor = bundle.get("extractor")
+    if extractor is None or not callable(getattr(extractor, "transform", None)):
+        raise TypeError("Fitted extractor bundle does not contain a valid extractor.")
+    if bundle.get("fitted_recipe_hash") != fingerprint_extractor_recipe(extractor.recipe()):
+        raise ValueError("Fitted extractor bundle recipe fingerprint is inconsistent.")
+    return extractor
+
+
+def _write_pickle_atomic(target: Path, value: Any) -> None:
+    descriptor = None
+    temporary_name = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+        )
+        with os.fdopen(descriptor, "wb") as file:
+            descriptor = None
+            pickle.dump(value, file, protocol=pickle.HIGHEST_PROTOCOL)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_name, target)
+        temporary_name = None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
+
+
+def _sha256_stream(file: Any, chunk_size: int = 4 * 1024 * 1024) -> str:
+    """Hash all bytes from the current position of an open binary stream."""
+
+    digest = hashlib.sha256()
+    while chunk := file.read(chunk_size):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_file(path: Path, chunk_size: int = 4 * 1024 * 1024) -> str:
+    """Hash complete file bytes without materializing a fitted bundle in memory."""
+
+    with path.open("rb") as file:
+        return _sha256_stream(file, chunk_size)
+
+
+def _validated_positive_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be an integer >= 1.")
+    return value
+
+
+def _shell_quote(value: Any) -> str:
+    return shlex.quote(str(value))
+
+
+def _validated_slurm_value(value: Any, name: str) -> str:
+    text = str(value)
+    if not text or any(not (character.isalnum() or character in "._:/+-") for character in text):
+        raise ValueError(
+            f"SLURM {name} must contain only letters, digits, '.', '_', ':', '/', '+', or '-'."
+        )
+    if name == "time":
+        match = re.fullmatch(r"(?:(\d+)-)?(\d+):([0-5]\d):([0-5]\d)", text)
+        if match is None:
+            raise ValueError(
+                "SLURM time must use [days-]hours:minutes:seconds with two-digit "
+                "minutes and seconds."
+            )
+        days, hours, minutes, seconds = (
+            int(match.group(1) or 0),
+            int(match.group(2)),
+            int(match.group(3)),
+            int(match.group(4)),
+        )
+        if match.group(1) is not None and hours > 23:
+            raise ValueError("SLURM time hours must be <= 23 when days are present.")
+        if days == hours == minutes == seconds == 0:
+            raise ValueError("SLURM time must be greater than zero.")
+    elif name == "mem":
+        if re.fullmatch(r"[1-9]\d*(?:[KMGTP](?:i?B)?)?", text, re.IGNORECASE) is None:
+            raise ValueError(
+                "SLURM mem must be a positive integer with an optional K, M, G, T, or P suffix."
+            )
+    return text
 
 
 def _resource_profiling_config_from_args(
@@ -1534,13 +2497,13 @@ def _cache_flag_lines(args: argparse.Namespace, indent: bool = True) -> list[str
     prefix = "  " if indent else ""
     flags = []
     if getattr(args, "s3_endpoint_url", None):
-        flags.append(f"{prefix}--s3-endpoint-url {args.s3_endpoint_url} \\")
+        flags.append(f"{prefix}--s3-endpoint-url {_shell_quote(args.s3_endpoint_url)} \\")
     if getattr(args, "s3_profile", None):
-        flags.append(f"{prefix}--s3-profile {args.s3_profile} \\")
+        flags.append(f"{prefix}--s3-profile {_shell_quote(args.s3_profile)} \\")
     if getattr(args, "s3_region", None):
-        flags.append(f"{prefix}--s3-region {args.s3_region} \\")
+        flags.append(f"{prefix}--s3-region {_shell_quote(args.s3_region)} \\")
     if getattr(args, "gcs_project", None):
-        flags.append(f"{prefix}--gcs-project {args.gcs_project} \\")
+        flags.append(f"{prefix}--gcs-project {_shell_quote(args.gcs_project)} \\")
     return flags
 
 
@@ -1707,9 +2670,20 @@ def _benchmark_result_from_dict(
     )
 
 
-def _resolve_score_key_from_plan(plan: dict[str, Any], embedding_key: str) -> str:
+def _resolve_score_key_from_plan(
+    plan: dict[str, Any],
+    embedding_key: str,
+    *,
+    labels_key: str,
+    groups_key: Optional[str],
+) -> str:
     return _resolve_related_key_from_plan(plan, embedding_key, "score_key") or scoring_artifact_key(
-        embedding_key
+        embedding_key,
+        labels_key=labels_key,
+        groups_key=groups_key,
+        scoring_config=OverlapScoringConfig(),
+        metrics=(),
+        primary_metric="overlap",
     )
 
 

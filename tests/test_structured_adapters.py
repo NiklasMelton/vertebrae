@@ -1,6 +1,7 @@
 import pickle
 
 import numpy as np
+import pytest
 
 from vertebrae import (
     Benchmark,
@@ -27,6 +28,48 @@ from vertebrae.cache import LocalArtifactStore
 from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
 from vertebrae.execution import materialize_structured_artifacts
 from vertebrae.structured import materialize_structured_outputs
+
+
+def _portable_alignment(embeddings, annotation):
+    del annotation
+    indices = list(range(len(embeddings)))
+    return list(zip(indices, indices))
+
+
+class _StatefulAlignment:
+    def __init__(self, offset):
+        self.offset = offset
+
+    def align(self, embeddings, annotation):
+        del embeddings, annotation
+        return [(0, self.offset)]
+
+
+def test_structured_aligner_requires_complete_callable_or_explicit_cache_identity():
+    portable = StructuredUnitAligner("portable", _portable_alignment)
+    portable_recipe = portable.recipe()
+
+    assert portable_recipe["align_fn_identity"] is not None
+    assert portable_recipe["cache_identity"] is None
+    assert portable_recipe["cache_safe"] is True
+
+    with pytest.raises(ValueError, match="cache_identity"):
+        StructuredUnitAligner(
+            "opaque-lambda",
+            lambda embeddings, annotation: [(0, 0)],
+            recipe_data={"policy": "not-an-identity"},
+        )
+    with pytest.raises(ValueError, match="cache_identity"):
+        StructuredUnitAligner("bound-method", _StatefulAlignment(0).align)
+
+    explicit = StructuredUnitAligner(
+        "explicit",
+        _StatefulAlignment(0).align,
+        recipe_data={"offset": 0},
+        cache_identity="stateful-alignment-v1",
+    )
+    assert explicit.recipe()["cache_identity"] == "stateful-alignment-v1"
+    assert explicit.recipe()["cache_safe"] is True
 
 
 def test_detection_layout_adapter_attaches_region_annotations():
@@ -247,6 +290,7 @@ def test_structured_aligner_materializes_explicit_subset_and_records_recipe(
         "drop_special",
         align_fn=lambda embeddings, annotation: [(0, 1), (1, 2)],
         recipe_data={"policy": "drop_leading_special"},
+        cache_identity="drop-leading-special-v1",
     )
 
     materialized = materialize_structured_outputs(

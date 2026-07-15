@@ -33,6 +33,7 @@ def main() -> None:
         lambda batch: np.asarray(batch)[:, :6],
         modality="tabular",
         streaming_safe=True,
+        cache_identity="first-six-features-v1",
     )
 
     result = Benchmark(

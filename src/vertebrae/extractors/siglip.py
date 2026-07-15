@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Optional, Sequence
 
+from vertebrae.extractors._utils import validate_nonblank_string
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.huggingface_multimodal import HFMultimodalExtractor
 
@@ -26,13 +27,19 @@ class SigLIPExtractor:
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[Sequence[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
+        image_field = validate_nonblank_string(image_field, "image_field")
+        text_field = validate_nonblank_string(text_field, "text_field")
+        if image_field == text_field:
+            raise ValueError("image_field and text_field must be distinct.")
         resolved_outputs = list(
-            outputs
-            or [
+            [
                 {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
                 {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
             ]
+            if outputs is None
+            else outputs
         )
         self._delegate = HFMultimodalExtractor(
             name=name,
@@ -49,8 +56,9 @@ class SigLIPExtractor:
             processor_kwargs=processor_kwargs,
             model_kwargs=model_kwargs,
             checkpoint_paths=checkpoint_paths,
+            cache_identity=cache_identity,
         )
-        self.name = name
+        self.name = self._delegate.name
         self.model_id = model_id
         self.modality = "multimodal"
         self.extractor_type = "siglip"

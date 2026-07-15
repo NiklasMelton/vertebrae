@@ -315,6 +315,33 @@ def test_hf_video_accepts_dataset_frame_arrays(fake_video_modules):
     assert all(len(clip) == 4 for clip in FakeVideoProcessor.last_videos)
 
 
+def test_hf_video_applies_timed_windows_to_predecoded_arrays(fake_video_modules):
+    frames = np.zeros((8, 2, 2, 3), dtype=np.uint8)
+    frames[:, 0, 0, 0] = np.arange(8)
+    extractor = HFVideoExtractor(
+        "video",
+        "fake-video",
+        num_frames=4,
+        clip_start_sec=1.0,
+        clip_duration_sec=2.0,
+    )
+
+    extractor.transform({"frames": [frames], "frame_rate": [2.0]})
+
+    assert FakeVideoProcessor.last_videos[0][:, 0, 0, 0].tolist() == [2, 3, 4, 5]
+
+
+def test_hf_video_timed_array_windows_require_valid_frame_rate(fake_video_modules):
+    extractor = HFVideoExtractor(
+        "video",
+        "fake-video",
+        clip_start_sec=1.0,
+    )
+
+    with pytest.raises(ValueError, match="frame_rate"):
+        extractor.transform([np.zeros((4, 2, 2, 3), dtype=np.uint8)])
+
+
 def test_hf_video_missing_optional_dependency(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", None)
     monkeypatch.setitem(sys.modules, "transformers", None)

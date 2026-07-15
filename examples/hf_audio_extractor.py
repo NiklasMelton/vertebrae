@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
+from vertebrae import BenchmarkDataset, CacheConfig, DatasetIdentity, Evaluator
 from vertebrae.extractors import HFAudioExtractor
 
 
@@ -30,7 +30,12 @@ def main() -> None:
         sampling_rate=16_000,
     )
 
-    result = Evaluator(dataset=dataset, extractor=extractor).run()
+    # The remote model name is intentionally unpinned in this introductory example.
+    result = Evaluator(
+        dataset=dataset,
+        extractor=extractor,
+        cache_config=CacheConfig(enabled=False),
+    ).run()
     print(result.to_dataframe())
 
 

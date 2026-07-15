@@ -60,6 +60,11 @@ Key fields:
 - `exclude_classes`: class id or ids retained during fitting and detailed
   diagnostics but omitted from global macro and weighted aggregation.
 
+Typed labels are translated through the dataset's semantic label catalog before the
+OverlapIndex adapter is called. `k` mappings and `exclude_classes` may still use the
+original typed values; per-class diagnostics are restored to stable keys and readable,
+type-disambiguated report labels afterward.
+
 Do not reconstruct the global score by averaging per-class scores: reporting-only
 excluded classes remain present there. `OverlapScoreResult` records both
 `macro_score` and `weighted_score`, plus the effective aggregation classes.
@@ -104,7 +109,8 @@ explicit regression targets.
 
 - Dense inputs are scored directly.
 - Sparse inputs are validated, then densified only at the OverlapIndex boundary.
-- Single-label targets are passed to OverlapIndex as a one-dimensional label array.
+- Single-label targets are encoded as one-dimensional semantic keys before being
+  passed to OverlapIndex, then translated back through the label catalog for reports.
 - Multi-label targets are normalized to a dense 0/1 indicator matrix before calling
   OverlapIndex.
 - Regression targets are passed to ContinuousOverlapIndex as finite numeric 1D or
@@ -211,6 +217,9 @@ Current behavior:
   `target_mode="multilabel"`.
 - Regression targets are passed with `target_mode="regression"`.
 - Optional Separatix MLP probes can be enabled with `mlp_probes=True`.
+- Linear/nonlinear probe comparisons use the declared metric direction: accuracy/F1
+  families favor larger values, while MAE/RMSE favor smaller values. Reported
+  improvement and favored-family fields follow that same direction.
 - The full Separatix report is preserved in JSON outputs, while Markdown reports
   show a compact recommendation, confidence, decision path, key scores, probe
   evidence, evaluation context, and skips.
@@ -243,6 +252,13 @@ Every metric must return one finite aggregate `score`; that score is the only va
 eligible for ranking. Metrics may also return JSON-safe diagnostics, warnings, and
 metadata.
 
+Classification labels and independence groups cross the metric boundary as marked
+semantic-key strings in both local and artifact-backed runs. This makes custom-metric
+behavior identical for typed classes such as integers, booleans, dates, UUIDs, and
+Decimals without importing user label classes on workers. Use the `label_catalog` in
+`target_metadata` for original typed provenance and display text; do not perform numeric
+arithmetic directly on categorical labels. Regression targets remain numeric.
+
 ## Retrieval and matching
 
 `RetrievalBenchmark` evaluates frozen query embeddings against a declared gallery and
@@ -270,11 +286,16 @@ result = RetrievalBenchmark(
 ).run()
 ```
 
-Relevance may be a dense query-by-gallery grade matrix or sparse
-`(query_id, gallery_id, grade)` records. Grades above zero are relevant for binary
-metrics; NDCG uses the original grades. Results include NDCG, precision, recall, hit
-rate, MRR, mAP, and positive-versus-negative similarity diagnostics. Cosine similarity
-is the default, with dot product and squared L2 available explicitly.
+Relevance may be a NumPy/scipy query-by-gallery matrix or sparse
+`(query_id, gallery_id, grade)` records. Any other iterable, including a nested Python
+list, is interpreted as records; use `RetrievalDataset.from_relevance_matrix(...)` for
+an explicit nested-list matrix. Sparse matrices are read from their nonzeros without
+densification, and every query must retain at least one eligible positive after
+exclusions. Grades above zero are relevant for binary metrics; NDCG uses the original
+finite nonnegative grades and stable log-domain gain ratios. Results include NDCG,
+precision, recall, hit rate, MRR, mAP, and positive-versus-negative similarity
+diagnostics. Cosine similarity is the default, with dot product and squared L2 available
+explicitly.
 
 For a normal single-label `Benchmark`, `LabelRetrievalMetric` provides opt-in
 leave-one-out same-label retrieval after embedding compression. It is not inferred for
