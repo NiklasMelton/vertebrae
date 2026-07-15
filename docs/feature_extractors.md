@@ -106,6 +106,7 @@ For Hugging Face backbones, pass explicit output specs:
 ```python
 extractor = HFVisionExtractor(
     name="mnist_vit",
+    # This introductory remote name is intentionally unpinned; cache reuse is bypassed.
     model_id="farleyknight-org-username/vit-base-mnist",
     outputs=[
         {"name": "final_cls", "pooling": "cls"},
@@ -130,6 +131,7 @@ dataset = BenchmarkDataset.from_multimodal(
 
 extractor = HFMultimodalExtractor(
     name="clip_like",
+    # This introductory remote name is intentionally unpinned; cache reuse is bypassed.
     model_id="openai/clip-vit-base-patch32",
     input_modalities={"image": "image", "caption": "text"},
     outputs=[
@@ -145,6 +147,20 @@ numeric embeddings and labels, not live model objects. Embeddings may be dense N
 arrays or scipy sparse matrices. Sparse embeddings are stored as `.npz` artifacts and
 converted to dense arrays only at the MiniBatchKMeans-backed OverlapIndex scoring
 boundary, with `OverlapScoringConfig.max_dense_bytes` guarding memory use.
+
+Cache identity schema v2 hashes the complete typed extractor recipe. Callable and
+live-model extractors accept an explicit `cache_identity`. Without one, cache reuse is
+allowed only when Vertebrae can prove the identity is stable: import-resolvable
+callables include their implementation digest, model identifiers that are actual local
+paths include a content digest, and remote model names require a 40--64 hexadecimal
+immutable revision. A separately declared checkpoint path is still digested as
+provenance, but cannot prove the state of an already-loaded live model. Closures, fitted
+in-memory models, opaque referenced globals, and unpinned remote models still run, but
+bypass reusable caches and record `cache_status="bypassed_unsafe_identity"`. Importable
+callable identities include referenced modules, helper callables, and exact global
+configuration values. Optional extractor recipes also record installed backend
+distribution versions, so an inference-runtime upgrade invalidates reuse. This policy
+also applies to every compressed or otherwise derived artifact.
 
 Optional model extractors require:
 
@@ -167,7 +183,10 @@ poetry install -E graph
 `TorchExtractor` is intended for users who already have a trained local PyTorch model
 loaded in memory. They provide a `collate_fn` that converts raw inputs into model
 inputs, and an `output_fn` when the model output needs to be projected to an
-embedding matrix.
+embedding matrix. By default extraction temporarily switches the module to evaluation
+mode, runs under `torch.inference_mode()`, and restores the module's prior training
+state afterward. Set `inference_mode=False` only when an adapter genuinely requires
+autograd or training-mode behavior.
 
 `ONNXExtractor` is intended for exported inference graphs. Users supply an optional
 `input_fn` and `output_fn` when model inputs or outputs need reshaping, tokenization,
@@ -176,11 +195,41 @@ or selection from multi-input/multi-output sessions.
 Text extractors validate that inputs are sequences of strings. Vision extractors accept
 PIL images, NumPy image arrays, or image paths. Audio extractors accept waveform
 arrays, audio paths, or structured dictionaries containing `array` / `path` and
-`sampling_rate`. Video extractors accept video paths, predecoded frame arrays with
+`sampling_rate`. Padded Hugging Face audio pooling derives a frame-level feature mask
+through the model helper; models without that helper require an explicit
+`feature_mask_fn` when input and output time axes differ. Video extractors accept video
+paths, predecoded frame arrays with
 shape `(time, height, width, channels)`, or structured dictionaries containing
-`frames` / `path`. Time-series extractors accept dense arrays with shape `(n, time)`
+`frames` / `path`; configured time windows are also applied to predecoded frames using
+their validated frame rate. Time-series extractors accept dense arrays with shape `(n, time)`
 or `(n, time, channels)`, plus optional structured fields such as
 `observed_mask` and `time_features`.
+
+The corrected optional-wrapper details are intentionally explicit:
+
+- Hugging Face text `last_token` pooling selects the highest position marked attended,
+  so left and right padding behave equivalently. Structured token output removes only
+  positions marked by the tokenizer's `special_tokens_mask`; it does not assume a fixed
+  number of leading or trailing special tokens.
+- Hugging Face multimodal ordinary outputs honor each declared dotted `selector` after
+  resolving `model_output`, then apply the output's hidden-layer and pooling choices.
+- Shared vision coercion accepts `alpha_mode="drop"`, `"black_background"`, or
+  `"white_background"`. Compositing is applied consistently before RGB/grayscale mode
+  conversion. Hugging Face vision treats `hidden_layer=0` as an actual layer selection,
+  distinct from `None` (the model's final/default output).
+- `TorchvisionVisionExtractor(weights=None)` converts HWC images to stacked CHW floating
+  tensors; integer images are scaled to `[0, 1]`. Supply `preprocess_fn` for any other
+  normalization or layout.
+- `TreeLeafEmbeddingExtractor` flattens every non-sample leaf axis before dense or
+  one-hot encoding. `TFHubExtractor` honors `batch_size` for ordinary and structured
+  outputs rather than invoking the Hub module on the full input at once.
+- `HostedEmbeddingExtractor` validates that every response batch has exactly the
+  requested row count and that feature width remains constant across batches.
+
+Public batch sizes, retry counts/backoff values, names, and output specifications are
+validated at construction. Booleans are not accepted as integers, counts must be in
+range, numeric backoff values must be finite, and output names must be nonblank and
+unique.
 
 Graph extractors operate at graph level by default: each sample corresponds to one
 graph object and each output row corresponds to one graph embedding. Use
@@ -194,9 +243,10 @@ edge and evaluate it with `BenchmarkDataset.from_node_embeddings(...)` or
 model/output adapter already returns that level, but it does not add graph task
 metrics or ranking protocols.
 
-Hosted API
-extractors are streaming-safe, but benchmark artifact reuse is only enabled when
-the extractor sets `cache_embeddings=True`.
+Hosted API extractors are streaming-safe, but reusable benchmark artifacts require
+both `cache_embeddings=True` and an explicit stable `cache_identity`. Either omission
+keeps the network call visible to the current evaluation without opting its responses
+into persistent reuse.
 
 Text-aligned extractors that expose `encode_retrieval(...)` can also participate in
 the explicit `ZeroShotBenchmark` protocol. Zero-shot evaluation requires separately
@@ -227,6 +277,14 @@ extractor = ONNXExtractor(
 Streaming-safe extractors, including Hugging Face backbones and precomputed embeddings,
 can be embedded batch-by-batch through `EmbeddingConfig(batch_size=...)`. This is
 intended for large raw data where only the embedding artifact should persist.
+
+`streaming_safe=False` is a hard contract: Vertebrae performs one transform on the
+complete selected input. For streaming-safe extraction, every batch must return the
+same exact unique output names, per-output row count, feature width, dtype,
+dense-versus-sparse form, sparse format, recipe, metadata, and complete parent
+coverage. Structured and spatial extractors must emit every declared output on every
+batch, with no extras or duplicates. Assembly uses explicit indexed writes and rejects
+shape mismatches instead of relying on NumPy broadcasting.
 
 When output shape is not known ahead of time, streaming-safe extractors are probed on a
 small first batch. The inferred embedding dimension and dtype are used with
@@ -261,9 +319,11 @@ is counted only when a custom adapter returns
 an unrelated model cache. Vertebrae never infers checkpoint locations from
 `recipe_data`, model names, Hub handles, or external caches.
 
-Checkpoint declarations, profiling-device hints, and adapter identity are profiling
-evidence rather than extraction semantics. They are serialized in `resource_profile`
-and intentionally do not change reusable embedding cache keys.
+Checkpoint declarations contribute content digests to the recipe, but do not by
+themselves make an already-loaded Torch, Keras, graph, or JAX model cache-safe because
+Vertebrae cannot verify that the live state matches the file. Those adapters require an
+explicit maintained `cache_identity`. Profiling-device hints remain profiling evidence
+rather than extraction semantics and do not change reusable embedding cache keys.
 
 Custom adapters implement the typed `ResourceProfileAdapter` contract. Subclass
 `BaseResourceProfileAdapter` and override only supported hooks, returning typed

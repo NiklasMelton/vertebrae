@@ -4,6 +4,9 @@ These examples are small enough for a laptop or desktop and are meant to show
 practical workflows you can adapt for real datasets. The core examples are
 network-free; the Hugging Face examples require optional dependencies and a model
 available from the local Hugging Face cache or downloaded on first run.
+Their introductory remote model names are intentionally unpinned, so those scripts
+explicitly disable embedding caching. For a reusable production run, supply a full
+immutable model revision or an explicit, maintained `cache_identity`.
 
 Run them from the project root:
 
@@ -48,21 +51,24 @@ Each script writes reports to `examples/output/`.
   numeric dataset.
 - `dispatched_benchmark.py`: run the ordinary benchmark API through a two-worker,
   artifact-backed local execution backend.
-- `cache_reuse.py`: show how embedding caching avoids recomputing extractor output
-  on repeated runs.
+- `cache_reuse.py`: show how an explicit callable `cache_identity` enables safe
+  embedding reuse across repeated runs. Callables without a provably portable
+  identity still run but deliberately bypass the reusable cache.
 - `structured_outputs.py`: materialize OCR/layout regions, ASR tokens, and pose
   keypoints directly from native structured extractors, then score them as
-  representation-efficacy workflows rather than IoU, WER/CER, or OKS metrics.
+  representation-efficacy workflows rather than IoU, WER/CER, or OKS metrics. The
+  deterministic lookup closures use manually versioned cache identities.
 - `structured_depth.py`: materialize sampled depth cells and score them through
   continuous overlap as a structured regression workflow rather than a depth
   error benchmark.
 - `structured_latent_slots.py`: materialize labeled latent slots from raw
   per-parent matrices, using a standard aligner helper to drop unmatched rows
   before scoring.
-- `torch_local_model.py`: demonstrate `TorchExtractor` with a locally loaded
-  PyTorch checkpoint and user-supplied `collate_fn` / `output_fn`.
-- `keras_local_model.py`: demonstrate `KerasExtractor` with a locally saved
-  Keras model and user-supplied `collate_fn` / `output_fn`.
+- `torch_local_model.py`: demonstrate `TorchExtractor` with content-digested checkpoint
+  provenance, inference-mode/eval defaults, and user-supplied
+  `collate_fn` / `output_fn`.
+- `keras_local_model.py`: demonstrate `KerasExtractor` with content-digested provenance
+  for a locally saved Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export
   you provide via `VERTABRAE_ONNX_MODEL_PATH`.
 - `hf_audio_extractor.py`: Hugging Face audio backbone API example. Requires optional

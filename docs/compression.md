@@ -11,9 +11,13 @@ This is useful when you want to:
 - study matryoshka-style prefix truncation,
 - measure the effect of lossy precision reduction such as `float16` or `int8`.
 
-Compression runs on the embedding artifact, not inside the extractor itself. The
-raw embedding cache stays reusable, and each compression recipe gets its own
-derived artifact key and report metadata.
+Compression runs after extraction rather than inside the extractor. When the raw
+embedding is cache-eligible, it remains independently reusable and each compression
+recipe receives its own derived artifact key and report metadata. Derived eligibility
+is never broader than source eligibility: `CacheConfig(enabled=False)`, hosted
+cache opt-out, or `cache_status="bypassed_unsafe_identity"` also prevents compressed
+results from being reused. The compression may still run for the current evaluation;
+it simply is not published as a reusable cache artifact.
 
 ## Configuration
 

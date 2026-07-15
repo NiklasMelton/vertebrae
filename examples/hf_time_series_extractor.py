@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
+from vertebrae import BenchmarkDataset, CacheConfig, DatasetIdentity, Evaluator
 from vertebrae.extractors import HFTimeSeriesExtractor
 
 
@@ -30,7 +30,12 @@ def main() -> None:
         pooling="mean",
     )
 
-    result = Evaluator(dataset=dataset, extractor=extractor).run()
+    # The placeholder may resolve to mutable remote state, so reuse is disabled.
+    result = Evaluator(
+        dataset=dataset,
+        extractor=extractor,
+        cache_config=CacheConfig(enabled=False),
+    ).run()
     print(result.to_dataframe())
 
 

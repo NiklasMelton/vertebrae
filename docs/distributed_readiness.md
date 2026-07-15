@@ -28,8 +28,10 @@ of the exact, unnormalized UTF-8 output name retained in the manifest.
 
 This key layout intentionally does not read pre-layout named-output, structured, or
 segmentation caches. The package is pre-release, so no legacy fallback or migration is
-provided; rerunning materialization creates canonical artifacts. Single-output,
-retrieval, zero-shot, label, group, scoring, and compression layouts are unchanged.
+provided; rerunning materialization creates canonical artifacts. Some human-readable
+namespace prefixes for single-output, retrieval, zero-shot, label, group, scoring, and
+compression artifacts remain familiar, but their authoritative component fingerprints
+use identity schema v2 and therefore intentionally produce new keys.
 
 Retrieval uses paired endpoint artifacts. `plan-retrieval` produces JSON-native,
 deterministic query and gallery shard plans; `embed-retrieval-shard` materializes one
@@ -69,8 +71,10 @@ result builders reconstruct typed profiles; use `retrieval-from-artifacts` or
 
 Protocol artifacts use a versioned semantic-label catalog. Workers score stable label
 keys, so non-string labels neither require user class imports nor collapse into
-identically rendered strings. Protocol contents are fingerprinted and revalidated
-before scoring, and the versioned label encoding is required.
+identically rendered strings. Composite label artifacts persist those keys plus the
+typed catalog for local, S3, and GCS stores; readers mark decoded keys so subsequent
+scoring cannot encode them a second time. Protocol contents are fingerprinted and
+revalidated before scoring, and the versioned label encoding is required.
 
 Distributed endpoint workers transform frozen or already-fitted extractor pickles;
 they do not fit independently on their shards. This keeps query and gallery embeddings
@@ -156,22 +160,44 @@ For Ray or Dask clusters, `cache_dir` must point to a filesystem visible to ever
 or to a cloud object-store URI such as `s3://bucket/prefix` or `gs://bucket/prefix`.
 Workers must be able to authenticate to the selected object store.
 
-Dense and sparse arrays are committed through an `array-manifest.json` stored beside
-the physical `embeddings.npy` or `embeddings.npz` object. Readers use only the
-manifest-selected representation; they do not probe extensions. Local writes publish
-data and the manifest with atomic same-directory replacements, while S3 and GCS
-publish the complete data object before the manifest commit point. Consequently,
-switching a key between dense and sparse formats cannot return a stale representation.
-Array artifacts created before this manifest format are cache misses and may be
-deleted rather than migrated.
+Dense and sparse arrays use array manifest v2. Data files are immutable and named by
+their SHA-256 digest; the manifest records that digest, exact byte size, shape, dtype,
+storage format, sparse format, and `nnz`. Readers validate every field before returning
+an array.
 
-The same flow is available from the CLI. First serialize a dataset and extractor with
-`pickle`, then plan, run shards, and merge:
+Execution artifacts that must keep payload and metadata coherent use composite
+artifact manifest v2. One manifest atomically selects either an array plus its metadata
+or labels plus their metadata, with every JSON component also immutable, digest-named,
+size-checked, and SHA-256-checked. A reader never combines an array or labels from one
+writer with metadata from another. Standalone `put_json`/`get_json` and
+`put_labels`/`get_labels` remain supported low-level store APIs; the composite rule
+applies to execution artifacts committed through the artifact methods.
+
+Local publications use same-directory temporary files, `fsync`, and atomic replacement.
+S3 and GCS upload every immutable component first and publish the selecting manifest
+last, so the manifest is the commit point and concurrent writers have coherent
+last-manifest-wins behavior. Cloud stores conservatively retain superseded immutable
+digests because safe reclamation requires provider version/generation preconditions;
+ordinary check-then-delete cleanup can race a concurrent writer. Use an external,
+version-aware lifecycle or garbage-collection policy when reclaiming those objects.
+Local stores reclaim unreferenced digests while holding the per-artifact exclusive
+publication lock. Array and composite manifest v1 artifacts are rejected as stale and
+are not migrated.
+
+The same flow is available from the CLI. Pickle inputs and fitted-extractor bundles are
+trusted-input-only: never load files from an untrusted source. First serialize the
+dataset and unfitted extractor, fit one trusted bundle on the complete dataset, plan
+the work from that bundle, run transform-only shards, and merge:
 
 ```bash
-vertebrae plan \
+vertebrae fit-extractor \
   --dataset-pickle dataset.pkl \
   --extractor-pickle extractor.pkl \
+  --output-pickle fitted-extractor.pkl
+
+vertebrae plan \
+  --dataset-pickle dataset.pkl \
+  --extractor-pickle fitted-extractor.pkl \
   --cache-dir .vertebrae_cache \
   --total-shards 8 \
   --batch-size 128 \
@@ -179,7 +205,7 @@ vertebrae plan \
 
 vertebrae embed-shard \
   --dataset-pickle dataset.pkl \
-  --extractor-pickle extractor.pkl \
+  --extractor-pickle fitted-extractor.pkl \
   --cache-dir .vertebrae_cache \
   --total-shards 8 \
   --shard-index 0 \
@@ -224,6 +250,15 @@ vertebrae benchmark-from-artifacts \
   --json-output result.json \
   --markdown-output report.md
 ```
+
+Driver-managed execution performs the same single fit before dispatch. Generated
+SLURM workflows include the fit pre-step and quote all shell arguments; every array
+task consumes the resulting fitted bundle rather than fitting its own shard. Ordinary
+and retrieval shard counts are capped to their available rows, and a non-streaming
+extractor is planned as one full transform rather than being split into independent
+batches. Job name, partition, time, memory, CPU, shard, and batch values are validated;
+newlines, control characters, invalid ranges, and unsafe scheduler-field punctuation
+are rejected before a shell file is written.
 
 When a plan declares `groups_key`, both `score` and `score-repeats` load and
 validate that artifact and pass the aligned groups to group-aware custom metrics.
@@ -323,7 +358,7 @@ vertebrae score-repeats \
   --dask-address tcp://scheduler:8786
 ```
 
-For SLURM, generate an array script:
+For SLURM, generate the fit/plan/array workflow files:
 
 ```bash
 vertebrae slurm-array \
@@ -339,9 +374,20 @@ vertebrae slurm-array \
   --cpus-per-task 4
 ```
 
-Submit the script with `sbatch vertebrae_embed.sbatch`, then run the merge, label,
-score, and optional score-array commands shown in the generated script after the
-array completes.
+The command always writes `vertebrae_embed.sbatch`,
+`vertebrae_embed.submit.sh`, and `vertebrae_embed.plan.json`. When the input is an
+unfitted extractor it also writes `vertebrae_embed.fit.sbatch`; the submit wrapper
+submits that fit job first and gives the array an `afterok` dependency. Start the
+workflow with:
+
+```bash
+bash vertebrae_embed.submit.sh
+```
+
+Do not submit `vertebrae_embed.sbatch` directly when a fit script was generated: the
+array requires the fitted bundle and plan produced by the dependency job. After the
+array completes, run the merge, label, score, and optional score-array commands shown
+in the generated array script.
 
 `ShardSpec` partitions samples by index modulo the total shard count. This gives
 future distributed workers disjoint sample sets and prevents duplicate embedding work
@@ -354,9 +400,12 @@ streaming-safe extractors, the benchmark probes a small first batch, estimates t
 final embedding artifact and dense scoring input, and reuses that probe as the first
 materialized batch when no subsampling is needed. If the full plan would exceed the
 budget, the local runner records a warning and switches to the largest fitting
-class-stratified subsample when possible. Explicit regression datasets use a
-deterministic random subsample instead. This keeps single-GPU sequential embedding
-and CPU-distributed analysis workflows from overcommitting memory.
+target-preserving subsample: class/label-aware for categorical targets and
+non-constant-target-aware for regression. Result metadata records the original and
+final row counts plus separate manual, automatic, and cumulative subsample rates, so
+an automatic second stage never overwrites the earlier user-requested stage. This keeps
+single-GPU sequential embedding and CPU-distributed analysis workflows from
+overcommitting memory.
 
 The metric backend remains fixed: all scoring goes through MiniBatchKMeans-backed
 `overlapindex.OverlapIndex` or `overlapindex.ContinuousOverlapIndex` via the

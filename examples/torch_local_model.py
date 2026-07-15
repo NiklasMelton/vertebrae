@@ -67,6 +67,7 @@ def main() -> None:
         collate_fn=collate_fn,
         output_fn=output_fn,
         device="cpu",
+        checkpoint_paths=[str(checkpoint_path)],
         recipe_data={"checkpoint": str(checkpoint_path), "input_dim": X.shape[1]},
     )
 

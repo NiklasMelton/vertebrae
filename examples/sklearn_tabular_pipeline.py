@@ -1,7 +1,7 @@
 """Evaluate a mixed tabular scikit-learn pipeline on a pandas dataframe."""
 
 import pandas as pd
-from _common import CACHE_DIR, ensure_output_dir, print_ranking
+from _common import ensure_output_dir, print_ranking
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
@@ -44,7 +44,7 @@ def main() -> None:
         extractor=SklearnExtractor(name="mixed_tabular_pca", pipeline=pipeline),
         scoring_config=OverlapScoringConfig(k=3, min_samples_per_cluster=4),
         stability_config=StabilityConfig(repeats=4, random_state=47),
-        cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
+        cache_config=CacheConfig(enabled=False),
     ).run()
 
     result.save_json(str(output_dir / "sklearn_tabular_pipeline.json"))

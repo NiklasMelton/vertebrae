@@ -36,7 +36,9 @@ first-call/warm latency, throughput, host and supported device peaks, model/chec
 footprint, measurement context, and logical raw/evaluated embedding bytes.
 `BenchmarkResult.quality_cohort()` returns candidates within the configured absolute
 primary-score tolerance of the best result while respecting metric direction. It does
-not reorder `ranked_results()` or create a composite score.
+not reorder `ranked_results()` or create a composite score. Results whose primary
+metric metadata declares `aggregate_valid=False` are excluded from the quality cohort,
+resource comparison, and top-candidate recommendations.
 
 Markdown reports keep the main ranking quality-focused and render a separate resource
 table for the quality cohort. DataFrames expose the same measurements as resource
@@ -64,6 +66,12 @@ lazy model loading or compilation. Warm statistics use subsequent real calls; a
 single-call run therefore has no warm distribution. Host RSS peaks are measured and
 remain distinct from `MemoryConfig` admission estimates. Cache hits do not invoke the
 extractor and report inference as `not_measured_cache_hit`.
+
+Embedding metadata exposes `cache_eligible` and `cache_status`. The normal statuses are
+`hit`, `miss`, `disabled`, and `bypassed_unsafe_identity`; the last means evaluation
+continued but the callable/model identity could not safely authorize reuse. Compression
+and other derived artifacts retain the source eligibility and status rather than
+silently converting a disabled or unsafe source into a reusable cache.
 
 Device profiles distinguish allocator baseline, absolute peak, and peak increase.
 CPU allocator memory is marked not applicable because process RSS is the relevant
@@ -96,6 +104,11 @@ labelset summary fields. For explicit regression datasets, `target_type` is
 `regression`, the primary ranking field is `overlap.score`, and summaries preserve
 `target_names`, target statistics, and constant-target diagnostics.
 
+Classification and hierarchy diagnostics also preserve a semantic `label_catalog`.
+It maps stable typed keys back to original values and report displays, so values such
+as integer `1` and string `"1"` remain distinct. When ordinary display text collides,
+the rendered label includes its type.
+
 Multi-output extractors contribute one `ExtractorResult` per named output. Result
 names use the form `parent_name:output_name`, and embedding metadata preserves
 `parent_extractor_name` and `output_name`.
@@ -120,7 +133,10 @@ or `extractor:final[target=role]`. Embedding metadata keeps the original
 ## Ranking and tabular views
 
 `BenchmarkResult.ranked_results()` sorts extractors by the selected primary metric
-score, respecting metrics that declare `higher_is_better=False`.
+score, respecting metrics that declare `higher_is_better=False`. It omits results whose
+primary aggregate is marked invalid. If every aggregate is invalid, rankings and
+quality-cohort/resource tables are unavailable rather than populated with a fallback
+candidate.
 `BenchmarkResult.to_dataframe()` includes `primary_metric` and `primary_score` plus
 overlap columns whenever OverlapIndex was enabled.
 
@@ -164,6 +180,10 @@ collision-safe encoding. Unsupported live objects, recursive containers, and
 non-finite floats raise a path-aware serialization error instead of being silently
 converted with `str(...)`.
 
+Markdown table cells are escaped through one shared renderer. Pipes, backslashes, and
+line breaks in extractor names, labels, warnings, or metadata cannot create extra rows
+or columns.
+
 `ZeroShotBenchmarkResult` is a separate result type for fixed prompt-prototype
 evaluation. Its ranking uses the configured zero-shot metric (Top-1 accuracy by
 default), while the report retains OverlapIndex as contextual sample-embedding
@@ -171,6 +191,11 @@ evidence. The values are intentionally not combined into one universal score.
 Its serialized protocol preserves the complete ordered prompt declaration, and a
 compressed variant name retains the requested dimension even when compression is
 skipped and the reported output dimension is unchanged.
+
+`RetrievalBenchmarkResult` likewise preserves its complete protocol. Artifact-backed
+entries contain `forward`, optional `reverse`, and an averaged `primary_score`, matching
+local bidirectional evaluation. Comparative reconstruction requires identical
+retrieval configuration and protocol fingerprints.
 
 At a high level, reports include:
 

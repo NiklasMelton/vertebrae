@@ -10,7 +10,7 @@ Install optional dependencies with:
 """
 
 import numpy as np
-from _common import CACHE_DIR, ensure_output_dir, print_ranking
+from _common import ensure_output_dir, print_ranking
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
@@ -70,7 +70,8 @@ def main() -> None:
             dataset=dataset,
             scoring_config=OverlapScoringConfig(k=2, min_samples_per_cluster=6),
             stability_config=StabilityConfig(repeats=3, random_state=29),
-            cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
+            # The model specs intentionally use unpinned remote names.
+            cache_config=CacheConfig(enabled=False),
         )
         for spec in MODEL_SPECS:
             benchmark.add_extractor(

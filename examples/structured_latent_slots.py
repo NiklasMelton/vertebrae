@@ -69,6 +69,7 @@ def main() -> None:
         transform_fn=_lookup_structured_embeddings(embeddings),
         output_specs=[StructuredOutputSpec(name="slots", unit_type="latent_slot")],
         modality="embeddings",
+        cache_identity="structured-latent-slots-v1",
     )
     aligner = drop_special_rows(leading=1, trailing=1)
 

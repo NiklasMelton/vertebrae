@@ -224,6 +224,13 @@ For taxonomies represented as label paths, use `with_label_hierarchy(...)` and
 `LabelViewConfig` instead. `output_views` and `output_levels` can route named
 extractor outputs to the target or hierarchy view that they should evaluate.
 
+Classification labels keep exact typed semantic identity in the dataset and label
+catalog. For example, integer `1` and string `"1"` are separate classes even though
+their ordinary string forms match. Metric adapters receive marked semantic-key strings
+in both local and artifact-backed runs, while results retain the original typed values,
+stable internal keys, and disambiguated display text in the catalog. Hierarchy paths
+are encoded structurally rather than by joining values with a delimiter.
+
 ### Optional embedding compression
 
 ```python
@@ -270,7 +277,12 @@ pipeline = Pipeline(
 )
 
 dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text", identity=DatasetIdentity.declared("example-dataset", "1"))
-extractor = SklearnExtractor(name="tfidf_svd", pipeline=pipeline)
+extractor = SklearnExtractor(
+    name="tfidf_svd",
+    pipeline=pipeline,
+    # This manually versioned identity opts the fitted live pipeline into reuse.
+    cache_identity="tfidf-svd-v1",
+)
 
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
@@ -303,6 +315,8 @@ extractor = TorchExtractor(
     collate_fn=collate_fn,
     output_fn=output_fn,
     device="cpu",
+    checkpoint_paths=["/path/to/local_model.pt"],
+    cache_identity="local-torch-model-v1",
     recipe_data={"checkpoint": "/path/to/local_model.pt"},
 )
 
@@ -328,16 +342,26 @@ extractor = KerasExtractor(
     model=model,
     collate_fn=collate_fn,
     call_method="call",
+    checkpoint_paths=["/path/to/model.keras"],
+    cache_identity="local-keras-model-v1",
     recipe_data={"checkpoint": "/path/to/model.keras"},
 )
 
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
+`checkpoint_paths` contributes content-digested provenance and profiling evidence; a
+path copied only into `recipe_data` is descriptive metadata. Because these adapters
+receive already-loaded live model objects, the path cannot prove that the in-memory
+weights match the file, so reusable caching still requires a maintained
+`cache_identity`. Torch extraction defaults to evaluation plus inference mode and
+restores the model's prior training state afterward. Notebook-local, nested, or
+otherwise nonportable adapter functions likewise require an explicit identity.
+
 ### Hugging Face audio backbones
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
+from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFAudioExtractor
 
 dataset = BenchmarkDataset.from_audio_arrays(
@@ -352,13 +376,18 @@ extractor = HFAudioExtractor(
     pooling="mean",
 )
 
-result = Evaluator(dataset=dataset, extractor=extractor).run()
+# This introductory model ID is intentionally unpinned, so do not reuse its output.
+result = Evaluator(
+    dataset=dataset,
+    extractor=extractor,
+    cache_config=CacheConfig(enabled=False),
+).run()
 ```
 
 ### Hugging Face multi-modal models
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
+from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFMultimodalExtractor
 
 dataset = BenchmarkDataset.from_multimodal(
@@ -379,13 +408,18 @@ extractor = HFMultimodalExtractor(
     ],
 )
 
-result = Evaluator(dataset=dataset, extractor=extractor).run()
+# This introductory model ID is intentionally unpinned, so do not reuse its output.
+result = Evaluator(
+    dataset=dataset,
+    extractor=extractor,
+    cache_config=CacheConfig(enabled=False),
+).run()
 ```
 
 ### Hugging Face time-series backbones
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
+from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFTimeSeriesExtractor
 
 dataset = BenchmarkDataset.from_time_series(
@@ -399,13 +433,18 @@ extractor = HFTimeSeriesExtractor(
     pooling="mean",
 )
 
-result = Evaluator(dataset=dataset, extractor=extractor).run()
+# This placeholder may resolve to mutable remote state.
+result = Evaluator(
+    dataset=dataset,
+    extractor=extractor,
+    cache_config=CacheConfig(enabled=False),
+).run()
 ```
 
 ### Hugging Face video backbones
 
 ```python
-from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
+from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
 from vertebrae.extractors import HFVideoExtractor
 
 dataset = BenchmarkDataset.from_video_arrays(
@@ -421,7 +460,12 @@ extractor = HFVideoExtractor(
     num_frames=16,
 )
 
-result = Evaluator(dataset=dataset, extractor=extractor).run()
+# This introductory model ID is intentionally unpinned, so do not reuse its output.
+result = Evaluator(
+    dataset=dataset,
+    extractor=extractor,
+    cache_config=CacheConfig(enabled=False),
+).run()
 ```
 
 ### Multi-extractor comparison
@@ -445,7 +489,7 @@ hierarchy metadata from `with_label_hierarchy(...)`, outputs can be routed to
 different hierarchy levels:
 
 ```python
-from vertebrae import Benchmark, LabelViewConfig
+from vertebrae import Benchmark, CacheConfig, LabelViewConfig
 from vertebrae.extractors import HFVisionExtractor
 
 benchmark = Benchmark(
@@ -456,6 +500,8 @@ benchmark = Benchmark(
             "final_cls": "leaf",
         },
     ),
+    # The example model IDs below are intentionally unpinned.
+    cache_config=CacheConfig(enabled=False),
 )
 benchmark.add_extractor(
     HFVisionExtractor(
@@ -510,8 +556,10 @@ result = RetrievalBenchmark(
 ).run()
 ```
 
-Relevance can be a dense query-by-gallery matrix or sparse
-`(query_id, gallery_id, grade)` records. Reports include NDCG, precision, recall,
+Relevance can be a NumPy/scipy query-by-gallery matrix or sparse
+`(query_id, gallery_id, grade)` records. Nested Python lists are records; construct
+nested-list matrices explicitly with `RetrievalDataset.from_relevance_matrix(...)`.
+Every query must retain an eligible positive after exclusions. Reports include NDCG, precision, recall,
 hit rate, MRR, mAP, and similarity diagnostics. See
 [the retrieval guide](docs/retrieval.md) for branch-aware extractors,
 bidirectional scoring, exclusions, compression, and artifact workflows.
@@ -542,6 +590,11 @@ Every benchmark always records the built-in overlap metric. You can score the
 same full embedding batch with additional metrics and choose one as the ranking
 criterion. A custom metric returns a finite aggregate `score` and may include
 JSON-safe diagnostics, warnings, and metadata.
+
+For protocol parity, categorical labels and groups passed to custom metrics are
+marked semantic-key strings locally and on distributed workers; regression targets
+remain numeric. Read original typed provenance and display values from
+`target_metadata["label_catalog"]` when needed.
 
 ```python
 from vertebrae import Benchmark, CallableMetric
@@ -697,7 +750,7 @@ alongside the runnable
   backends,
 - local paths, `s3://...`, and `gs://...` artifact stores.
 
-Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
+Distributed CLI commands include `vertebrae plan`, `vertebrae fit-extractor`, `vertebrae embed-shard`,
 `vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae write-groups`,
 `vertebrae materialize-segmentation`, `vertebrae materialize-structured`,
 `vertebrae compress`, `vertebrae score`,
@@ -712,6 +765,34 @@ Distributed CLI commands include `vertebrae plan`, `vertebrae embed-shard`,
 `vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
 `vertebrae slurm-array`, `vertebrae slurm-score-array`, and
 `vertebrae run-embedding-shards`.
+
+All CLI pickle inputs, including fitted-extractor bundles, are trusted-input-only.
+Artifact-backed embedding workers are transform-only: the driver or
+`fit-extractor` fits once on the complete selected dataset before shard dispatch.
+
+Reusable artifacts use cache identity schema v2: hashes cover complete typed values.
+Array manifest v2 commits immutable digest-named array data, while composite artifact
+manifest v2 commits an array plus metadata or labels plus metadata as one coherent
+publication. Readers validate component sizes and SHA-256 digests as well as array
+shape, dtype, storage format, and sparse `nnz`.
+
+Callable/live-model extractors that cannot prove a stable identity still evaluate but
+bypass cache reuse and record `cache_status="bypassed_unsafe_identity"`. Reuse requires
+an explicit `cache_identity`, a model identifier that is itself a content-digested
+local path, or a remote revision pinned to a full immutable commit hash. Merely
+declaring a checkpoint beside an already-loaded live model does not prove that the
+object contains those weights. Importable callable identities include referenced
+modules, helper callables, and exact global configuration; optional backend versions
+also participate in extractor recipes. Raw-cache
+eligibility propagates to compression and every derived artifact: disabling raw
+caching or using an unsafe identity cannot produce a reusable derived cache. Legacy
+cache identity and array/composite manifest schemas are intentionally not read;
+standalone JSON and label store APIs remain current.
+
+Streaming-safe extractors are transformed in independent batches. Every batch must
+return the same unique output names, row counts, feature widths, dtypes, dense/sparse
+form, recipes, metadata contracts, and parent coverage. Extractors declaring
+`streaming_safe=False` receive one full transform call instead.
 
 For Ray or Dask cluster runs, the configured `cache_dir` can be either a shared local
 path or a cloud object-store URI such as `s3://team-bucket/vertebrae/run-001` or
@@ -772,6 +853,11 @@ Each benchmark run returns structured results that include:
 - stability summaries,
 - warnings and recommendations,
 - reproducibility metadata.
+
+Only results whose selected metric declares `aggregate_valid=True` participate in
+rankings, quality cohorts, top recommendations, or resource comparisons. When no
+valid aggregate remains, reports say that ranking is unavailable instead of promoting
+an invalid result.
 
 Results can be rendered directly to Markdown or JSON:
 

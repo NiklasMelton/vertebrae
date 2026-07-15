@@ -7,7 +7,7 @@ stability, probe, cache, JSON, and Markdown reporting path used for larger
 projects.
 """
 
-from _common import CACHE_DIR, ensure_output_dir, print_ranking
+from _common import ensure_output_dir, print_ranking
 from sklearn.datasets import load_wine
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
@@ -40,7 +40,7 @@ def main() -> None:
         dataset=dataset,
         scoring_config=OverlapScoringConfig(k=4, min_samples_per_cluster=8),
         stability_config=StabilityConfig(repeats=5, random_state=23),
-        cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
+        cache_config=CacheConfig(enabled=False),
     )
     benchmark.add_extractor(
         SklearnExtractor(

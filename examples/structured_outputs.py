@@ -132,6 +132,7 @@ def _ocr_layout_workflow():
         transform_fn=_lookup_structured_embeddings(embeddings),
         output_specs=[StructuredOutputSpec(name="regions", unit_type="document_region")],
         modality="image",
+        cache_identity="structured-ocr-layout-v1",
     )
     return {
         "title": "OCR/layout regions",
@@ -148,7 +149,7 @@ def _asr_token_workflow():
         y=["support", "support", "weather", "weather"],
         modality="audio",
         metadata={"example": "structured_asr_tokens"},
-        identity=DatasetIdentity.declared("structured-keypoints-example", "1"),
+        identity=DatasetIdentity.declared("structured-asr-tokens-example", "1"),
     )
     dataset = SequenceLabelingAdapter().attach(
         dataset,
@@ -194,6 +195,7 @@ def _asr_token_workflow():
         transform_fn=_lookup_structured_embeddings(embeddings),
         output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
         modality="audio",
+        cache_identity="structured-asr-tokens-v1",
     )
     return {
         "title": "ASR tokens",
@@ -210,7 +212,7 @@ def _pose_keypoint_workflow():
         y=["walk", "walk", "stretch", "stretch"],
         modality="image",
         metadata={"example": "structured_pose_keypoints"},
-        identity=DatasetIdentity.declared("structured-sequence-example", "1"),
+        identity=DatasetIdentity.declared("structured-pose-keypoints-example", "1"),
     )
     dataset = KeypointAdapter().attach(
         dataset,
@@ -256,6 +258,7 @@ def _pose_keypoint_workflow():
         transform_fn=_lookup_structured_embeddings(embeddings),
         output_specs=[StructuredOutputSpec(name="keypoints", unit_type="keypoint")],
         modality="image",
+        cache_identity="structured-pose-keypoints-v1",
     )
     return {
         "title": "Pose keypoints",
