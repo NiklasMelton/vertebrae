@@ -425,8 +425,9 @@ def build_parser() -> argparse.ArgumentParser:
         ],
         required=True,
     )
-    compress.add_argument("--n-components", type=int)
-    compress.add_argument("--preserve-variance", type=float)
+    pca_dimension = compress.add_mutually_exclusive_group()
+    pca_dimension.add_argument("--n-components", type=int)
+    pca_dimension.add_argument("--preserve-variance", type=float)
     compress.add_argument("--precision")
     compress.add_argument("--assume-matryoshka", action="store_true")
     compress.add_argument("--random-state", type=int, default=42)

@@ -63,9 +63,12 @@ class _PrefixTruncateCompressor(EmbeddingCompressor):
     def transform(self, Z: Any) -> Any:
         matrix = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
         transformed = matrix[:, : self.config.n_components]
-        if self.config.dtype is not None:
-            transformed = transformed.astype(self.config.dtype, copy=False)
-        return transformed
+        return _validate_compression_output(
+            transformed,
+            "prefix_truncate compressed embeddings",
+            allow_sparse=True,
+            dtype=self.config.dtype,
+        )
 
     def recipe(self) -> Dict[str, Any]:
         return {
@@ -107,14 +110,12 @@ class _SklearnEmbeddingCompressor(EmbeddingCompressor):
             raise ValueError("Embedding compressor must be fitted before transform().")
         matrix = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
         transformed = self._model.transform(matrix)
-        dense = ensure_numeric_matrix(
+        return _validate_compression_output(
             transformed,
             f"{self.config.method} compressed embeddings",
             allow_sparse=False,
+            dtype=self.config.dtype,
         )
-        if self.config.dtype is not None:
-            dense = dense.astype(self.config.dtype, copy=False)
-        return dense
 
     def recipe(self) -> Dict[str, Any]:
         return {
@@ -145,7 +146,12 @@ class _QuantizeCompressor(EmbeddingCompressor):
         if precision in {"int8", "uint8"} and is_sparse_matrix(matrix):
             raise ValueError(f"Compression precision '{precision}' requires dense embeddings.")
         if precision == "int8":
-            dense = np.asarray(matrix, dtype=np.float32)
+            dense = _validate_compression_output(
+                matrix,
+                "quantize calibration embeddings",
+                allow_sparse=False,
+                dtype=np.float32,
+            )
             scale = np.max(np.abs(dense), axis=0)
             scale[scale == 0.0] = 1.0
             self._calibration = {
@@ -155,7 +161,12 @@ class _QuantizeCompressor(EmbeddingCompressor):
                 "scoring_dtype": "float32",
             }
         elif precision == "uint8":
-            dense = np.asarray(matrix, dtype=np.float32)
+            dense = _validate_compression_output(
+                matrix,
+                "quantize calibration embeddings",
+                allow_sparse=False,
+                dtype=np.float32,
+            )
             min_values = np.min(dense, axis=0)
             max_values = np.max(dense, axis=0)
             ranges = max_values - min_values
@@ -168,10 +179,11 @@ class _QuantizeCompressor(EmbeddingCompressor):
                 "scoring_dtype": "float32",
             }
         else:
+            sparse_input = is_sparse_matrix(matrix)
             self._calibration = {
-                "mode": "cast",
+                "mode": "cast_round_trip" if sparse_input else "cast",
                 "encoded_dtype": "float16",
-                "scoring_dtype": "float16",
+                "scoring_dtype": "float32" if sparse_input else "float16",
             }
         return self
 
@@ -179,20 +191,41 @@ class _QuantizeCompressor(EmbeddingCompressor):
         matrix = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
         precision = self.config.precision
         if precision == "float16":
-            transformed = matrix.astype(np.float16)
-            return transformed
-        dense = ensure_numeric_matrix(matrix, "embeddings", allow_sparse=False).astype(
-            np.float32,
-            copy=False,
+            if is_sparse_matrix(matrix):
+                return _sparse_float16_round_trip(
+                    matrix,
+                    "quantize compressed embeddings",
+                )
+            return _validate_compression_output(
+                matrix,
+                "quantize compressed embeddings",
+                allow_sparse=True,
+                dtype=np.float16,
+            )
+        dense = _validate_compression_output(
+            matrix,
+            "quantize compressed embeddings",
+            allow_sparse=False,
+            dtype=np.float32,
         )
         if precision == "int8":
             scale = self._calibration["scale"]
             encoded = np.clip(np.rint((dense / scale) * 127.0), -127, 127).astype(np.int8)
-            return (encoded.astype(np.float32) * scale) / 127.0
-        min_values = self._calibration["min_values"]
-        ranges = self._calibration["ranges"]
-        encoded = np.clip(np.rint(((dense - min_values) / ranges) * 255.0), 0, 255).astype(np.uint8)
-        return (encoded.astype(np.float32) * ranges / 255.0) + min_values
+            transformed = (encoded.astype(np.float32) * scale) / 127.0
+        else:
+            min_values = self._calibration["min_values"]
+            ranges = self._calibration["ranges"]
+            encoded = np.clip(
+                np.rint(((dense - min_values) / ranges) * 255.0),
+                0,
+                255,
+            ).astype(np.uint8)
+            transformed = (encoded.astype(np.float32) * ranges / 255.0) + min_values
+        return _validate_compression_output(
+            transformed,
+            "quantize compressed embeddings",
+            allow_sparse=False,
+        )
 
     def recipe(self) -> Dict[str, Any]:
         return {
@@ -204,6 +237,44 @@ class _QuantizeCompressor(EmbeddingCompressor):
     @property
     def calibration(self) -> Dict[str, Any]:
         return self._calibration
+
+
+def _validate_compression_output(
+    value: Any,
+    name: str,
+    *,
+    allow_sparse: bool,
+    dtype: Any = None,
+) -> Any:
+    """Validate a compression-stage matrix after dtype or precision conversion."""
+
+    if dtype is not None:
+        resolved_dtype = np.dtype(dtype)
+        if is_sparse_matrix(value) and resolved_dtype == np.dtype(np.float16):
+            raise ValueError(
+                f"{name} cannot use dtype='float16' while preserving sparse storage "
+                "because scipy.sparse does not portably support float16. Use "
+                "dtype='float32' or method='quantize' with precision='float16'."
+            )
+        with np.errstate(over="ignore", invalid="ignore"):
+            value = value.astype(resolved_dtype, copy=False)
+    matrix = ensure_numeric_matrix(value, name, allow_sparse=allow_sparse)
+    if not np.issubdtype(matrix.dtype, np.floating):
+        if np.issubdtype(matrix.dtype, np.integer):
+            matrix = matrix.astype(float, copy=False)
+        else:
+            raise ValueError(f"{name} must use a real floating-point dtype.")
+    return matrix
+
+
+def _sparse_float16_round_trip(value: Any, name: str) -> Any:
+    """Apply float16 rounding to sparse data while retaining a supported dtype."""
+
+    matrix = ensure_numeric_matrix(value, name, allow_sparse=True)
+    transformed = matrix.astype(np.float32, copy=True).tocsr(copy=False)
+    with np.errstate(over="ignore", invalid="ignore"):
+        transformed.data = transformed.data.astype(np.float16).astype(np.float32)
+    return _validate_compression_output(transformed, name, allow_sparse=True)
 
 
 def compress_embeddings(

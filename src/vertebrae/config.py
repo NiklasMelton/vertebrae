@@ -462,13 +462,13 @@ class EmbeddingCompressionConfig:
         enabled: Whether compression should run.
         method: Compression method name.
         n_components: Target dimension for projection-based compressors.
-        preserve_variance: PCA variance target in `(0, 1]`.
+        preserve_variance: PCA variance target in `(0, 1)`.
         precision: Quantization precision such as `"float16"` or `"int8"`.
         assume_matryoshka: Whether prefix truncation should be treated as a
             matryoshka-style dimension shortening workflow.
         random_state: Seed for stochastic compressors.
         whiten: Whether PCA outputs should be whitened.
-        dtype: Optional output dtype such as `"float32"`.
+        dtype: Optional real floating-point output dtype such as `"float32"`.
         algorithm_kwargs: Extra method-specific keyword arguments.
     """
 
@@ -500,8 +500,17 @@ class EmbeddingCompressionConfig:
             )
         if self.n_components is not None and self.n_components < 1:
             raise ValueError("EmbeddingCompressionConfig.n_components must be >= 1.")
-        if self.preserve_variance is not None and not 0.0 < self.preserve_variance <= 1.0:
-            raise ValueError("EmbeddingCompressionConfig.preserve_variance must be in (0, 1].")
+        if (
+            self.method == "pca"
+            and self.n_components is not None
+            and self.preserve_variance is not None
+        ):
+            raise ValueError(
+                "EmbeddingCompressionConfig.n_components and preserve_variance are "
+                "mutually exclusive for method='pca'."
+            )
+        if self.preserve_variance is not None and not 0.0 < self.preserve_variance < 1.0:
+            raise ValueError("EmbeddingCompressionConfig.preserve_variance must be in (0, 1).")
         if self.method == "none":
             if self.enabled and (
                 self.n_components is not None
@@ -551,9 +560,15 @@ class EmbeddingCompressionConfig:
             try:
                 import numpy as np
 
-                np.dtype(self.dtype)
-            except TypeError as exc:
+                dtype = np.dtype(self.dtype)
+            except (TypeError, ValueError) as exc:
                 raise ValueError(f"Unsupported compression dtype: {self.dtype!r}.") from exc
+            if not np.issubdtype(dtype, np.floating):
+                raise ValueError(
+                    "EmbeddingCompressionConfig.dtype must be a real floating-point "
+                    "NumPy dtype; use precision='int8' or precision='uint8' for integer "
+                    "quantization."
+                )
 
 
 @dataclass

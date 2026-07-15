@@ -18,6 +18,28 @@ from vertebrae.extractors import (
 from vertebrae.extractors.base import EmbeddingOutputSpec
 
 
+def test_cli_compress_rejects_conflicting_pca_dimension_flags(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "compress",
+                "--cache-dir",
+                ".vertebrae_cache",
+                "--embedding-key",
+                "embeddings/example",
+                "--method",
+                "pca",
+                "--n-components",
+                "2",
+                "--preserve-variance",
+                "0.9",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
 def _multi_output_transform(batch):
     values = np.asarray(batch)
     return {
