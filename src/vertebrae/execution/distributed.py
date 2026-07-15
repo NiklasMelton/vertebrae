@@ -1,8 +1,10 @@
 """Distributed embedding primitives."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from functools import partial
+from itertools import chain
 from typing import Any, Dict, Iterable, Iterator, Optional, Tuple
+from uuid import uuid4
 
 import numpy as np
 
@@ -14,7 +16,6 @@ from vertebrae.cache import (
 )
 from vertebrae.cache.fingerprint import (
     fingerprint_extractor_recipe,
-    hash_json,
     hash_json_exact,
 )
 from vertebrae.cache.keys import named_output_artifact_key, named_output_artifact_keys
@@ -24,7 +25,14 @@ from vertebrae.compression import (
     compression_variant_name,
 )
 from vertebrae.compression.paired import compress_embedding_pair
-from vertebrae.config import ResourceProfilingConfig, SegmentationConfig
+from vertebrae.config import (
+    MemoryConfig,
+    OverlapScoringConfig,
+    ResourceProfilingConfig,
+    RetrievalConfig,
+    SegmentationConfig,
+    overlap_scoring_config_recipe,
+)
 from vertebrae.execution.jobs import (
     CompressionJob,
     EmbeddingMergeJob,
@@ -36,6 +44,10 @@ from vertebrae.execution.jobs import (
     SeparatixJob,
     ShardSpec,
     StabilityJob,
+)
+from vertebrae.extractors._identity import (
+    derived_cache_reuse_decision,
+    extractor_cache_reuse_decision,
 )
 from vertebrae.extractors.base import EmbeddingOutput
 from vertebrae.profiling import (
@@ -50,9 +62,21 @@ from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.utils.embedding_batches import encode_endpoint_batches, take_endpoint_rows
 from vertebrae.utils.labels import (
     REGRESSION_TARGET,
+    canonical_metric_targets,
     label_view_suffix,
+    labels_to_jsonable,
     target_summary,
     target_view_suffix,
+)
+from vertebrae.utils.memory import (
+    IncrementalMatrixReferenceStager,
+    IncrementalMatrixStager,
+)
+from vertebrae.utils.semantic_labels import (
+    SemanticLabelKey,
+    canonical_semantic_array,
+    label_display,
+    semantic_label_key,
 )
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
@@ -81,14 +105,55 @@ def retrieval_embedding_artifact_key(
     if side not in {"query", "gallery"}:
         raise ValueError("side must be 'query' or 'gallery'.")
     recipe = extractor.recipe()
-    if recipe.get("cache_safe") is False:
-        raise ValueError(
-            "Cannot plan canonical retrieval artifacts for a callable extractor without "
-            "portable callable paths or cache_identity."
-        )
     recipe_hash = fingerprint_extractor_recipe(recipe)
-    branch_key = "default" if branch is None else hash_json({"branch": branch})
+    branch_key = "default" if branch is None else hash_json_exact({"branch": branch})
     return f"retrieval/embeddings/{dataset.identity_key()}/{recipe_hash}/{side}/{branch_key}"
+
+
+def _execution_artifact_identity(
+    canonical_key: str,
+    recipe: dict[str, Any],
+    *,
+    output_key: Optional[str] = None,
+    run_prefix: Optional[str] = None,
+) -> tuple[str, bool, str]:
+    """Resolve reusable versus run-scoped artifact identity for an execution job."""
+
+    cache_eligible, cache_status = extractor_cache_reuse_decision(recipe)
+    if output_key is not None:
+        if not cache_eligible and not output_key.startswith("runs/"):
+            raise ValueError(
+                "Cache-ineligible extractors require a run-scoped output key under 'runs/'. "
+                "Enable embedding caching and provide a safe cache_identity to opt into "
+                "canonical reuse."
+            )
+        return (
+            output_key,
+            cache_eligible,
+            cache_status,
+        )
+    if cache_eligible:
+        return canonical_key, True, "miss"
+    resolved_prefix = run_prefix or f"runs/{uuid4().hex}"
+    if not resolved_prefix.startswith("runs/"):
+        raise ValueError("run_prefix must be scoped beneath 'runs/'.")
+    return (
+        f"{resolved_prefix}/{canonical_key}",
+        False,
+        cache_status,
+    )
+
+
+def _embedding_metadata_from_array_manifest(array_manifest: Any) -> dict[str, Any]:
+    """Build the minimal resident-memory contract used during composite commit."""
+
+    sparse = array_manifest.storage_format == "npz"
+    return {
+        "shape": list(array_manifest.shape),
+        "dtype": array_manifest.dtype,
+        "sparse": sparse,
+        "nnz": array_manifest.nnz if sparse else None,
+    }
 
 
 def retrieval_embedding_shard_key(base_key: str, shard: ShardSpec) -> str:
@@ -132,16 +197,29 @@ def labels_artifact_key(dataset: Any) -> str:
         Artifact key for labels.
     """
 
-    return f"labels/{dataset.identity_key()}"
+    digest = _labels_content_digest(dataset)
+    return f"labels/{dataset.identity_key()}/v2-{digest}"
 
 
 def groups_artifact_key(dataset: Any) -> str:
     """Build the canonical independence-group artifact key."""
 
-    return f"groups/{dataset.identity_key()}"
+    digest = _groups_content_digest(dataset)
+    return f"groups/{dataset.identity_key()}/v2-{digest}"
 
 
-def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
+def scoring_artifact_key(
+    embedding_key: str,
+    seed: Any = None,
+    *,
+    labels_key: str,
+    groups_key: Optional[str],
+    scoring_config: Any,
+    metrics: Any,
+    metric: Any = None,
+    primary_metric: str,
+    run_prefix: Optional[str] = None,
+) -> str:
     """Build a scoring artifact key.
 
     Args:
@@ -152,24 +230,86 @@ def scoring_artifact_key(embedding_key: str, seed: Any = None) -> str:
         Artifact key for scoring output.
     """
 
-    suffix = "default" if seed is None else f"seed-{seed}"
-    return f"{embedding_key}/scores/{suffix}"
+    _require_artifact_identity(embedding_key, "embedding_key")
+    _require_artifact_identity(labels_key, "labels_key")
+    _validate_optional_artifact_identity(groups_key, "groups_key")
+    if scoring_config is None:
+        raise ValueError("scoring_config is required for a scoring artifact identity.")
+    if metrics is None:
+        raise ValueError("metrics is required; pass an empty sequence for overlap-only scoring.")
+    if not isinstance(primary_metric, str) or not primary_metric:
+        raise ValueError("primary_metric must be a non-empty string.")
+    metric_recipes = _configured_metric_recipes(scoring_config, metrics, metric)
+    identity = {
+        "identity_schema": 2,
+        "embedding_key": embedding_key,
+        "labels_key": labels_key,
+        "groups_key": groups_key,
+        "scoring_config": overlap_scoring_config_recipe(scoring_config),
+        "metric_recipes": metric_recipes,
+        "primary_metric": primary_metric,
+        "seed": seed,
+    }
+    digest = hash_json_exact(identity)
+    if _metric_recipes_cache_safe(metric_recipes):
+        return f"{embedding_key}/scores/v2-{digest}"
+    resolved_prefix = run_prefix or f"runs/{uuid4().hex}"
+    if not resolved_prefix.startswith("runs/"):
+        raise ValueError("run_prefix must be scoped beneath 'runs/'.")
+    return f"{resolved_prefix}/scores/v2-{digest}"
 
 
-def stability_artifact_key(embedding_key: str, stability_config: Any = None) -> str:
+def stability_artifact_key(
+    embedding_key: str,
+    *,
+    labels_key: str,
+    scoring_config: Any,
+    stability_config: Any,
+) -> str:
     """Build a configuration-specific stability artifact key."""
 
-    from vertebrae.cache.fingerprint import hash_json
+    _require_artifact_identity(embedding_key, "embedding_key")
+    _require_artifact_identity(labels_key, "labels_key")
+    if scoring_config is None:
+        raise ValueError("scoring_config is required for a stability artifact identity.")
+    if stability_config is None:
+        raise ValueError("stability_config is required for a stability artifact identity.")
+    identity = {
+        "identity_schema": 2,
+        "embedding_key": embedding_key,
+        "labels_key": labels_key,
+        "scoring_config": overlap_scoring_config_recipe(scoring_config),
+        "stability_config": make_json_safe(stability_config),
+    }
+    return f"{embedding_key}/diagnostics/stability-v2-{hash_json_exact(identity)}"
 
-    return f"{embedding_key}/diagnostics/stability-{hash_json(make_json_safe(stability_config))}"
 
-
-def retrieval_scoring_artifact_key(query_embedding_key: str, gallery_embedding_key: str) -> str:
+def retrieval_scoring_artifact_key(
+    query_embedding_key: str,
+    gallery_embedding_key: str,
+    *,
+    relevance_key: str,
+    exclusions_key: Optional[str],
+    retrieval_config: Any,
+) -> str:
     """Build a stable key for a query--gallery retrieval score artifact."""
-    from vertebrae.cache.fingerprint import hash_json
 
-    identity = {"query": query_embedding_key, "gallery": gallery_embedding_key}
-    return f"retrieval/scores/{hash_json(identity)}"
+    _require_artifact_identity(query_embedding_key, "query_embedding_key")
+    _require_artifact_identity(gallery_embedding_key, "gallery_embedding_key")
+    _require_artifact_identity(relevance_key, "relevance_key")
+    _validate_optional_artifact_identity(exclusions_key, "exclusions_key")
+    if retrieval_config is None:
+        raise ValueError("retrieval_config is required for a retrieval score identity.")
+
+    identity = {
+        "identity_schema": 2,
+        "query": query_embedding_key,
+        "gallery": gallery_embedding_key,
+        "relevance": relevance_key,
+        "exclusions": exclusions_key,
+        "retrieval_config": retrieval_config,
+    }
+    return f"retrieval/scores/v2-{hash_json_exact(identity)}"
 
 
 def retrieval_compression_artifact_key(
@@ -178,14 +318,146 @@ def retrieval_compression_artifact_key(
     """Build a paired compression artifact prefix."""
     from vertebrae.compression import compression_recipe_hash
 
-    identity = hash_json({"query": query_embedding_key, "gallery": gallery_embedding_key})
+    identity = hash_json_exact(
+        {"identity_schema": 2, "query": query_embedding_key, "gallery": gallery_embedding_key}
+    )
     return f"retrieval/compressions/{identity}/{compression_recipe_hash(config)}"
 
 
-def separatix_artifact_key(embedding_key: str) -> str:
+def separatix_artifact_key(
+    embedding_key: str,
+    *,
+    labels_key: str,
+    groups_key: Optional[str],
+    score_key: str,
+    separatix_config: Any,
+) -> str:
     """Build a Separatix diagnostic artifact key."""
 
-    return f"{embedding_key}/diagnostics/separatix"
+    _require_artifact_identity(embedding_key, "embedding_key")
+    _require_artifact_identity(labels_key, "labels_key")
+    _validate_optional_artifact_identity(groups_key, "groups_key")
+    _require_artifact_identity(score_key, "score_key")
+    if separatix_config is None:
+        raise ValueError("separatix_config is required for a Separatix artifact identity.")
+    identity = {
+        "identity_schema": 2,
+        "embedding_key": embedding_key,
+        "labels_key": labels_key,
+        "groups_key": groups_key,
+        "score_key": score_key,
+        "separatix_config": make_json_safe(separatix_config),
+    }
+    return f"{embedding_key}/diagnostics/separatix-v2-{hash_json_exact(identity)}"
+
+
+def _require_artifact_identity(value: Any, name: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a non-empty artifact key.")
+
+
+def _validate_optional_artifact_identity(value: Any, name: str) -> None:
+    if value is not None:
+        _require_artifact_identity(value, name)
+
+
+def _labels_content_digest(dataset: Any) -> str:
+    metadata = dataset.metadata
+    values = np.asarray(dataset.y)
+    return hash_json_exact(
+        {
+            "identity_schema": 2,
+            "values": labels_to_jsonable(
+                dataset.y,
+                label_names=metadata.get("label_names"),
+                target_type=metadata.get("target_type", "auto"),
+                target_names=metadata.get("target_names"),
+            ),
+            "shape": list(values.shape),
+            "dtype": str(values.dtype),
+            "target_type": metadata.get("target_type", "auto"),
+            "label_names": metadata.get("label_names"),
+            "target_names": metadata.get("target_names"),
+            "target_view": dataset.active_target_view(),
+            "label_view": dataset.active_label_view(),
+        }
+    )
+
+
+def _groups_content_digest(dataset: Any) -> str:
+    groups = dataset.groups() if callable(getattr(dataset, "groups", None)) else None
+    if groups is None:
+        raise ValueError("Cannot build a group artifact key for a dataset without groups.")
+    values = np.asarray(groups)
+    return hash_json_exact(
+        {
+            "identity_schema": 2,
+            "values": values,
+            "shape": list(values.shape),
+            "dtype": str(values.dtype),
+            "group_name": dataset.metadata.get("group_name", "group"),
+        }
+    )
+
+
+def _configured_metric_recipes(
+    scoring_config: Any,
+    metrics: Any,
+    metric: Any = None,
+) -> list[dict[str, Any]]:
+    """Return the exact recipes for the metrics a scoring job will execute."""
+
+    return [
+        make_json_safe(metric.recipe())
+        for metric in _configured_metrics(
+            scoring_config,
+            metrics,
+            metric,
+        )
+    ]
+
+
+def _configured_metrics(
+    scoring_config: Any,
+    metrics: Any,
+    metric: Any = None,
+) -> list[Any]:
+    """Resolve metric adapters and bind the scoring job's overlap configuration."""
+
+    from vertebrae.scoring.metrics import OverlapMetric, as_embedding_metric
+
+    configured = [as_embedding_metric(metric) for metric in (metrics or [])]
+    if metric is not None:
+        configured.append(as_embedding_metric(metric))
+    resolved: list[Any] = []
+    for configured_metric in configured:
+        if isinstance(configured_metric, OverlapMetric):
+            if configured_metric.config is None:
+                configured_metric = configured_metric.with_config(scoring_config)
+            elif overlap_scoring_config_recipe(
+                configured_metric.config
+            ) != overlap_scoring_config_recipe(scoring_config):
+                raise ValueError(
+                    "OverlapMetric.config conflicts with ScoringJob.scoring_config. "
+                    "Use one identical overlap configuration for artifact identity and scoring."
+                )
+        resolved.append(configured_metric)
+    configured = resolved
+    if not any(configured_metric.name == "overlap" for configured_metric in configured):
+        configured.insert(0, OverlapMetric(config=scoring_config))
+    names = [configured_metric.name for configured_metric in configured]
+    if len(names) != len(set(names)):
+        raise ValueError("Metric names must be unique within a scoring job.")
+    return configured
+
+
+def _metric_recipes_cache_safe(metric_recipes: Iterable[dict[str, Any]]) -> bool:
+    """Return whether every metric has a portable, reusable identity."""
+
+    return all(
+        recipe.get("cache_safe") is not False and recipe.get("portable") is not False
+        for recipe in metric_recipes
+    )
 
 
 def materialize_segmentation_artifacts(
@@ -195,10 +467,11 @@ def materialize_segmentation_artifacts(
     segmentation_config: Any = None,
     batch_size: int = 16,
     resource_profiling_config: Optional[ResourceProfilingConfig] = None,
+    memory_config: Optional[MemoryConfig] = None,
 ) -> dict[str, Any]:
     """Materialize spatial segmentation outputs into standard artifact boundaries."""
 
-    from vertebrae.segmentation import materialize_segmentation_outputs
+    from vertebrae.segmentation import iter_materialize_segmentation_outputs
 
     recipe = extractor.recipe()
     resolved_segmentation_config = (
@@ -207,6 +480,7 @@ def materialize_segmentation_artifacts(
     segmentation_config_dict = asdict(resolved_segmentation_config)
     segmentation_config_hash = hash_json_exact(segmentation_config_dict)
     resource_config = resource_profiling_config or ResourceProfilingConfig()
+    resolved_memory_config = memory_config or MemoryConfig()
     profiler = ResourceProfiler(
         resource_config,
         extractor,
@@ -218,21 +492,23 @@ def materialize_segmentation_artifacts(
         f"{fingerprint_extractor_recipe(recipe)}/{segmentation_config_hash}"
     )
     outputs = []
-    materializations = list(
-        materialize_segmentation_outputs(
-            dataset,
-            extractor,
-            config=resolved_segmentation_config,
-            batch_size=batch_size,
-            resource_profiler=profiler if resource_config.enabled else None,
-        )
+    materializations = iter_materialize_segmentation_outputs(
+        dataset,
+        extractor,
+        config=resolved_segmentation_config,
+        batch_size=batch_size,
+        resource_profiler=profiler if resource_config.enabled else None,
+        memory_config=resolved_memory_config,
     )
+    try:
+        first_materialization = next(materializations)
+    except StopIteration as exc:
+        raise ValueError("Segmentation materialization produced no outputs.") from exc
     shared_profile = profiler.finish() if resource_config.enabled else None
-    output_keys = named_output_artifact_keys(
-        base_key, (materialization.name for materialization in materializations)
-    )
-    for materialization in materializations:
-        output_key = output_keys[materialization.name]
+    pending_materializations = chain((first_materialization,), materializations)
+    del first_materialization
+    for materialization in pending_materializations:
+        output_key = named_output_artifact_key(base_key, materialization.name)
         labels_key = f"{output_key}/labels"
         groups_key = f"{output_key}/groups"
         provenance_key = f"{output_key}/provenance"
@@ -241,12 +517,18 @@ def materialize_segmentation_artifacts(
         groups = materialization.dataset.groups()
         if groups is None:
             raise ValueError("Segmentation materialization must define image groups.")
-        artifact_path = store.put_array(output_key, embeddings)
+        _validate_materialized_rows(
+            embeddings,
+            labels,
+            groups,
+            materialization.provenance,
+            workflow="Segmentation",
+            output_name=materialization.name,
+        )
         embedding_manifest = {
             "artifact_type": "segmentation_embedding",
             "vertebrae_version": __version__,
             "output_key": output_key,
-            "artifact_path": artifact_path,
             "dataset_identity_key": materialization.dataset.identity_key(),
             "source_dataset_identity_key": dataset.identity_key(),
             "extractor_recipe": recipe,
@@ -259,6 +541,7 @@ def materialize_segmentation_artifacts(
             "shape": list(embeddings.shape),
             "dtype": str(embeddings.dtype),
             "sparse": False,
+            "nnz": None,
             "storage_format": "dense",
             "modality": "segmentation",
             "segmentation": materialization.metadata,
@@ -266,57 +549,78 @@ def materialize_segmentation_artifacts(
             "groups_key": groups_key,
             "provenance_key": provenance_key,
             "resource_profiling_config": asdict(resource_config),
+            "memory_config": asdict(resolved_memory_config),
         }
-        profile = with_embedding_footprint(
-            shared_profile,
+
+        def finalize_embedding_metadata(
+            metadata: dict[str, Any],
+            _array_manifest: Any,
+            artifact_stat: Any,
+            embedded_values: Any = embeddings,
+        ) -> dict[str, Any]:
+            profile = with_embedding_footprint(
+                shared_profile,
+                embedded_values,
+                embedded_values,
+                raw_stat=artifact_stat,
+                evaluated_stat=artifact_stat,
+                persisted_storage=resource_config.persisted_storage,
+            )
+            if profile is not None:
+                metadata["resource_profile"] = make_json_safe(profile)
+            return metadata
+
+        store.put_artifact(
+            output_key,
             embeddings,
-            embeddings,
-            store=store,
-            raw_key=output_key,
-            evaluated_key=output_key,
-            persisted_storage=resource_config.persisted_storage,
+            embedding_manifest,
+            metadata_finalizer=finalize_embedding_metadata,
         )
-        if profile is not None:
-            embedding_manifest["resource_profile"] = make_json_safe(profile)
-        store.put_json(output_key, embedding_manifest)
-        label_path = store.put_labels(labels_key, labels)
+        embedding_manifest = store.get_json(output_key)
         label_summary = target_summary(
             labels,
             target_type=materialization.dataset.metadata.get("target_type", "auto"),
             target_names=materialization.dataset.metadata.get("target_names"),
         )
-        store.put_json(
+        label_manifest = {
+            "artifact_type": "labels",
+            "vertebrae_version": __version__,
+            "output_key": labels_key,
+            "dataset_identity_key": materialization.dataset.identity_key(),
+            "n_samples": int(len(labels)),
+            "target_type": label_summary["target_type"],
+            "class_counts": make_json_safe(label_summary["class_counts"]),
+            "n_classes": label_summary["n_classes"],
+            "target_view": materialization.dataset.active_target_view(),
+            "label_view": materialization.dataset.active_label_view(),
+        }
+        store.put_labels_artifact(
             labels_key,
-            {
-                "artifact_type": "labels",
-                "vertebrae_version": __version__,
-                "output_key": labels_key,
-                "artifact_path": label_path,
-                "dataset_identity_key": materialization.dataset.identity_key(),
-                "n_samples": int(len(labels)),
-                "target_type": label_summary["target_type"],
-                "class_counts": make_json_safe(label_summary["class_counts"]),
-                "n_classes": label_summary["n_classes"],
-                "target_view": materialization.dataset.active_target_view(),
-                "label_view": materialization.dataset.active_label_view(),
-            },
+            labels,
+            label_manifest,
+            target_type=materialization.dataset.metadata.get("target_type", "auto"),
+            target_names=materialization.dataset.metadata.get("target_names"),
         )
-        group_path = store.put_labels(groups_key, groups)
-        store.put_json(
+        stored_groups, group_encoding = _group_artifact_values(groups)
+        group_manifest = {
+            "artifact_type": "groups",
+            "vertebrae_version": __version__,
+            "output_key": groups_key,
+            "dataset_identity_key": materialization.dataset.identity_key(),
+            "n_samples": int(len(groups)),
+            "n_groups": int(len({semantic_label_key(value) for value in groups})),
+            "group_name": "image_id",
+            "group_value_encoding": group_encoding,
+        }
+        store.put_labels_artifact(
             groups_key,
-            {
-                "artifact_type": "groups",
-                "vertebrae_version": __version__,
-                "output_key": groups_key,
-                "artifact_path": group_path,
-                "dataset_identity_key": materialization.dataset.identity_key(),
-                "n_samples": int(len(groups)),
-                "n_groups": int(len(np.unique(groups))),
-                "group_name": "image_id",
-            },
+            stored_groups,
+            group_manifest,
+            target_type="single_label",
         )
         store.put_json(provenance_key, {"rows": materialization.provenance})
         outputs.append(embedding_manifest)
+        del embeddings, labels, groups, materialization
     bundle = {
         "artifact_type": "segmentation_embedding_bundle",
         "vertebrae_version": __version__,
@@ -326,6 +630,7 @@ def materialize_segmentation_artifacts(
         "segmentation_config": make_json_safe(segmentation_config_dict),
         "segmentation_config_hash": segmentation_config_hash,
         "resource_profiling_config": asdict(resource_config),
+        "memory_config": asdict(resolved_memory_config),
         "resource_profile": (
             make_json_safe(shared_profile) if shared_profile is not None else None
         ),
@@ -342,36 +647,58 @@ def materialize_structured_artifacts(
     batch_size: int = 16,
     aligners: Optional[dict[str, Any]] = None,
     resource_profiling_config: Optional[ResourceProfilingConfig] = None,
+    memory_config: Optional[MemoryConfig] = None,
 ) -> dict[str, Any]:
     """Materialize structured unit outputs into standard artifact boundaries."""
 
-    from vertebrae.structured import materialize_structured_outputs
+    from vertebrae.structured import iter_materialize_structured_outputs
 
     recipe = extractor.recipe()
+    aligner_recipes: dict[str, Any] = {}
+    for name, aligner in sorted((aligners or {}).items()):
+        recipe_method = getattr(aligner, "recipe", None)
+        if not callable(recipe_method):
+            raise TypeError(f"Structured aligner {name!r} must define recipe().")
+        aligner_recipes[name] = make_json_safe(recipe_method())
+    structured_identity = {
+        "identity_schema": 2,
+        "extractor_recipe": recipe,
+        "aligners": aligner_recipes,
+    }
+    cache_safe = recipe.get("cache_safe") is not False and all(
+        aligner_recipe.get("cache_safe") is not False for aligner_recipe in aligner_recipes.values()
+    )
     resource_config = resource_profiling_config or ResourceProfilingConfig()
+    resolved_memory_config = memory_config or MemoryConfig()
     profiler = ResourceProfiler(
         resource_config,
         extractor,
         streaming=True,
         context={"measurement_scope": "artifact_materialization", "modality": "structured"},
     )
-    base_key = f"structured/{dataset.identity_key()}/{fingerprint_extractor_recipe(recipe)}"
+    canonical_key = f"structured/{dataset.identity_key()}/{hash_json_exact(structured_identity)}"
+    base_key, cache_eligible, cache_status = _execution_artifact_identity(
+        canonical_key,
+        {"cache_safe": cache_safe},
+    )
     outputs = []
-    materializations = list(
-        materialize_structured_outputs(
-            dataset,
-            extractor,
-            batch_size=batch_size,
-            aligners=aligners,
-            resource_profiler=profiler if resource_config.enabled else None,
-        )
+    materializations = iter_materialize_structured_outputs(
+        dataset,
+        extractor,
+        batch_size=batch_size,
+        aligners=aligners,
+        resource_profiler=profiler if resource_config.enabled else None,
+        memory_config=resolved_memory_config,
     )
+    try:
+        first_materialization = next(materializations)
+    except StopIteration as exc:
+        raise ValueError("Structured materialization produced no outputs.") from exc
     shared_profile = profiler.finish() if resource_config.enabled else None
-    output_keys = named_output_artifact_keys(
-        base_key, (materialization.name for materialization in materializations)
-    )
-    for materialization in materializations:
-        output_key = output_keys[materialization.name]
+    pending_materializations = chain((first_materialization,), materializations)
+    del first_materialization
+    for materialization in pending_materializations:
+        output_key = named_output_artifact_key(base_key, materialization.name)
         labels_key = f"{output_key}/labels"
         groups_key = f"{output_key}/groups"
         provenance_key = f"{output_key}/provenance"
@@ -380,13 +707,19 @@ def materialize_structured_artifacts(
         groups = materialization.dataset.groups()
         if groups is None:
             raise ValueError("Structured materialization must define parent groups.")
-        artifact_path = store.put_array(output_key, embeddings)
+        _validate_materialized_rows(
+            embeddings,
+            labels,
+            groups,
+            materialization.provenance,
+            workflow="Structured",
+            output_name=materialization.name,
+        )
         sparse_embeddings = is_sparse_matrix(embeddings)
         embedding_manifest = {
             "artifact_type": "structured_embedding",
             "vertebrae_version": __version__,
             "output_key": output_key,
-            "artifact_path": artifact_path,
             "dataset_identity_key": materialization.dataset.identity_key(),
             "source_dataset_identity_key": dataset.identity_key(),
             "extractor_recipe": recipe,
@@ -405,33 +738,44 @@ def materialize_structured_artifacts(
             "task_family": materialization.metadata.get("task_family"),
             "alignment_mode": materialization.metadata.get("alignment_mode"),
             "alignment_recipe": materialization.metadata.get("alignment_recipe"),
+            "aligner_recipes": aligner_recipes,
+            "cache_eligible": cache_eligible,
+            "cache_status": cache_status,
             "labels_key": labels_key,
             "groups_key": groups_key,
             "provenance_key": provenance_key,
             "resource_profiling_config": asdict(resource_config),
+            "memory_config": asdict(resolved_memory_config),
         }
-        profile = with_embedding_footprint(
-            shared_profile,
+
+        def finalize_embedding_metadata(
+            metadata: dict[str, Any],
+            _array_manifest: Any,
+            artifact_stat: Any,
+            embedded_values: Any = embeddings,
+        ) -> dict[str, Any]:
+            profile = with_embedding_footprint(
+                shared_profile,
+                embedded_values,
+                embedded_values,
+                raw_stat=artifact_stat,
+                evaluated_stat=artifact_stat,
+                persisted_storage=resource_config.persisted_storage,
+            )
+            if profile is not None:
+                metadata["resource_profile"] = make_json_safe(profile)
+            return metadata
+
+        store.put_artifact(
+            output_key,
             embeddings,
-            embeddings,
-            store=store,
-            raw_key=output_key,
-            evaluated_key=output_key,
-            persisted_storage=resource_config.persisted_storage,
+            embedding_manifest,
+            metadata_finalizer=finalize_embedding_metadata,
         )
-        if profile is not None:
-            embedding_manifest["resource_profile"] = make_json_safe(profile)
-        store.put_json(output_key, embedding_manifest)
+        embedding_manifest = store.get_json(output_key)
         label_names = materialization.dataset.metadata.get("label_names")
         target_type = materialization.dataset.metadata.get("target_type", "auto")
         target_names = materialization.dataset.metadata.get("target_names")
-        label_path = store.put_labels(
-            labels_key,
-            labels,
-            label_names=label_names,
-            target_type=target_type,
-            target_names=target_names,
-        )
         label_summary = target_summary(
             labels,
             label_names=label_names,
@@ -442,7 +786,6 @@ def materialize_structured_artifacts(
             "artifact_type": "labels",
             "vertebrae_version": __version__,
             "output_key": labels_key,
-            "artifact_path": label_path,
             "dataset_identity_key": materialization.dataset.identity_key(),
             "n_samples": int(len(labels)),
             "target_type": label_summary["target_type"],
@@ -452,7 +795,6 @@ def materialize_structured_artifacts(
             "label_view": materialization.dataset.active_label_view(),
         }
         for label_key in (
-            "label_names",
             "labelset_counts",
             "mean_label_cardinality",
             "label_density",
@@ -465,30 +807,46 @@ def materialize_structured_artifacts(
         ):
             if label_key in label_summary:
                 label_manifest[label_key] = make_json_safe(label_summary[label_key])
-        store.put_json(labels_key, label_manifest)
-        group_path = store.put_labels(groups_key, groups)
-        store.put_json(
+        store.put_labels_artifact(
+            labels_key,
+            labels,
+            label_manifest,
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+        )
+        stored_groups, group_encoding = _group_artifact_values(groups)
+        group_manifest = {
+            "artifact_type": "groups",
+            "vertebrae_version": __version__,
+            "output_key": groups_key,
+            "dataset_identity_key": materialization.dataset.identity_key(),
+            "n_samples": int(len(groups)),
+            "n_groups": int(len({semantic_label_key(value) for value in groups})),
+            "group_name": "parent_id",
+            "group_value_encoding": group_encoding,
+        }
+        store.put_labels_artifact(
             groups_key,
-            {
-                "artifact_type": "groups",
-                "vertebrae_version": __version__,
-                "output_key": groups_key,
-                "artifact_path": group_path,
-                "dataset_identity_key": materialization.dataset.identity_key(),
-                "n_samples": int(len(groups)),
-                "n_groups": int(len(np.unique(groups))),
-                "group_name": "parent_id",
-            },
+            stored_groups,
+            group_manifest,
+            target_type="single_label",
         )
         store.put_json(provenance_key, {"rows": materialization.provenance})
         outputs.append(embedding_manifest)
+        del embeddings, labels, groups, materialization
     bundle = {
         "artifact_type": "structured_embedding_bundle",
         "vertebrae_version": __version__,
         "output_key": base_key,
         "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": recipe,
+        "aligner_recipes": aligner_recipes,
+        "structured_identity": structured_identity,
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
         "resource_profiling_config": asdict(resource_config),
+        "memory_config": asdict(resolved_memory_config),
         "resource_profile": (
             make_json_safe(shared_profile) if shared_profile is not None else None
         ),
@@ -498,6 +856,42 @@ def materialize_structured_artifacts(
     return bundle
 
 
+def _validate_materialized_rows(
+    embeddings: Any,
+    labels: Any,
+    groups: Any,
+    provenance: Any,
+    *,
+    workflow: str,
+    output_name: str,
+) -> None:
+    """Validate every row-aligned artifact before publishing any output files."""
+
+    matrix = ensure_numeric_matrix(
+        embeddings,
+        f"{workflow} output {output_name!r} embeddings",
+        allow_sparse=True,
+    )
+    n_rows = int(matrix.shape[0])
+    aligned = {
+        "labels": labels,
+        "groups": groups,
+        "provenance": provenance,
+    }
+    for name, values in aligned.items():
+        try:
+            length = len(values)
+        except TypeError as exc:
+            raise TypeError(
+                f"{workflow} output {output_name!r} {name} must be row-aligned."
+            ) from exc
+        if length != n_rows:
+            raise ValueError(
+                f"{workflow} output {output_name!r} has {n_rows} embedding rows but "
+                f"{length} {name} rows."
+            )
+
+
 def plan_embedding_shard_jobs(
     dataset: Any,
     extractor: Any,
@@ -505,8 +899,9 @@ def plan_embedding_shard_jobs(
     batch_size: int = 128,
     resource_profiling_config: Optional[ResourceProfilingConfig] = None,
     output_key: Optional[str] = None,
-    fit_extractor: bool = True,
     streaming_enabled: bool = True,
+    memory_config: Optional[MemoryConfig] = None,
+    run_prefix: Optional[str] = None,
 ) -> list[EmbeddingShardJob]:
     """Create deterministic embedding shard jobs.
 
@@ -520,7 +915,22 @@ def plan_embedding_shard_jobs(
         Embedding shard jobs with canonical output keys.
     """
 
-    base_key = output_key or embedding_artifact_key(dataset, extractor)
+    if isinstance(total_shards, bool) or not isinstance(total_shards, (int, np.integer)):
+        raise ValueError("total_shards must be an integer >= 1.")
+    if int(total_shards) < 1:
+        raise ValueError("total_shards must be >= 1.")
+    n_samples = int(len(dataset.y))
+    if n_samples < 1:
+        raise ValueError("Cannot plan embedding shards for an empty dataset.")
+    extractor_streaming_safe = bool(getattr(extractor, "streaming_safe", False))
+    effective_streaming = bool(streaming_enabled and extractor_streaming_safe)
+    planned_shards = min(int(total_shards), n_samples) if effective_streaming else 1
+    base_key, cache_eligible, cache_status = _execution_artifact_identity(
+        embedding_artifact_key(dataset, extractor),
+        extractor.recipe(),
+        output_key=output_key,
+        run_prefix=run_prefix,
+    )
     return [
         EmbeddingShardJob(
             dataset=dataset,
@@ -528,12 +938,14 @@ def plan_embedding_shard_jobs(
             shard=shard,
             output_key=embedding_shard_key(base_key, shard),
             batch_size=batch_size,
-            fit_extractor=fit_extractor,
-            streaming_enabled=streaming_enabled,
+            streaming_enabled=effective_streaming,
+            cache_eligible=cache_eligible,
+            cache_status=cache_status,
+            memory_config=memory_config or MemoryConfig(),
             resource_profiling_config=(resource_profiling_config or ResourceProfilingConfig()),
         )
         for shard in (
-            ShardSpec(total_shards=total_shards, shard_index=i) for i in range(total_shards)
+            ShardSpec(total_shards=planned_shards, shard_index=i) for i in range(planned_shards)
         )
     ]
 
@@ -582,6 +994,7 @@ def materialize_and_merge_embeddings(
         Merged embedding manifest.
     """
 
+    extractor.fit(dataset.X, dataset.y)
     jobs = plan_embedding_shard_jobs(
         dataset=dataset,
         extractor=extractor,
@@ -589,10 +1002,11 @@ def materialize_and_merge_embeddings(
         batch_size=batch_size,
     )
     shard_manifests = materialize_embedding_shards(jobs, store=store, execution=execution)
+    base_key = jobs[0].output_key.rsplit("/shards/", 1)[0]
     return merge_embedding_shards(
         EmbeddingMergeJob(
             shard_keys=tuple(manifest["output_key"] for manifest in shard_manifests),
-            output_key=embedding_artifact_key(dataset, extractor),
+            output_key=base_key,
             n_samples=len(dataset.y),
         ),
         store=store,
@@ -617,13 +1031,6 @@ def materialize_label_artifact(
     """
 
     output_key = key or labels_artifact_key(dataset)
-    artifact_path = store.put_labels(
-        output_key,
-        dataset.y,
-        label_names=dataset.metadata.get("label_names"),
-        target_type=dataset.metadata.get("target_type", "auto"),
-        target_names=dataset.metadata.get("target_names"),
-    )
     labels = target_summary(
         dataset.y,
         label_names=dataset.metadata.get("label_names"),
@@ -634,9 +1041,9 @@ def materialize_label_artifact(
         "artifact_type": "labels",
         "vertebrae_version": __version__,
         "output_key": output_key,
-        "artifact_path": artifact_path,
         "dataset_identity_key": dataset.identity_key(),
         "aligned_embedding_identity_key": aligned_embedding_identity_key,
+        "content_digest": _labels_content_digest(dataset),
         "n_samples": int(len(dataset.y)),
         "dtype": str(np.asarray(dataset.y).dtype),
         "target_type": labels["target_type"],
@@ -646,7 +1053,6 @@ def materialize_label_artifact(
         "label_view": make_json_safe(dataset.active_label_view()),
     }
     for label_key in (
-        "label_names",
         "labelset_counts",
         "mean_label_cardinality",
         "label_density",
@@ -659,8 +1065,15 @@ def materialize_label_artifact(
     ):
         if label_key in labels:
             manifest[label_key] = make_json_safe(labels[label_key])
-    store.put_json(output_key, manifest)
-    return manifest
+    store.put_labels_artifact(
+        output_key,
+        dataset.y,
+        manifest,
+        label_names=dataset.metadata.get("label_names"),
+        target_type=dataset.metadata.get("target_type", "auto"),
+        target_names=dataset.metadata.get("target_names"),
+    )
+    return store.get_json(output_key)
 
 
 def materialize_group_artifact(
@@ -675,20 +1088,26 @@ def materialize_group_artifact(
     if groups is None:
         raise ValueError("Dataset does not define independence groups.")
     output_key = key or groups_artifact_key(dataset)
-    artifact_path = store.put_labels(output_key, groups)
+    stored_groups, group_encoding = _group_artifact_values(groups)
     manifest = {
         "artifact_type": "groups",
         "vertebrae_version": __version__,
         "output_key": output_key,
-        "artifact_path": artifact_path,
         "dataset_identity_key": dataset.identity_key(),
         "aligned_embedding_identity_key": aligned_embedding_identity_key,
+        "content_digest": _groups_content_digest(dataset),
         "n_samples": int(len(groups)),
-        "n_groups": int(len(np.unique(groups))),
+        "n_groups": int(len({semantic_label_key(value) for value in groups})),
         "group_name": dataset.metadata.get("group_name", "group"),
+        "group_value_encoding": group_encoding,
     }
-    store.put_json(output_key, manifest)
-    return manifest
+    store.put_labels_artifact(
+        output_key,
+        stored_groups,
+        manifest,
+        target_type="single_label",
+    )
+    return store.get_json(output_key)
 
 
 def score_embedding_artifact(
@@ -705,42 +1124,68 @@ def score_embedding_artifact(
         JSON-compatible scoring artifact.
     """
 
-    embedding_metadata, label_metadata = validate_embedding_label_artifacts(
-        store,
-        embedding_key=job.embedding_key,
-        labels_key=job.labels_key,
+    if job.scoring_config is None:
+        job = replace(job, scoring_config=OverlapScoringConfig())
+
+    embeddings, labels, embedding_metadata, label_metadata = (
+        _load_validated_embedding_label_artifacts(
+            store,
+            embedding_key=job.embedding_key,
+            labels_key=job.labels_key,
+        )
     )
-    embeddings = store.get_array(job.embedding_key)
-    labels = store.get_labels(job.labels_key)
+    if int(embeddings.shape[0]) != len(labels):
+        raise ValueError("Embedding and label arrays have different row counts.")
     groups, group_metadata = _load_validated_groups(
         store,
         groups_key=job.groups_key,
         embedding_metadata=embedding_metadata,
         label_metadata=label_metadata,
     )
-    from vertebrae.scoring.metrics import OverlapMetric, as_embedding_metric
-
-    configured = [as_embedding_metric(metric) for metric in (job.metrics or [])]
-    if job.metric is not None:
-        configured.append(as_embedding_metric(job.metric))
-    if not any(metric.name == "overlap" for metric in configured):
-        configured.insert(0, OverlapMetric(config=job.scoring_config))
+    configured = _configured_metrics(job.scoring_config, job.metrics, job.metric)
     names = [metric.name for metric in configured]
-    if len(names) != len(set(names)):
-        raise ValueError("Metric names must be unique within a scoring job.")
     if job.primary_metric not in names:
         raise ValueError("primary_metric must name one configured metric.")
+    canonical_labels = canonical_metric_targets(
+        labels,
+        label_names=label_metadata.get("label_names"),
+        target_type=label_metadata.get("target_type", "auto"),
+        target_names=label_metadata.get("target_names"),
+    )
+    canonical_groups = None if groups is None else canonical_semantic_array(groups)
     metric_results = {}
     for metric in configured:
         result = metric.score(
             embeddings,
-            labels,
+            canonical_labels,
             target_metadata=label_metadata,
-            groups=groups,
+            groups=canonical_groups,
             seed=job.seed,
         )
         result.metadata = {**label_metadata, **result.metadata}
         metric_results[metric.name] = result.to_dict()
+    metric_recipes = [make_json_safe(metric.recipe()) for metric in configured]
+    metric_identity_safe = _metric_recipes_cache_safe(metric_recipes)
+    cache_eligible, cache_status = derived_cache_reuse_decision(
+        embedding_metadata,
+        identity_safe=metric_identity_safe,
+    )
+    if not cache_eligible and not job.output_key.startswith("runs/"):
+        raise ValueError(
+            "Cache-ineligible scoring inputs require a run-scoped score output key under "
+            "'runs/'. Use plan_scoring_jobs(), enable source embedding caching, or give the "
+            "callable metric a portable identity."
+        )
+    protocol = _labeled_scoring_protocol(
+        job,
+        metric_recipes=metric_recipes,
+        embedding_metadata=embedding_metadata,
+        label_metadata=label_metadata,
+        group_metadata=group_metadata,
+    )
+    protocol_fingerprint = hash_json_exact(protocol)
+    collection_protocol = {key: value for key, value in protocol.items() if key != "seed"}
+    collection_protocol_fingerprint = hash_json_exact(collection_protocol)
     artifact = {
         "artifact_type": "metric_evaluation",
         "vertebrae_version": __version__,
@@ -752,13 +1197,73 @@ def score_embedding_artifact(
         "seed": job.seed,
         "metrics": metric_results,
         "primary_metric": job.primary_metric,
-        "metric_recipes": [metric.recipe() for metric in configured],
+        "metric_recipes": metric_recipes,
+        "scoring_config": overlap_scoring_config_recipe(job.scoring_config),
+        "protocol": protocol,
+        "protocol_fingerprint": protocol_fingerprint,
+        "collection_protocol_fingerprint": collection_protocol_fingerprint,
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
         "embedding_metadata": embedding_metadata,
         "label_metadata": label_metadata,
         "resources": asdict(job.resources),
     }
     store.put_json(job.output_key, artifact)
     return artifact
+
+
+def _labeled_scoring_protocol(
+    job: ScoringJob,
+    *,
+    metric_recipes: list[dict[str, Any]],
+    embedding_metadata: dict[str, Any],
+    label_metadata: dict[str, Any],
+    group_metadata: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the complete schema-versioned identity of one labeled evaluation."""
+
+    return {
+        "schema_version": 2,
+        "kind": "labeled_embedding_scoring",
+        "embedding": {
+            "key": job.embedding_key,
+            "dataset_identity_key": embedding_metadata.get("dataset_identity_key"),
+            "recipe_hash": embedding_metadata.get("recipe_hash"),
+            "source_embedding_key": embedding_metadata.get("source_embedding_key"),
+            "compression": embedding_metadata.get("compression"),
+            "output_name": embedding_metadata.get("output_name"),
+            "shape": embedding_metadata.get("shape"),
+            "dtype": embedding_metadata.get("dtype"),
+        },
+        "labels": {
+            "key": job.labels_key,
+            "content_digest": label_metadata.get("content_digest"),
+            "dataset_identity_key": label_metadata.get("dataset_identity_key"),
+            "aligned_embedding_identity_key": label_metadata.get("aligned_embedding_identity_key"),
+            "n_samples": label_metadata.get("n_samples"),
+            "target_type": label_metadata.get("target_type"),
+            "target_view": label_metadata.get("target_view"),
+            "label_view": label_metadata.get("label_view"),
+        },
+        "groups": (
+            None
+            if group_metadata is None
+            else {
+                "key": job.groups_key,
+                "content_digest": group_metadata.get("content_digest"),
+                "dataset_identity_key": group_metadata.get("dataset_identity_key"),
+                "aligned_embedding_identity_key": group_metadata.get(
+                    "aligned_embedding_identity_key"
+                ),
+                "n_samples": group_metadata.get("n_samples"),
+                "group_name": group_metadata.get("group_name"),
+            }
+        ),
+        "scoring_config": overlap_scoring_config_recipe(job.scoring_config),
+        "metric_recipes": metric_recipes,
+        "primary_metric": job.primary_metric,
+        "seed": job.seed,
+    }
 
 
 def score_retrieval_artifact(job: RetrievalScoringJob, store: ArtifactStore) -> dict[str, Any]:
@@ -771,12 +1276,10 @@ def score_retrieval_artifact(job: RetrievalScoringJob, store: ArtifactStore) -> 
     from vertebrae.config import RetrievalConfig
     from vertebrae.scoring.retrieval import RetrievalScorer
 
-    query_metadata = store.get_json(job.query_embedding_key)
-    gallery_metadata = store.get_json(job.gallery_embedding_key)
+    queries, query_metadata = store.get_artifact(job.query_embedding_key)
+    gallery, gallery_metadata = store.get_artifact(job.gallery_embedding_key)
     relevance_data = store.get_json(job.relevance_key)
     _validate_retrieval_pair_metadata(query_metadata, gallery_metadata, relevance_data)
-    queries = store.get_array(job.query_embedding_key)
-    gallery = store.get_array(job.gallery_embedding_key)
     raw_relevance = relevance_data.get("relevance", relevance_data)
     n_queries, n_gallery = int(queries.shape[0]), int(gallery.shape[0])
     if int(query_metadata.get("n_samples", n_queries)) != n_queries:
@@ -803,13 +1306,71 @@ def score_retrieval_artifact(job: RetrievalScoringJob, store: ArtifactStore) -> 
         raise ValueError("Relevance artifact query IDs do not align with query embeddings.")
     if gallery_ids is not None and len(gallery_ids) != n_gallery:
         raise ValueError("Relevance artifact gallery IDs do not align with gallery embeddings.")
-    result = RetrievalScorer(job.retrieval_config or RetrievalConfig()).score(
+    retrieval_config = job.retrieval_config or RetrievalConfig()
+    scorer = RetrievalScorer(retrieval_config)
+    forward = scorer.score(
         queries,
         gallery,
         relevance,
         query_ids=query_ids,
         gallery_ids=gallery_ids,
         exclusions=exclusions,
+    )
+    reverse = None
+    if retrieval_config.bidirectional:
+        reverse_relevance, reverse_exclusions = _transpose_retrieval_relations(
+            relevance,
+            exclusions,
+            n_gallery,
+        )
+        missing_reverse = [
+            gallery_index
+            for gallery_index, values in reverse_relevance.items()
+            if not any(
+                (gallery_index, query_index) not in reverse_exclusions for query_index in values
+            )
+        ]
+        if missing_reverse:
+            raise ValueError(
+                "bidirectional retrieval requires every gallery item to have an "
+                "eligible reverse relevance relation; missing gallery rows "
+                f"{missing_reverse[:10]}."
+            )
+        reverse = scorer.score(
+            gallery,
+            queries,
+            reverse_relevance,
+            query_ids=gallery_ids,
+            gallery_ids=query_ids,
+            exclusions=reverse_exclusions,
+        )
+    primary_score = (
+        forward.score if reverse is None else float((forward.score + reverse.score) / 2.0)
+    )
+    relevance_protocol_fingerprint = relevance_data.get("protocol_fingerprint")
+    if not isinstance(relevance_protocol_fingerprint, str) or not relevance_protocol_fingerprint:
+        raise ValueError("Relevance artifact must declare a non-empty protocol_fingerprint.")
+    protocol_fingerprint = hash_json_exact(
+        {
+            "identity_schema": 2,
+            "relevance_protocol_fingerprint": relevance_protocol_fingerprint,
+            "exclusions": sorted(exclusions),
+            "retrieval_config": retrieval_config,
+        }
+    )
+    evaluation_fingerprint = hash_json_exact(
+        {
+            "identity_schema": 2,
+            "query_embedding_key": job.query_embedding_key,
+            "gallery_embedding_key": job.gallery_embedding_key,
+            "relevance_key": job.relevance_key,
+            "exclusions_key": job.exclusions_key,
+            "retrieval_config": retrieval_config,
+        }
+    )
+    cache_eligible, cache_status = derived_cache_reuse_decision(
+        query_metadata,
+        gallery_metadata,
     )
     artifact = {
         "artifact_type": "retrieval_evaluation",
@@ -819,10 +1380,16 @@ def score_retrieval_artifact(job: RetrievalScoringJob, store: ArtifactStore) -> 
         "gallery_embedding_key": job.gallery_embedding_key,
         "relevance_key": job.relevance_key,
         "exclusions_key": job.exclusions_key,
-        "result": result.to_dict(),
+        "forward": forward.to_dict(),
+        "reverse": reverse.to_dict() if reverse is not None else None,
+        "primary_score": primary_score,
         "query_endpoint": query_metadata,
         "gallery_endpoint": gallery_metadata,
-        "retrieval_config": asdict(job.retrieval_config or RetrievalConfig()),
+        "retrieval_config": asdict(retrieval_config),
+        "protocol_fingerprint": protocol_fingerprint,
+        "evaluation_fingerprint": evaluation_fingerprint,
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
         "resources": asdict(job.resources),
     }
     store.put_json(job.output_key, artifact)
@@ -852,12 +1419,22 @@ def diagnose_embedding_artifact(
 ) -> dict[str, Any]:
     """Run Separatix over a persisted embedding artifact and labels."""
 
-    embedding_metadata, label_metadata = validate_embedding_label_artifacts(
-        store,
-        embedding_key=job.embedding_key,
-        labels_key=job.labels_key,
+    embeddings, labels, embedding_metadata, label_metadata = (
+        _load_validated_embedding_label_artifacts(
+            store,
+            embedding_key=job.embedding_key,
+            labels_key=job.labels_key,
+        )
     )
     score_artifact = store.get_json(job.score_key)
+    if score_artifact.get("artifact_type") != "metric_evaluation":
+        raise ValueError("Separatix score_key must reference a metric_evaluation artifact.")
+    if (
+        score_artifact.get("embedding_key") != job.embedding_key
+        or score_artifact.get("labels_key") != job.labels_key
+        or score_artifact.get("groups_key") != job.groups_key
+    ):
+        raise ValueError("Separatix inputs do not match the referenced scoring protocol.")
     score_data = score_artifact.get("metrics", {}).get("overlap", {})
     overlap_score = float(score_data.get("score", score_data.get("macro_score")))
 
@@ -893,12 +1470,21 @@ def diagnose_embedding_artifact(
             threshold=threshold,
         )
     else:
-        embeddings = store.get_array(job.embedding_key)
-        labels = store.get_labels(job.labels_key)
         excluded = overlap_metadata.get("exclude_classes", [])
         if excluded and target_type != REGRESSION_TARGET:
+            catalog_keys = {
+                item.get("key")
+                for item in overlap_metadata.get("label_catalog", [])
+                if isinstance(item, dict) and isinstance(item.get("key"), str)
+            }
+            excluded_keys = {
+                item
+                if isinstance(item, str) and item in catalog_keys
+                else semantic_label_key(item.item() if hasattr(item, "item") else item)
+                for item in excluded
+            }
             mask = np.asarray(
-                [not any(label == item for item in excluded) for label in labels],
+                [semantic_label_key(label) not in excluded_keys for label in labels],
                 dtype=bool,
             )
             embeddings = embeddings[mask]
@@ -922,6 +1508,10 @@ def diagnose_embedding_artifact(
                 threshold=threshold,
             )
 
+    cache_eligible, cache_status = derived_cache_reuse_decision(
+        embedding_metadata,
+        score_artifact,
+    )
     artifact = {
         "artifact_type": "separatix_diagnostic",
         "vertebrae_version": __version__,
@@ -931,6 +1521,8 @@ def diagnose_embedding_artifact(
         "score_key": job.score_key,
         "groups_key": job.groups_key,
         "diagnostic": diagnostic.to_dict(),
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
         "embedding_metadata": embedding_metadata,
         "label_metadata": label_metadata,
         "resources": asdict(job.resources),
@@ -945,62 +1537,69 @@ def compress_embedding_artifact(
 ) -> dict[str, Any]:
     """Compress a persisted embedding artifact."""
 
-    embedding_metadata = store.get_json(job.embedding_key)
-    embeddings = store.get_array(job.embedding_key)
+    embeddings, embedding_metadata = store.get_artifact(job.embedding_key)
     compression_result = compress_embeddings(embeddings, config=job.compression_config)
-    store.put_array(job.output_key, compression_result.embeddings)
+    compressed_embeddings = compression_result.embeddings
+    sparse_output = is_sparse_matrix(compressed_embeddings)
     compressed_metadata = dict(embedding_metadata)
-    compressed_metadata["cache_key"] = job.output_key
-    compressed_metadata["embedding_dim"] = compression_result.metadata.get(
-        "compressed_dim",
-        embedding_metadata.get("embedding_dim"),
+    cache_eligible, cache_status = derived_cache_reuse_decision(embedding_metadata)
+    compressed_metadata.update(
+        {
+            "artifact_type": "compressed_embedding",
+            "output_key": job.output_key,
+            "cache_key": job.output_key,
+            "source_embedding_key": job.embedding_key,
+            "n_samples": int(compressed_embeddings.shape[0]),
+            "embedding_dim": int(compressed_embeddings.shape[1]),
+            "shape": list(compressed_embeddings.shape),
+            "dtype": str(compressed_embeddings.dtype),
+            "sparse": sparse_output,
+            "nnz": int(compressed_embeddings.nnz) if sparse_output else None,
+            "storage_format": (compressed_embeddings.getformat() if sparse_output else "dense"),
+            "compression": compression_result.metadata,
+            "cache_eligible": cache_eligible,
+            "cache_status": cache_status,
+        }
     )
-    compressed_metadata["shape"] = [
-        embedding_metadata.get("n_samples"),
-        compressed_metadata["embedding_dim"],
-    ]
-    compressed_metadata["sparse"] = compression_result.metadata.get(
-        "output_sparse",
-        embedding_metadata.get("sparse"),
-    )
-    compressed_metadata["storage_format"] = (
-        compression_result.embeddings.getformat()
-        if is_sparse_matrix(compression_result.embeddings)
-        else "dense"
-    )
-    compressed_metadata["compression"] = compression_result.metadata
-    serialized_profile = embedding_metadata.get("distributed_resource_profile")
-    if serialized_profile is not None:
-        distributed_profile = with_distributed_embedding_footprint(
-            distributed_resource_profile_from_dict(dict(serialized_profile)),
-            embeddings,
-            compression_result.embeddings,
-            store=store,
-            raw_key=job.embedding_key,
-            evaluated_key=job.output_key,
-            persisted_storage=bool(
-                embedding_metadata.get("resource_profiling_config", {}).get(
-                    "persisted_storage", True
-                )
-            ),
+
+    def finalize_compressed_metadata(
+        metadata: dict[str, Any], _array_manifest: Any, artifact_stat: Any
+    ) -> dict[str, Any]:
+        persisted_storage = bool(
+            embedding_metadata.get("resource_profiling_config", {}).get("persisted_storage", True)
         )
-        compressed_metadata["distributed_resource_profile"] = make_json_safe(distributed_profile)
-    elif embedding_metadata.get("resource_profile") is not None:
-        local_profile = with_embedding_footprint(
-            resource_profile_from_dict(dict(embedding_metadata["resource_profile"])),
-            embeddings,
-            compression_result.embeddings,
-            store=store,
-            raw_key=job.embedding_key,
-            evaluated_key=job.output_key,
-            persisted_storage=bool(
-                embedding_metadata.get("resource_profiling_config", {}).get(
-                    "persisted_storage", True
-                )
-            ),
-        )
-        compressed_metadata["resource_profile"] = make_json_safe(local_profile)
-    store.put_json(job.output_key, compressed_metadata)
+        serialized_profile = embedding_metadata.get("distributed_resource_profile")
+        if serialized_profile is not None:
+            distributed_profile = with_distributed_embedding_footprint(
+                distributed_resource_profile_from_dict(dict(serialized_profile)),
+                embeddings,
+                compression_result.embeddings,
+                store=store,
+                raw_key=job.embedding_key,
+                evaluated_stat=artifact_stat,
+                persisted_storage=persisted_storage,
+            )
+            metadata["distributed_resource_profile"] = make_json_safe(distributed_profile)
+        elif embedding_metadata.get("resource_profile") is not None:
+            local_profile = with_embedding_footprint(
+                resource_profile_from_dict(dict(embedding_metadata["resource_profile"])),
+                embeddings,
+                compression_result.embeddings,
+                store=store,
+                raw_key=job.embedding_key,
+                evaluated_stat=artifact_stat,
+                persisted_storage=persisted_storage,
+            )
+            metadata["resource_profile"] = make_json_safe(local_profile)
+        return metadata
+
+    store.put_artifact(
+        job.output_key,
+        compressed_embeddings,
+        compressed_metadata,
+        metadata_finalizer=finalize_compressed_metadata,
+    )
+    compressed_metadata = store.get_json(job.output_key)
     return {
         "artifact_type": "compressed_embedding",
         "vertebrae_version": __version__,
@@ -1059,22 +1658,25 @@ def diagnose_embedding_artifacts(
 def run_stability_artifact(job: StabilityJob, store: ArtifactStore) -> dict[str, Any]:
     """Run stability analysis over persisted embeddings and targets."""
 
-    embedding_metadata, label_metadata = validate_embedding_label_artifacts(
-        store,
-        embedding_key=job.embedding_key,
-        labels_key=job.labels_key,
+    embeddings, labels, embedding_metadata, label_metadata = (
+        _load_validated_embedding_label_artifacts(
+            store,
+            embedding_key=job.embedding_key,
+            labels_key=job.labels_key,
+        )
     )
     from vertebrae.scoring.stability import run_stability_analysis
 
     payload = run_stability_analysis(
-        store.get_array(job.embedding_key),
-        store.get_labels(job.labels_key),
+        embeddings,
+        labels,
         job.scoring_config,
         job.stability_config,
         label_names=label_metadata.get("label_names"),
         target_type=label_metadata.get("target_type", "auto"),
         target_names=label_metadata.get("target_names"),
     )
+    cache_eligible, cache_status = derived_cache_reuse_decision(embedding_metadata)
     artifact = {
         "artifact_type": "stability_diagnostic",
         "vertebrae_version": __version__,
@@ -1082,6 +1684,8 @@ def run_stability_artifact(job: StabilityJob, store: ArtifactStore) -> dict[str,
         "embedding_key": job.embedding_key,
         "labels_key": job.labels_key,
         "stability": payload,
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
         "embedding_metadata": embedding_metadata,
         "label_metadata": label_metadata,
         "resources": asdict(job.resources),
@@ -1133,8 +1737,26 @@ def validate_embedding_label_artifacts(
         ValueError: If metadata is incompatible.
     """
 
-    embedding_metadata = store.get_json(embedding_key)
-    label_metadata = store.get_json(labels_key)
+    _embeddings, _labels, embedding_metadata, label_metadata = (
+        _load_validated_embedding_label_artifacts(
+            store,
+            embedding_key=embedding_key,
+            labels_key=labels_key,
+        )
+    )
+    return embedding_metadata, label_metadata
+
+
+def _load_validated_embedding_label_artifacts(
+    store: ArtifactStore,
+    *,
+    embedding_key: str,
+    labels_key: str,
+) -> tuple[Any, np.ndarray, dict[str, Any], dict[str, Any]]:
+    """Load each data/metadata generation atomically and validate cross-artifact alignment."""
+
+    embeddings, embedding_metadata = store.get_artifact(embedding_key)
+    labels, label_metadata = store.get_labels_artifact(labels_key)
     embedding_rows = int(embedding_metadata.get("n_samples", -1))
     label_rows = int(label_metadata.get("n_samples", -2))
     if embedding_rows != label_rows:
@@ -1154,7 +1776,9 @@ def validate_embedding_label_artifacts(
         )
     ):
         raise ValueError("Embedding and label artifacts have different dataset identities.")
-    return embedding_metadata, label_metadata
+    if int(embeddings.shape[0]) != embedding_rows or len(labels) != label_rows:
+        raise ValueError("Embedding or label metadata does not match its committed data.")
+    return embeddings, np.asarray(labels), embedding_metadata, label_metadata
 
 
 def _load_validated_groups(
@@ -1166,7 +1790,7 @@ def _load_validated_groups(
 ) -> tuple[Optional[np.ndarray], Optional[dict[str, Any]]]:
     if groups_key is None:
         return None, None
-    group_metadata = store.get_json(groups_key)
+    groups, group_metadata = store.get_labels_artifact(groups_key)
     if group_metadata.get("artifact_type") != "groups":
         raise ValueError("Group artifact metadata must declare artifact_type='groups'.")
     expected_rows = int(label_metadata.get("n_samples", -1))
@@ -1184,13 +1808,37 @@ def _load_validated_groups(
         identity != embedding_identity for identity in compatible_identities
     ):
         raise ValueError("Embedding, label, and group artifacts have different dataset identities.")
-    groups = store.get_labels(groups_key)
     if len(groups) != expected_rows:
         raise ValueError(
             "Group artifact metadata does not match its labels; "
             f"expected {expected_rows} rows, loaded {len(groups)}."
         )
+    if group_metadata.get("group_value_encoding") == "semantic_label_key/v1":
+        groups = np.asarray(
+            [SemanticLabelKey(str(value)) for value in groups],
+            dtype=object,
+        )
     return np.asarray(groups), group_metadata
+
+
+def _group_artifact_values(groups: Any) -> tuple[np.ndarray, str]:
+    """Choose a reversible primitive representation or canonical semantic keys."""
+
+    values = np.asarray(groups, dtype=object)
+    normalized = [value.item() if hasattr(value, "item") else value for value in values]
+    primitive = all(
+        isinstance(value, (str, bool, int, float)) and not isinstance(value, complex)
+        for value in normalized
+    )
+    if primitive:
+        return np.asarray(normalized, dtype=object), "primitive/v1"
+    return (
+        np.asarray(
+            [SemanticLabelKey(semantic_label_key(value)) for value in normalized],
+            dtype=object,
+        ),
+        "semantic_label_key/v1",
+    )
 
 
 def plan_scoring_jobs(
@@ -1218,14 +1866,32 @@ def plan_scoring_jobs(
         Scoring jobs with canonical output keys.
     """
 
+    resolved_scoring_config = scoring_config or OverlapScoringConfig()
+    resolved_metrics = tuple(metrics or ())
+    metric_recipes = _configured_metric_recipes(
+        resolved_scoring_config,
+        resolved_metrics,
+        metric,
+    )
+    run_prefix = None if _metric_recipes_cache_safe(metric_recipes) else f"runs/{uuid4().hex}"
     return [
         ScoringJob(
             embedding_key=embedding_key,
             labels_key=labels_key,
-            output_key=scoring_artifact_key(embedding_key, seed=seed),
+            output_key=scoring_artifact_key(
+                embedding_key,
+                seed=seed,
+                labels_key=labels_key,
+                groups_key=groups_key,
+                scoring_config=resolved_scoring_config,
+                metrics=resolved_metrics,
+                metric=metric,
+                primary_metric=primary_metric,
+                run_prefix=run_prefix,
+            ),
             groups_key=groups_key,
-            scoring_config=scoring_config,
-            metrics=metrics,
+            scoring_config=resolved_scoring_config,
+            metrics=resolved_metrics,
             primary_metric=primary_metric,
             metric=metric,
             seed=seed,
@@ -1264,7 +1930,26 @@ def collect_score_artifacts(
     first_group_metadata = artifacts[0].get("group_metadata")
     if any(artifact.get("group_metadata") != first_group_metadata for artifact in artifacts[1:]):
         raise ValueError("Score artifacts must share identical group metadata.")
+    if any(artifact.get("artifact_type") != "metric_evaluation" for artifact in artifacts):
+        raise ValueError("Score collections require metric_evaluation artifacts.")
+    for artifact in artifacts:
+        _validate_labeled_scoring_artifact_protocol(artifact)
+    collection_protocol_fingerprints = {
+        artifact.get("collection_protocol_fingerprint") for artifact in artifacts
+    }
+    if len(collection_protocol_fingerprints) != 1 or None in collection_protocol_fingerprints:
+        raise ValueError(
+            "Score artifacts must share one complete embedding, target, and metric protocol."
+        )
     metric_name = metric_name or artifacts[0].get("primary_metric", "overlap")
+    if any(metric_name not in artifact.get("metrics", {}) for artifact in artifacts):
+        raise ValueError(f"Every score artifact must contain metric {metric_name!r}.")
+    directions = {
+        bool(artifact["metrics"][metric_name].get("higher_is_better", True))
+        for artifact in artifacts
+    }
+    if len(directions) != 1:
+        raise ValueError("Collected metric artifacts must share one optimization direction.")
     scores = [float(artifact["metrics"][metric_name]["score"]) for artifact in artifacts]
     warnings = sorted(
         {
@@ -1275,6 +1960,9 @@ def collect_score_artifacts(
         }
     )
     seeds = [artifact.get("seed") for artifact in artifacts]
+    if len(set(seeds)) != len(seeds):
+        raise ValueError("Score collection seeds must be unique.")
+    cache_eligible, cache_status = derived_cache_reuse_decision(*artifacts)
     collection = {
         "artifact_type": "score_collection",
         "vertebrae_version": __version__,
@@ -1290,9 +1978,44 @@ def collect_score_artifacts(
         "groups_key": groups_key,
         "group_metadata": first_group_metadata,
         "metric_name": metric_name,
+        "collection_protocol_fingerprint": next(iter(collection_protocol_fingerprints)),
+        "protocol_fingerprints": [artifact["protocol_fingerprint"] for artifact in artifacts],
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
     }
     store.put_json(output_key, collection)
     return collection
+
+
+def _validate_labeled_scoring_artifact_protocol(artifact: dict[str, Any]) -> None:
+    """Reject incomplete, stale, or internally inconsistent scoring identities."""
+
+    protocol = artifact.get("protocol")
+    if not isinstance(protocol, dict):
+        raise ValueError(
+            "Score artifact is missing its complete embedding, target, and metric protocol."
+        )
+    if protocol.get("schema_version") != 2 or protocol.get("kind") != ("labeled_embedding_scoring"):
+        raise ValueError("Score artifact uses an unsupported scoring protocol schema.")
+    if hash_json_exact(protocol) != artifact.get("protocol_fingerprint"):
+        raise ValueError("Score artifact protocol_fingerprint is inconsistent.")
+    collection_protocol = {key: value for key, value in protocol.items() if key != "seed"}
+    if hash_json_exact(collection_protocol) != artifact.get("collection_protocol_fingerprint"):
+        raise ValueError("Score artifact collection protocol fingerprint is inconsistent.")
+    expected = {
+        "embedding_key": (protocol.get("embedding") or {}).get("key"),
+        "labels_key": (protocol.get("labels") or {}).get("key"),
+        "groups_key": (
+            None if protocol.get("groups") is None else (protocol.get("groups") or {}).get("key")
+        ),
+        "metric_recipes": protocol.get("metric_recipes"),
+        "primary_metric": protocol.get("primary_metric"),
+        "seed": protocol.get("seed"),
+        "scoring_config": protocol.get("scoring_config"),
+    }
+    for field, value in expected.items():
+        if artifact.get(field) != value:
+            raise ValueError(f"Score artifact field {field!r} conflicts with its protocol record.")
 
 
 def benchmark_result_from_artifacts(
@@ -1323,17 +2046,34 @@ def benchmark_result_from_artifacts(
     from vertebrae.scoring.metrics import MetricResult
 
     score_artifact = store.get_json(score_key)
+    _validate_labeled_scoring_artifact_protocol(score_artifact)
     metrics_data = score_artifact["metrics"]
     embedding_metadata = score_artifact.get("embedding_metadata", {})
     label_metadata = score_artifact.get("label_metadata", {})
     group_metadata = score_artifact.get("group_metadata") or {}
     stability_artifact = store.get_json(stability_key) if stability_key else None
+    if stability_artifact is not None:
+        if stability_artifact.get("embedding_key") != score_artifact.get("embedding_key"):
+            raise ValueError("Stability artifact belongs to a different embedding artifact.")
+        if stability_artifact.get("labels_key") != score_artifact.get("labels_key"):
+            raise ValueError("Stability artifact belongs to a different label artifact.")
+        if stability_artifact.get("artifact_type") == "score_collection" and stability_artifact.get(
+            "collection_protocol_fingerprint"
+        ) != score_artifact.get("collection_protocol_fingerprint"):
+            raise ValueError("Score collection belongs to a different evaluation protocol.")
     stability = (
         stability_artifact.get("stability", stability_artifact)
         if stability_artifact is not None
         else None
     )
     separatix_artifact = store.get_json(separatix_key) if separatix_key else None
+    if separatix_artifact is not None:
+        if separatix_artifact.get("embedding_key") != score_artifact.get("embedding_key"):
+            raise ValueError("Separatix artifact belongs to a different embedding artifact.")
+        if separatix_artifact.get("labels_key") != score_artifact.get("labels_key"):
+            raise ValueError("Separatix artifact belongs to a different label artifact.")
+        if separatix_artifact.get("score_key") != score_key:
+            raise ValueError("Separatix artifact references a different score artifact.")
     separatix = None
     if separatix_artifact:
         separatix = SeparatixResult(**separatix_artifact["diagnostic"])
@@ -1343,6 +2083,7 @@ def benchmark_result_from_artifacts(
     weakest_class, weakest_score = _weakest_class(
         overlap.per_class_scores,
         excluded_classes=score_metadata.get("exclude_classes"),
+        label_catalog=score_metadata.get("label_catalog"),
     )
     primary_metric_name = score_artifact.get("primary_metric", "overlap")
     recommendation = (
@@ -1362,6 +2103,9 @@ def benchmark_result_from_artifacts(
         "name",
         embedding_metadata.get("extractor_name", "artifact"),
     )
+    output_name = embedding_metadata.get("output_name")
+    if output_name and not str(base_name).endswith(f":{output_name}"):
+        base_name = f"{base_name}:{output_name}"
     target_view = label_metadata.get("target_view", embedding_metadata.get("target_view"))
     label_view = label_metadata.get("label_view", embedding_metadata.get("label_view"))
     extractor_result = ExtractorResult(
@@ -1460,9 +2204,48 @@ def retrieval_benchmark_result_from_artifacts(
         raise ValueError("At least one retrieval score artifact is required.")
     if any(item.get("artifact_type") != "retrieval_evaluation" for item in artifacts):
         raise ValueError("All score keys must reference retrieval evaluation artifacts.")
+    protocol_fingerprints = {item.get("protocol_fingerprint") for item in artifacts}
+    if len(protocol_fingerprints) != 1 or None in protocol_fingerprints:
+        raise ValueError(
+            "Retrieval score artifacts must share one non-empty retrieval protocol fingerprint."
+        )
     relevance_keys = {item.get("relevance_key") for item in artifacts}
-    if len(relevance_keys) != 1:
-        raise ValueError("Retrieval score artifacts must share one relevance protocol.")
+    if len(relevance_keys) != 1 or None in relevance_keys:
+        raise ValueError("Retrieval score artifacts must share one relevance artifact.")
+
+    relevance = store.get_json(str(next(iter(relevance_keys))))
+    relevance_protocol_fingerprint = relevance.get("protocol_fingerprint")
+    if not isinstance(relevance_protocol_fingerprint, str) or not relevance_protocol_fingerprint:
+        raise ValueError("Retrieval relevance artifact must declare a protocol fingerprint.")
+    retrieval_configs = []
+    for artifact in artifacts:
+        try:
+            retrieval_config = RetrievalConfig(**dict(artifact.get("retrieval_config") or {}))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Retrieval score artifact contains an invalid retrieval_config."
+            ) from exc
+        exclusions_key = artifact.get("exclusions_key")
+        exclusions_data = store.get_json(str(exclusions_key)) if exclusions_key else relevance
+        exclusions = sorted(
+            (int(pair[0]), int(pair[1])) for pair in exclusions_data.get("exclusions", [])
+        )
+        expected_protocol_fingerprint = hash_json_exact(
+            {
+                "identity_schema": 2,
+                "relevance_protocol_fingerprint": relevance_protocol_fingerprint,
+                "exclusions": exclusions,
+                "retrieval_config": retrieval_config,
+            }
+        )
+        if artifact.get("protocol_fingerprint") != expected_protocol_fingerprint:
+            raise ValueError(
+                "Retrieval score artifact protocol fingerprint is inconsistent with its "
+                "relevance, exclusions, or retrieval_config."
+            )
+        retrieval_configs.append(retrieval_config)
+    if any(config != retrieval_configs[0] for config in retrieval_configs[1:]):
+        raise ValueError("Retrieval score artifacts must share one retrieval configuration.")
 
     results = []
     for artifact in artifacts:
@@ -1477,7 +2260,25 @@ def retrieval_benchmark_result_from_artifacts(
             or gallery_endpoint.get("compression")
             or {"method": "none"}
         )
-        score = RetrievalScoreResult(**dict(artifact["result"]))
+        forward = RetrievalScoreResult(**dict(artifact["forward"]))
+        reverse_payload = artifact.get("reverse")
+        reverse = (
+            RetrievalScoreResult(**dict(reverse_payload)) if reverse_payload is not None else None
+        )
+        if bool(artifact.get("retrieval_config", {}).get("bidirectional")) != (reverse is not None):
+            raise ValueError(
+                "Retrieval artifact reverse result is inconsistent with bidirectional config."
+            )
+        expected_primary = (
+            forward.score if reverse is None else float((forward.score + reverse.score) / 2.0)
+        )
+        declared_primary = artifact.get("primary_score")
+        if not isinstance(
+            declared_primary, (int, float, np.integer, np.floating)
+        ) or not np.isclose(float(declared_primary), expected_primary):
+            raise ValueError(
+                "Retrieval artifact primary_score is inconsistent with its directions."
+            )
         resource_profiles = {}
         for side, endpoint in (("query", query_endpoint), ("gallery", gallery_endpoint)):
             serialized = endpoint.get("distributed_resource_profile") or endpoint.get(
@@ -1496,18 +2297,23 @@ def retrieval_benchmark_result_from_artifacts(
             RetrievalExtractorResult(
                 name=compression_variant_name(base_name, compression),
                 extractor_type=query_recipe.get("extractor_type", "artifact"),
-                forward=score,
-                reverse=None,
-                primary_score=score.score,
+                forward=forward,
+                reverse=reverse,
+                primary_score=expected_primary,
                 compression_metadata=compression,
                 runtime={},
-                warnings=sorted(set(score.warnings + list(compression.get("warnings", [])))),
+                warnings=sorted(
+                    set(
+                        forward.warnings
+                        + (reverse.warnings if reverse is not None else [])
+                        + list(compression.get("warnings", []))
+                    )
+                ),
                 recipe=query_recipe,
                 resource_profiles=resource_profiles,
             )
         )
 
-    relevance = store.get_json(str(next(iter(relevance_keys))))
     first = artifacts[0]
     result = RetrievalBenchmarkResult(
         dataset_summary={
@@ -1522,6 +2328,7 @@ def retrieval_benchmark_result_from_artifacts(
             "artifact_backed": True,
             "score_keys": keys,
             "relevance_key": next(iter(relevance_keys)),
+            "protocol_fingerprint": next(iter(protocol_fingerprints)),
             "retrieval_config": first.get("retrieval_config", {}),
             "resource_profiling_config": first["query_endpoint"].get(
                 "resource_profiling_config", {}
@@ -1534,7 +2341,11 @@ def retrieval_benchmark_result_from_artifacts(
 
 
 def _score_summary(scores: list[float], interval_level: float) -> dict[str, float]:
+    if not np.isfinite(float(interval_level)) or not 0.0 < float(interval_level) <= 1.0:
+        raise ValueError("interval_level must be finite and in (0, 1].")
     arr = np.asarray(scores, dtype=float)
+    if arr.size == 0 or not bool(np.all(np.isfinite(arr))):
+        raise ValueError("Collected scores must be non-empty finite values.")
     alpha = 1.0 - interval_level
     lower_q = 100.0 * alpha / 2.0
     upper_q = 100.0 * (1.0 - alpha / 2.0)
@@ -1552,6 +2363,7 @@ def _score_summary(scores: list[float], interval_level: float) -> dict[str, floa
 def _weakest_class(
     per_class_scores: dict[str, Any],
     excluded_classes: Optional[Any] = None,
+    label_catalog: Optional[Any] = None,
 ) -> tuple[Optional[str], Optional[float]]:
     excluded = (
         []
@@ -1560,16 +2372,34 @@ def _weakest_class(
         if isinstance(excluded_classes, (str, bytes))
         else list(excluded_classes)
     )
-    numeric = {
-        str(label): float(score)
-        for label, score in per_class_scores.items()
-        if isinstance(score, (int, float, np.number))
-        and not any(label == item or str(label) == str(item) for item in excluded)
+    catalog = label_catalog or []
+    catalog_keys = {
+        item.get("key")
+        for item in catalog
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
     }
+    excluded_keys = {
+        item
+        if isinstance(item, str) and item in catalog_keys
+        else semantic_label_key(item.item() if hasattr(item, "item") else item)
+        for item in excluded
+    }
+    numeric = {}
+    for label, score in per_class_scores.items():
+        if not isinstance(score, (int, float, np.number)):
+            continue
+        label_value = label.item() if hasattr(label, "item") else label
+        label_key = (
+            label_value
+            if isinstance(label_value, str) and label_value in catalog_keys
+            else semantic_label_key(label_value)
+        )
+        if label_key not in excluded_keys:
+            numeric[label] = float(score)
     if not numeric:
         return None, None
     label, score = min(numeric.items(), key=lambda item: item[1])
-    return label, score
+    return label_display(label, catalog), score
 
 
 def _variant_extractor_name(name: str, compression_metadata: dict[str, Any]) -> str:
@@ -1633,8 +2463,6 @@ def materialize_embedding_shard(
     sample_indices = job.shard.indices(len(dataset.y))
     if len(sample_indices) == 0:
         raise ValueError("Embedding shard contains no samples.")
-    if job.fit_extractor:
-        extractor.fit(dataset.X, dataset.y)
     profiler = ResourceProfiler(
         job.resource_profiling_config,
         extractor,
@@ -1657,48 +2485,47 @@ def materialize_embedding_shard(
             profiler=profiler,
         )
     batches = _local_embedding_batches(dataset, extractor, job, local_positions, profiler)
-    artifact_path = store.put_array_batches(
-        job.output_key,
-        batches,
-        n_samples=len(sample_indices),
-        require_complete=True,
-    )
-    embeddings = store.get_array(job.output_key)
-    profile = profiler.finish() if job.resource_profiling_config.enabled else None
-    profile = with_embedding_footprint(
-        profile,
-        embeddings,
-        embeddings,
-        store=store,
-        raw_key=job.output_key,
-        evaluated_key=job.output_key,
-        persisted_storage=job.resource_profiling_config.persisted_storage,
-    )
-    sparse_embeddings = is_sparse_matrix(embeddings)
     manifest = {
         "artifact_type": "embedding_shard",
         "vertebrae_version": __version__,
         "output_key": job.output_key,
-        "artifact_path": artifact_path,
         "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": extractor.recipe(),
         "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
         "shard": asdict(job.shard),
         "sample_indices": sample_indices.tolist(),
-        "n_samples": int(embeddings.shape[0]),
-        "embedding_dim": int(embeddings.shape[1]),
-        "shape": list(embeddings.shape),
-        "dtype": str(embeddings.dtype),
-        "sparse": sparse_embeddings,
-        "nnz": int(embeddings.nnz) if sparse_embeddings else None,
-        "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
+        "cache_eligible": job.cache_eligible,
+        "cache_status": job.cache_status,
         "batch_size": job.batch_size,
         "resources": asdict(job.resources),
         "resource_profiling_config": asdict(job.resource_profiling_config),
-        "resource_profile": make_json_safe(profile) if profile is not None else None,
     }
-    store.put_json(job.output_key, manifest)
-    return manifest
+
+    def finalize_shard_metadata(
+        metadata: dict[str, Any], array_manifest: Any, artifact_stat: Any
+    ) -> dict[str, Any]:
+        profile = profiler.finish() if job.resource_profiling_config.enabled else None
+        contract = _embedding_metadata_from_array_manifest(array_manifest)
+        profile = with_embedding_footprint(
+            profile,
+            contract,
+            contract,
+            raw_stat=artifact_stat,
+            evaluated_stat=artifact_stat,
+            persisted_storage=job.resource_profiling_config.persisted_storage,
+        )
+        metadata["resource_profile"] = make_json_safe(profile) if profile is not None else None
+        return metadata
+
+    store.put_artifact_batches(
+        job.output_key,
+        batches,
+        n_samples=len(sample_indices),
+        metadata=manifest,
+        require_complete=True,
+        metadata_finalizer=finalize_shard_metadata,
+    )
+    return store.get_json(job.output_key)
 
 
 def materialize_retrieval_embedding_shard(
@@ -1708,8 +2535,9 @@ def materialize_retrieval_embedding_shard(
     """Materialize one deterministic query or gallery embedding shard."""
     dataset = job.dataset
     dataset.validated()
-    values = dataset.queries if job.side == "query" else dataset.gallery
-    modality = dataset.query_modality if job.side == "query" else dataset.gallery_modality
+    values = dataset.query_values() if job.side == "query" else dataset.gallery_values()
+    query_modality, gallery_modality = dataset.protocol_modalities()
+    modality = query_modality if job.side == "query" else gallery_modality
     indices = job.shard.indices(len(values))
     if not len(indices):
         raise ValueError("Retrieval embedding shard contains no samples.")
@@ -1729,7 +2557,7 @@ def materialize_retrieval_embedding_shard(
     selected = take_endpoint_rows(values, indices)
     if job.branch is None:
         extractor = job.extractor
-        if getattr(extractor, "already_fitted", True) is False:
+        if not job.fitted_bundle and getattr(extractor, "already_fitted", True) is False:
             raise ValueError(
                 "Distributed retrieval shards require a frozen or already-fitted extractor; "
                 "fit it before serializing the extractor pickle."
@@ -1748,9 +2576,10 @@ def materialize_retrieval_embedding_shard(
             return encoder(batch, branch=job.branch, modality=modality)
 
         encode = encode_retrieval
+    effective_batch_size = job.batch_size if job.streaming_enabled else len(indices)
     embeddings = encode_endpoint_batches(
         selected,
-        batch_size=job.batch_size,
+        batch_size=effective_batch_size,
         encode=encode,
         owner=f"Retriever '{job.extractor.name}' {job.side} shard embeddings",
         profiler=profiler if job.resource_profiling_config.enabled else None,
@@ -1758,23 +2587,11 @@ def materialize_retrieval_embedding_shard(
     )
     if embeddings.shape[0] != len(indices):
         raise ValueError("Retrieval extractor output does not align with its endpoint shard.")
-    path = store.put_array(job.output_key, embeddings)
-    profile = profiler.finish() if job.resource_profiling_config.enabled else None
-    profile = with_embedding_footprint(
-        profile,
-        embeddings,
-        embeddings,
-        store=store,
-        raw_key=job.output_key,
-        evaluated_key=job.output_key,
-        persisted_storage=job.resource_profiling_config.persisted_storage,
-    )
     sparse = is_sparse_matrix(embeddings)
     manifest = {
         "artifact_type": "retrieval_embedding_shard",
         "vertebrae_version": __version__,
         "output_key": job.output_key,
-        "artifact_path": path,
         "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": job.extractor.recipe(),
         "recipe_hash": fingerprint_extractor_recipe(job.extractor.recipe()),
@@ -1788,13 +2605,36 @@ def materialize_retrieval_embedding_shard(
         "shape": list(embeddings.shape),
         "dtype": str(embeddings.dtype),
         "sparse": sparse,
+        "nnz": int(embeddings.nnz) if sparse else None,
         "storage_format": embeddings.getformat() if sparse else "dense",
+        "cache_eligible": job.cache_eligible,
+        "cache_status": job.cache_status,
         "batch_size": job.batch_size,
         "resource_profiling_config": asdict(job.resource_profiling_config),
-        "resource_profile": make_json_safe(profile) if profile is not None else None,
     }
-    store.put_json(job.output_key, manifest)
-    return manifest
+
+    def finalize_retrieval_shard_metadata(
+        metadata: dict[str, Any], _array_manifest: Any, artifact_stat: Any
+    ) -> dict[str, Any]:
+        profile = profiler.finish() if job.resource_profiling_config.enabled else None
+        profile = with_embedding_footprint(
+            profile,
+            embeddings,
+            embeddings,
+            raw_stat=artifact_stat,
+            evaluated_stat=artifact_stat,
+            persisted_storage=job.resource_profiling_config.persisted_storage,
+        )
+        metadata["resource_profile"] = make_json_safe(profile) if profile is not None else None
+        return metadata
+
+    store.put_artifact(
+        job.output_key,
+        embeddings,
+        manifest,
+        metadata_finalizer=finalize_retrieval_shard_metadata,
+    )
+    return store.get_json(job.output_key)
 
 
 def compress_retrieval_embedding_artifacts(
@@ -1802,11 +2642,9 @@ def compress_retrieval_embedding_artifacts(
     store: ArtifactStore,
 ) -> dict[str, Any]:
     """Fit one compressor on gallery embeddings and transform both retrieval endpoints."""
-    query_metadata = store.get_json(job.query_embedding_key)
-    gallery_metadata = store.get_json(job.gallery_embedding_key)
+    query, query_metadata = store.get_artifact(job.query_embedding_key)
+    gallery, gallery_metadata = store.get_artifact(job.gallery_embedding_key)
     _validate_retrieval_pair_metadata(query_metadata, gallery_metadata)
-    query = store.get_array(job.query_embedding_key)
-    gallery = store.get_array(job.gallery_embedding_key)
     if query.shape[1] != gallery.shape[1]:
         raise ValueError("Paired retrieval compression requires matching endpoint dimensions.")
     config = job.compression_config
@@ -1818,48 +2656,71 @@ def compress_retrieval_embedding_artifacts(
         paired_name="query embeddings",
     )
     metadata["fit_side"] = "gallery"
+    cache_eligible, cache_status = derived_cache_reuse_decision(
+        query_metadata,
+        gallery_metadata,
+    )
     manifests: list[dict[str, Any]] = []
     for key, values, source_metadata, side in (
         (job.query_output_key, query_result, query_metadata, "query"),
         (job.gallery_output_key, gallery_result, gallery_metadata, "gallery"),
     ):
-        path = store.put_array(key, values)
         manifest = dict(source_metadata)
         manifest.update(
             {
                 "artifact_type": "retrieval_compressed_embedding",
                 "output_key": key,
-                "artifact_path": path,
                 "side": side,
                 "n_samples": int(values.shape[0]),
                 "embedding_dim": int(values.shape[1]),
                 "shape": list(values.shape),
                 "dtype": str(values.dtype),
                 "sparse": is_sparse_matrix(values),
+                "nnz": int(values.nnz) if is_sparse_matrix(values) else None,
                 "storage_format": values.getformat() if is_sparse_matrix(values) else "dense",
                 "compression": metadata,
+                "cache_eligible": cache_eligible,
+                "cache_status": cache_status,
             }
         )
         serialized_profile = source_metadata.get("distributed_resource_profile")
-        if serialized_profile is not None:
-            source_values = query if side == "query" else gallery
-            distributed_profile = with_distributed_embedding_footprint(
-                distributed_resource_profile_from_dict(dict(serialized_profile)),
-                source_values,
-                values,
-                store=store,
-                raw_key=(job.query_embedding_key if side == "query" else job.gallery_embedding_key),
-                evaluated_key=key,
-                persisted_storage=bool(
-                    source_metadata.get("resource_profiling_config", {}).get(
-                        "persisted_storage", True
-                    )
-                ),
-            )
-            manifest["distributed_resource_profile"] = make_json_safe(distributed_profile)
-        manifests.append(manifest)
-    for manifest in manifests:
-        store.put_json(manifest["output_key"], manifest)
+        source_values = query if side == "query" else gallery
+        source_key = job.query_embedding_key if side == "query" else job.gallery_embedding_key
+
+        def finalize_retrieval_compression_metadata(
+            candidate: dict[str, Any],
+            _array_manifest: Any,
+            artifact_stat: Any,
+            serialized: Any = serialized_profile,
+            raw_values: Any = source_values,
+            evaluated_values: Any = values,
+            raw_key: str = source_key,
+            source_manifest: dict[str, Any] = source_metadata,
+        ) -> dict[str, Any]:
+            if serialized is not None:
+                distributed_profile = with_distributed_embedding_footprint(
+                    distributed_resource_profile_from_dict(dict(serialized)),
+                    raw_values,
+                    evaluated_values,
+                    store=store,
+                    raw_key=raw_key,
+                    evaluated_stat=artifact_stat,
+                    persisted_storage=bool(
+                        source_manifest.get("resource_profiling_config", {}).get(
+                            "persisted_storage", True
+                        )
+                    ),
+                )
+                candidate["distributed_resource_profile"] = make_json_safe(distributed_profile)
+            return candidate
+
+        store.put_artifact(
+            key,
+            values,
+            manifest,
+            metadata_finalizer=finalize_retrieval_compression_metadata,
+        )
+        manifests.append(store.get_json(key))
     artifact = {
         "artifact_type": "retrieval_compression",
         "query_output_key": job.query_output_key,
@@ -1867,6 +2728,8 @@ def compress_retrieval_embedding_artifacts(
         "query_embedding_key": job.query_embedding_key,
         "gallery_embedding_key": job.gallery_embedding_key,
         "compression_metadata": metadata,
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
     }
     prefix = _shared_artifact_prefix(job.query_output_key, job.gallery_output_key)
     if prefix:
@@ -1877,6 +2740,8 @@ def compress_retrieval_embedding_artifacts(
 def merge_embedding_shards(
     job: EmbeddingMergeJob,
     store: ArtifactStore,
+    *,
+    metadata_updates: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Merge embedding shard artifacts into a complete embedding artifact.
 
@@ -1893,61 +2758,80 @@ def merge_embedding_shards(
 
     manifests = [store.get_json(key) for key in job.shard_keys]
     if manifests and manifests[0].get("artifact_type") == "multi_output_embedding_shard":
+        if metadata_updates:
+            raise ValueError("Multi-output merges do not accept top-level metadata updates.")
         return _merge_multi_output_embedding_shards(job, store, manifests)
     _validate_shard_manifests(manifests, expected_n_samples=job.n_samples)
-    batches = [
-        (np.asarray(manifest["sample_indices"], dtype=int), store.get_array(manifest["output_key"]))
-        for manifest in manifests
-    ]
-    artifact_path = store.put_array_batches(
-        job.output_key,
-        batches,
-        n_samples=job.n_samples,
-        require_complete=True,
-    )
-    embeddings = store.get_array(job.output_key)
-    sparse_embeddings = is_sparse_matrix(embeddings)
+
+    def committed_batches() -> Iterator[tuple[np.ndarray, Any]]:
+        for expected in manifests:
+            values, committed = store.get_artifact(expected["output_key"])
+            if committed != expected:
+                raise ValueError(
+                    "Embedding shard changed after merge validation; retry from a stable "
+                    "set of committed shard generations."
+                )
+            yield np.asarray(committed["sample_indices"], dtype=int), values
+
+    batches = committed_batches()
     manifest = {
         "artifact_type": "embedding",
         "vertebrae_version": __version__,
         "output_key": job.output_key,
-        "artifact_path": artifact_path,
         "shard_keys": list(job.shard_keys),
         "n_shards": len(job.shard_keys),
-        "shape": list(embeddings.shape),
-        "n_samples": int(embeddings.shape[0]),
-        "embedding_dim": int(embeddings.shape[1]),
-        "dtype": str(embeddings.dtype),
-        "sparse": sparse_embeddings,
-        "nnz": int(embeddings.nnz) if sparse_embeddings else None,
-        "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
         "resources": asdict(job.resources),
     }
     first = manifests[0]
-    for key in ("dataset_identity_key", "extractor_recipe", "recipe_hash"):
+    for key in (
+        "dataset_identity_key",
+        "extractor_recipe",
+        "recipe_hash",
+        "output_name",
+        "output_recipe",
+        "output_metadata",
+        "cache_eligible",
+        "cache_status",
+    ):
         manifest[key] = first.get(key)
+    if metadata_updates:
+        manifest.update(metadata_updates)
     serialized_profiles = [
         (item["output_key"], item.get("resource_profile"))
         for item in manifests
         if item.get("resource_profile") is not None
     ]
+    config = dict(first.get("resource_profiling_config") or {})
     if serialized_profiles:
-        config = dict(first.get("resource_profiling_config") or {})
-        distributed_profile = aggregate_distributed_resource_profiles(
-            [
-                (key, resource_profile_from_dict(dict(profile or {})))
-                for key, profile in serialized_profiles
-            ],
-            merged_embeddings=embeddings,
-            all_shard_keys=[item["output_key"] for item in manifests],
-            store=store,
-            merged_key=job.output_key,
-            persisted_storage=bool(config.get("persisted_storage", True)),
-        )
-        manifest["distributed_resource_profile"] = make_json_safe(distributed_profile)
         manifest["resource_profiling_config"] = config
-    store.put_json(job.output_key, manifest)
-    return manifest
+
+    def finalize_merged_metadata(
+        metadata: dict[str, Any], array_manifest: Any, artifact_stat: Any
+    ) -> dict[str, Any]:
+        if serialized_profiles:
+            contract = _embedding_metadata_from_array_manifest(array_manifest)
+            distributed_profile = aggregate_distributed_resource_profiles(
+                [
+                    (key, resource_profile_from_dict(dict(profile or {})))
+                    for key, profile in serialized_profiles
+                ],
+                merged_embeddings=contract,
+                all_shard_keys=[item["output_key"] for item in manifests],
+                merged_stat=artifact_stat,
+                persisted_storage=bool(config.get("persisted_storage", True)),
+            )
+            metadata["distributed_resource_profile"] = make_json_safe(distributed_profile)
+        return metadata
+
+    store.put_artifact_batches(
+        job.output_key,
+        batches,
+        n_samples=job.n_samples,
+        metadata=manifest,
+        require_complete=True,
+        metadata_finalizer=finalize_merged_metadata,
+    )
+    return store.get_json(job.output_key)
 
 
 def merge_retrieval_embedding_shards(
@@ -1957,22 +2841,23 @@ def merge_retrieval_embedding_shards(
     """Merge retrieval endpoint shards and preserve their endpoint identity."""
     shards = [store.get_json(key) for key in job.shard_keys]
     _validate_retrieval_shard_manifests(shards, expected_n_samples=job.n_samples)
-    manifest = merge_embedding_shards(job, store)
     sides = {shard.get("side") for shard in shards}
     branches = {shard.get("branch") for shard in shards}
     modalities = {shard.get("modality") for shard in shards}
     if len(sides) != 1 or len(branches) != 1 or len(modalities) != 1:
         raise ValueError("Retrieval endpoint shards must share one side, branch, and modality.")
-    manifest.update(
-        {
+    return merge_embedding_shards(
+        job,
+        store,
+        metadata_updates={
             "artifact_type": "retrieval_embedding",
             "side": sides.pop(),
             "branch": branches.pop(),
             "modality": modalities.pop(),
-        }
+            "cache_eligible": shards[0].get("cache_eligible", True),
+            "cache_status": shards[0].get("cache_status", "miss"),
+        },
     )
-    store.put_json(job.output_key, manifest)
-    return manifest
 
 
 def plan_retrieval_embedding_shard_jobs(
@@ -1984,23 +2869,45 @@ def plan_retrieval_embedding_shard_jobs(
     branch: Optional[str] = None,
     batch_size: int = 128,
     resource_profiling_config: Optional[ResourceProfilingConfig] = None,
+    output_key: Optional[str] = None,
+    run_prefix: Optional[str] = None,
 ) -> list[RetrievalEmbeddingShardJob]:
     """Plan deterministic embedding jobs for one retrieval endpoint."""
-    base_key = retrieval_embedding_artifact_key(dataset, extractor, side, branch)
+    if isinstance(total_shards, bool) or not isinstance(total_shards, (int, np.integer)):
+        raise ValueError("total_shards must be an integer >= 1.")
+    if int(total_shards) < 1:
+        raise ValueError("total_shards must be >= 1.")
+    if side not in {"query", "gallery"}:
+        raise ValueError("side must be 'query' or 'gallery'.")
+    values = dataset.query_values() if side == "query" else dataset.gallery_values()
+    n_samples = int(len(values))
+    if n_samples < 1:
+        raise ValueError(f"Cannot plan retrieval shards for an empty {side} endpoint.")
+    streaming_enabled = bool(getattr(extractor, "streaming_safe", False))
+    planned_shards = min(int(total_shards), n_samples) if streaming_enabled else 1
+    base_key, cache_eligible, cache_status = _execution_artifact_identity(
+        retrieval_embedding_artifact_key(dataset, extractor, side, branch),
+        extractor.recipe(),
+        output_key=output_key,
+        run_prefix=run_prefix,
+    )
     return [
         RetrievalEmbeddingShardJob(
             dataset=dataset,
             extractor=extractor,
             side=side,
             branch=branch,
-            shard=ShardSpec(total_shards=total_shards, shard_index=index),
+            shard=ShardSpec(total_shards=planned_shards, shard_index=index),
             output_key=retrieval_embedding_shard_key(
-                base_key, ShardSpec(total_shards=total_shards, shard_index=index)
+                base_key, ShardSpec(total_shards=planned_shards, shard_index=index)
             ),
             batch_size=batch_size,
+            streaming_enabled=streaming_enabled,
+            cache_eligible=cache_eligible,
+            cache_status=cache_status,
             resource_profiling_config=(resource_profiling_config or ResourceProfilingConfig()),
         )
-        for index in range(total_shards)
+        for index in range(planned_shards)
     ]
 
 
@@ -2050,90 +2957,134 @@ def _materialize_multi_output_embedding_shard(
     dataset = job.dataset
     extractor = job.extractor
     output_specs = _multi_output_specs(extractor)
-    output_batches: Dict[str, list[Tuple[np.ndarray, Any]]] = {
-        spec["name"]: [] for spec in output_specs
-    }
     output_recipes: Dict[str, dict[str, Any]] = {}
     output_metadata: Dict[str, dict[str, Any]] = {}
     batch_size = job.batch_size if job.streaming_enabled else len(dataset.y)
-    for batch in dataset.iter_batches(batch_size=batch_size, shard=job.shard):
-
-        def call(batch: Any = batch) -> Any:
-            return _validated_multi_outputs(
-                extractor,
-                batch.X,
-                len(batch.indices),
-            )
-
-        outputs = (
-            profiler.measure_call(
-                call,
-                samples=len(batch.indices),
-                call_type="transform_many",
-            )
-            if job.resource_profiling_config.enabled
-            else call()
-        )
-        indices = np.asarray([local_positions[int(index)] for index in batch.indices], dtype=int)
-        for output in outputs:
-            output_batches[output.name].append((indices, output.embeddings))
-            output_recipes[output.name] = dict(output.recipe)
-            output_metadata[output.name] = dict(output.metadata)
-
     manifests = []
-    base_profile = profiler.finish() if job.resource_profiling_config.enabled else None
-    output_keys = named_output_artifact_keys(
-        job.output_key, (spec["name"] for spec in output_specs)
-    )
-    for spec in output_specs:
-        output_name = spec["name"]
-        output_key = output_keys[output_name]
-        artifact_path = store.put_array_batches(
-            output_key,
-            output_batches[output_name],
-            n_samples=len(sample_indices),
-            require_complete=True,
+    with (
+        IncrementalMatrixStager(
+            job.memory_config,
+            purpose=f"Extractor '{extractor.name}' distributed multi-output staging",
+        ) as stager,
+        IncrementalMatrixReferenceStager(
+            job.memory_config,
+            purpose=f"Extractor '{extractor.name}' distributed multi-output staging",
+            matrix_stager=stager,
+        ) as reference_stager,
+    ):
+        for batch in dataset.iter_batches(batch_size=batch_size, shard=job.shard):
+
+            def call(batch: Any = batch) -> Any:
+                return _validated_multi_outputs(
+                    extractor,
+                    batch.X,
+                    len(batch.indices),
+                )
+
+            outputs = (
+                profiler.measure_call(
+                    call,
+                    samples=len(batch.indices),
+                    call_type="transform_many",
+                )
+                if job.resource_profiling_config.enabled
+                else call()
+            )
+            positions = [local_positions[int(index)] for index in batch.indices]
+            for output in outputs:
+                recipe = dict(output.recipe)
+                metadata = dict(output.metadata)
+                if output.name in output_recipes and output_recipes[output.name] != recipe:
+                    raise ValueError(
+                        f"Extractor output {output.name!r} changed its recipe between batches."
+                    )
+                if output.name in output_metadata and output_metadata[output.name] != metadata:
+                    raise ValueError(
+                        f"Extractor output {output.name!r} changed its metadata between batches."
+                    )
+                output_recipes[output.name] = recipe
+                output_metadata[output.name] = metadata
+                for row_index, position in enumerate(positions):
+                    row = output.embeddings[row_index : row_index + 1]
+                    reference_stager.append(
+                        output.name,
+                        position,
+                        stager.append(output.name, row),
+                    )
+
+        base_profile = profiler.finish() if job.resource_profiling_config.enabled else None
+        output_keys = named_output_artifact_keys(
+            job.output_key, (spec["name"] for spec in output_specs)
         )
-        embeddings = store.get_array(output_key)
-        output_profile = with_embedding_footprint(
-            base_profile,
-            embeddings,
-            embeddings,
-            store=store,
-            raw_key=output_key,
-            evaluated_key=output_key,
-            persisted_storage=job.resource_profiling_config.persisted_storage,
-        )
-        sparse_embeddings = is_sparse_matrix(embeddings)
-        output_manifest = {
-            "artifact_type": "embedding_shard",
-            "vertebrae_version": __version__,
-            "output_key": output_key,
-            "artifact_path": artifact_path,
-            "dataset_identity_key": dataset.identity_key(),
-            "extractor_recipe": extractor.recipe(),
-            "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
-            "output_name": output_name,
-            "output_recipe": output_recipes.get(output_name, {}),
-            "output_metadata": output_metadata.get(output_name, {}),
-            "shard": asdict(job.shard),
-            "sample_indices": sample_indices.tolist(),
-            "n_samples": int(embeddings.shape[0]),
-            "embedding_dim": int(embeddings.shape[1]),
-            "shape": list(embeddings.shape),
-            "dtype": str(embeddings.dtype),
-            "sparse": sparse_embeddings,
-            "nnz": int(embeddings.nnz) if sparse_embeddings else None,
-            "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
-            "batch_size": job.batch_size,
-            "resources": asdict(job.resources),
-            "resource_profiling_config": asdict(job.resource_profiling_config),
-            "resource_profile": (
-                make_json_safe(output_profile) if output_profile is not None else None
-            ),
-        }
-        store.put_json(output_key, output_manifest)
-        manifests.append(output_manifest)
+        for spec in output_specs:
+            output_name = spec["name"]
+            assembly = reference_stager.assemble(
+                output_name,
+                expected_rows=len(sample_indices),
+                purpose=f"Extractor '{extractor.name}' output '{output_name}' shard",
+            )
+            embeddings = assembly.matrix
+            output_key = output_keys[output_name]
+            sparse_embeddings = is_sparse_matrix(embeddings)
+            output_manifest = {
+                "artifact_type": "embedding_shard",
+                "vertebrae_version": __version__,
+                "output_key": output_key,
+                "dataset_identity_key": dataset.identity_key(),
+                "extractor_recipe": extractor.recipe(),
+                "recipe_hash": fingerprint_extractor_recipe(extractor.recipe()),
+                "output_name": output_name,
+                "output_recipe": output_recipes.get(output_name, {}),
+                "output_metadata": output_metadata.get(output_name, {}),
+                "shard": asdict(job.shard),
+                "sample_indices": sample_indices.tolist(),
+                "n_samples": int(embeddings.shape[0]),
+                "embedding_dim": int(embeddings.shape[1]),
+                "shape": list(embeddings.shape),
+                "dtype": str(embeddings.dtype),
+                "sparse": sparse_embeddings,
+                "nnz": int(embeddings.nnz) if sparse_embeddings else None,
+                "storage_format": (embeddings.getformat() if sparse_embeddings else "dense"),
+                "cache_eligible": job.cache_eligible,
+                "cache_status": job.cache_status,
+                "memory_staging": {
+                    "strategy": assembly.strategy,
+                    "required_bytes": assembly.required_bytes,
+                    "budget_bytes": assembly.budget_bytes,
+                    "staging_strategy": assembly.staging_strategy,
+                },
+                "batch_size": job.batch_size,
+                "resources": asdict(job.resources),
+                "resource_profiling_config": asdict(job.resource_profiling_config),
+            }
+
+            def finalize_multi_output_metadata(
+                metadata: dict[str, Any],
+                _array_manifest: Any,
+                artifact_stat: Any,
+                embedded_values: Any = embeddings,
+            ) -> dict[str, Any]:
+                output_profile = with_embedding_footprint(
+                    base_profile,
+                    embedded_values,
+                    embedded_values,
+                    raw_stat=artifact_stat,
+                    evaluated_stat=artifact_stat,
+                    persisted_storage=job.resource_profiling_config.persisted_storage,
+                )
+                metadata["resource_profile"] = (
+                    make_json_safe(output_profile) if output_profile is not None else None
+                )
+                return metadata
+
+            store.put_artifact(
+                output_key,
+                embeddings,
+                output_manifest,
+                metadata_finalizer=finalize_multi_output_metadata,
+            )
+            manifests.append(store.get_json(output_key))
+            del embeddings, assembly
 
     bundle_manifest = {
         "artifact_type": "multi_output_embedding_shard",
@@ -2149,6 +3100,8 @@ def _materialize_multi_output_embedding_shard(
         "resources": asdict(job.resources),
         "resource_profiling_config": asdict(job.resource_profiling_config),
         "resource_profile": (make_json_safe(base_profile) if base_profile is not None else None),
+        "cache_eligible": job.cache_eligible,
+        "cache_status": job.cache_status,
         "outputs": [
             {
                 "output_name": manifest["output_name"],
@@ -2204,6 +3157,9 @@ def _merge_multi_output_embedding_shards(
                 "sparse": merged["sparse"],
                 "nnz": merged["nnz"],
                 "storage_format": merged["storage_format"],
+                "output_recipe": merged.get("output_recipe", {}),
+                "output_metadata": merged.get("output_metadata", {}),
+                "dataset_identity_key": merged.get("dataset_identity_key"),
                 "distributed_resource_profile": merged.get("distributed_resource_profile"),
             }
         )
@@ -2218,6 +3174,8 @@ def _merge_multi_output_embedding_shards(
         "dataset_identity_key": first.get("dataset_identity_key"),
         "extractor_recipe": first.get("extractor_recipe"),
         "recipe_hash": first.get("recipe_hash"),
+        "cache_eligible": first.get("cache_eligible"),
+        "cache_status": first.get("cache_status"),
         "resources": asdict(job.resources),
         "resource_profiling_config": first.get("resource_profiling_config", {}),
         "outputs": output_manifests,
@@ -2317,12 +3275,26 @@ def _validate_shard_manifests(
     dtypes = {manifest.get("dtype") for manifest in manifest_list}
     sparse_values = {manifest.get("sparse") for manifest in manifest_list}
     dims = {manifest.get("embedding_dim") for manifest in manifest_list}
+    cache_protocols = {
+        (manifest.get("cache_eligible"), manifest.get("cache_status")) for manifest in manifest_list
+    }
     if len(recipe_hashes) != 1:
         raise ValueError("Embedding shards have inconsistent extractor recipes.")
     if len(dataset_identity_keys) != 1:
         raise ValueError("Embedding shards have inconsistent dataset identities.")
     if len(dtypes) != 1 or len(sparse_values) != 1 or len(dims) != 1:
         raise ValueError("Embedding shards have inconsistent embedding formats.")
+    if len(cache_protocols) != 1:
+        raise ValueError("Embedding shards have inconsistent cache identity policies.")
+    output_names = {manifest.get("output_name") for manifest in manifest_list}
+    output_recipe_hashes = {
+        hash_json_exact(manifest.get("output_recipe", {})) for manifest in manifest_list
+    }
+    output_metadata_hashes = {
+        hash_json_exact(manifest.get("output_metadata", {})) for manifest in manifest_list
+    }
+    if len(output_names) != 1 or len(output_recipe_hashes) != 1 or len(output_metadata_hashes) != 1:
+        raise ValueError("Embedding shards have inconsistent output-specific metadata.")
 
     written = np.zeros(expected_n_samples, dtype=bool)
     for manifest in manifest_list:
@@ -2381,6 +3353,25 @@ def _validate_retrieval_pair_metadata(
         relevance_identity_key = relevance_metadata.get("dataset_identity_key")
         if not relevance_identity_key or relevance_identity_key != query_identity_key:
             raise ValueError("Relevance artifact has an incompatible dataset identity.")
+        if relevance_metadata.get("protocol_fingerprint") != relevance_identity_key:
+            raise ValueError(
+                "Relevance artifact protocol_fingerprint does not match its dataset identity."
+            )
+
+
+def _transpose_retrieval_relations(
+    relevance: dict[int, dict[int, float]],
+    exclusions: set[Tuple[int, int]],
+    n_gallery: int,
+) -> tuple[dict[int, dict[int, float]], set[Tuple[int, int]]]:
+    """Transpose a complete query-gallery protocol for reverse evaluation."""
+
+    transposed: dict[int, dict[int, float]] = {index: {} for index in range(n_gallery)}
+    for query_index, values in relevance.items():
+        for gallery_index, grade in values.items():
+            transposed[gallery_index][query_index] = grade
+    reverse_exclusions = {(gallery_index, query_index) for query_index, gallery_index in exclusions}
+    return transposed, reverse_exclusions
 
 
 def _shared_artifact_prefix(query_key: str, gallery_key: str) -> Optional[str]:

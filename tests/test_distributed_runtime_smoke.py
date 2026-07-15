@@ -22,7 +22,6 @@ from vertebrae.execution import (
     materialize_label_artifact,
     plan_scoring_jobs,
     score_embedding_artifacts,
-    scoring_artifact_key,
 )
 from vertebrae.extractors import CallableExtractor
 
@@ -129,7 +128,7 @@ def _assert_distributed_runtime_roundtrip(backend, tmp_path, extractor_name):
     collection = collect_score_artifacts(
         [artifact["output_key"] for artifact in score_artifacts],
         store=store,
-        output_key=scoring_artifact_key(merged["output_key"], seed="runtime_collection"),
+        output_key=f"{merged['output_key']}/score-collections/runtime",
     )
 
     assert len(score_artifacts) == 2

@@ -8,7 +8,8 @@ from uuid import uuid4
 from vertebrae._version import __version__
 from vertebrae.cache import ArtifactStore, ArtifactStoreConfig, create_artifact_store
 from vertebrae.cache.factory import create_artifact_store_from_config
-from vertebrae.cache.fingerprint import hash_json
+from vertebrae.cache.fingerprint import hash_json_exact
+from vertebrae.config import overlap_scoring_config_recipe
 from vertebrae.execution.base import BenchmarkExecutionError
 from vertebrae.execution.distributed import (
     benchmark_result_from_artifacts,
@@ -25,6 +26,7 @@ from vertebrae.execution.distributed import (
     plan_embedding_shard_jobs,
     run_stability_artifacts,
     score_embedding_artifacts,
+    scoring_artifact_key,
     separatix_artifact_key,
     stability_artifact_key,
 )
@@ -80,28 +82,32 @@ def _run_standard_benchmark(benchmark: Any) -> BenchmarkResult:
     effective_shards: list[int] = []
     try:
         for extractor in benchmark.extractors:
+            extractor_cache_enabled = benchmark._cache_embeddings_enabled(extractor)
             for evaluation_dataset in datasets:
                 prepared, warnings, _, probe_plan = benchmark._prepare_dataset_for_extractor(
                     extractor,
                     evaluation_dataset,
                 )
                 requested_shards = benchmark.execution_config.total_shards
-                shard_count = min(requested_shards, len(prepared.y))
+                shard_count = (
+                    min(requested_shards, len(prepared.y))
+                    if benchmark.embedding_config.streaming_enabled
+                    and bool(getattr(extractor, "streaming_safe", False))
+                    else 1
+                )
                 effective_shards.append(shard_count)
                 canonical_key = embedding_artifact_key(prepared, extractor)
                 raw_key = (
-                    canonical_key
-                    if benchmark.cache_config.enabled
-                    else f"{run_prefix}/{canonical_key}"
+                    canonical_key if extractor_cache_enabled else f"{run_prefix}/{canonical_key}"
                 )
                 manifest = _cached_embedding_manifest(
                     store,
                     raw_key,
                     use_cache=(
-                        benchmark.cache_config.enabled
-                        and not benchmark.cache_config.force_recompute
+                        extractor_cache_enabled and not benchmark.cache_config.force_recompute
                     ),
                 )
+                cache_hit = manifest is not None
                 if manifest is None:
                     if probe_plan is None:
                         extractor.fit(prepared.X, prepared.y)
@@ -112,8 +118,8 @@ def _run_standard_benchmark(benchmark: Any) -> BenchmarkResult:
                         batch_size=benchmark.embedding_config.batch_size,
                         resource_profiling_config=benchmark.resource_profiling_config,
                         output_key=raw_key,
-                        fit_extractor=False,
                         streaming_enabled=benchmark.embedding_config.streaming_enabled,
+                        memory_config=benchmark.memory_config,
                     )
                     manifests = _run_stage(
                         benchmark,
@@ -136,6 +142,15 @@ def _run_standard_benchmark(benchmark: Any) -> BenchmarkResult:
                     if not benchmark.execution_config.retain_intermediate_artifacts:
                         for item in manifests:
                             store.delete_prefix(item["output_key"])
+                manifest = _annotate_embedding_cache_access(
+                    store,
+                    manifest,
+                    metadata=_embedding_cache_access_metadata(
+                        benchmark,
+                        extractor,
+                        cache_hit=cache_hit,
+                    ),
+                )
                 output_manifests = _normalized_output_manifests(
                     store,
                     manifest,
@@ -163,6 +178,7 @@ def _run_standard_benchmark(benchmark: Any) -> BenchmarkResult:
                             output_manifest,
                             scoring_dataset,
                             run_prefix=run_prefix,
+                            cache_enabled=extractor_cache_enabled,
                             warnings=warnings,
                         )
                     )
@@ -189,10 +205,7 @@ def _run_standard_benchmark(benchmark: Any) -> BenchmarkResult:
         )
         return result
     finally:
-        if (
-            not benchmark.cache_config.enabled
-            and not benchmark.execution_config.retain_intermediate_artifacts
-        ):
+        if not benchmark.execution_config.retain_intermediate_artifacts:
             store.delete_prefix(run_prefix)
 
 
@@ -203,13 +216,14 @@ def _score_output_manifest(
     dataset: Any,
     *,
     run_prefix: str,
+    cache_enabled: bool,
     warnings: list[str],
 ) -> list[ExtractorResult]:
     raw_key = raw_manifest["output_key"]
     aligned_identity = raw_manifest.get("dataset_identity_key")
     labels_key = labels_artifact_key(dataset)
     groups_key: Optional[str] = None
-    if not benchmark.cache_config.enabled:
+    if not cache_enabled:
         labels_key = f"{run_prefix}/{labels_key}"
     materialize_label_artifact(
         dataset,
@@ -219,7 +233,7 @@ def _score_output_manifest(
     )
     if callable(getattr(dataset, "groups", None)) and dataset.groups() is not None:
         groups_key = groups_artifact_key(dataset)
-        if not benchmark.cache_config.enabled:
+        if not cache_enabled:
             groups_key = f"{run_prefix}/{groups_key}"
         materialize_group_artifact(
             dataset,
@@ -230,12 +244,19 @@ def _score_output_manifest(
 
     results: list[ExtractorResult] = []
     scoring_config = benchmark._resolved_scoring_config(dataset)
+    metric_cache_enabled = cache_enabled and all(
+        metric.recipe().get("cache_safe") is not False
+        and metric.recipe().get("portable") is not False
+        for metric in benchmark.metrics
+    )
     for compression_config in benchmark.compression_configs:
         evaluated_key = raw_key
         if compression_config.enabled and compression_config.method != "none":
             compression_job = plan_compression_job(raw_key, compression_config)
-            if not benchmark.cache_config.enabled:
-                compression_hash = hash_json(_compression_identity(raw_key, compression_config))
+            if not cache_enabled:
+                compression_hash = hash_json_exact(
+                    {"identity_schema": 2, **_compression_identity(raw_key, compression_config)}
+                )
                 compression_job = type(compression_job)(
                     embedding_key=raw_key,
                     output_key=f"{run_prefix}/compressed/{compression_hash}",
@@ -243,11 +264,18 @@ def _score_output_manifest(
                     resources=compression_job.resources,
                 )
             evaluated_key = compression_job.output_key
-            if not (
-                benchmark.cache_config.enabled
+            compression_cached = (
+                cache_enabled
                 and not benchmark.cache_config.force_recompute
-                and store.exists(evaluated_key)
-            ):
+                and _cached_artifact_matches(
+                    store,
+                    evaluated_key,
+                    artifact_type="compressed_embedding",
+                    expected={"source_embedding_key": raw_key},
+                    require_array=True,
+                )
+            )
+            if not compression_cached:
                 _run_stage(
                     benchmark,
                     "compression",
@@ -257,14 +285,15 @@ def _score_output_manifest(
                     ),
                 )
 
-        score_protocol = hash_json(
-            {
-                "scoring_config": make_json_safe(scoring_config),
-                "metrics": [metric.recipe() for metric in benchmark.metrics],
-                "primary_metric": benchmark.primary_metric,
-            }
+        score_key = scoring_artifact_key(
+            evaluated_key,
+            labels_key=labels_key,
+            groups_key=groups_key,
+            scoring_config=scoring_config,
+            metrics=benchmark.metrics,
+            primary_metric=benchmark.primary_metric,
+            run_prefix=None if metric_cache_enabled else run_prefix,
         )
-        score_key = f"{evaluated_key}/scores/{score_protocol}"
         score_job = ScoringJob(
             embedding_key=evaluated_key,
             labels_key=labels_key,
@@ -274,18 +303,35 @@ def _score_output_manifest(
             metrics=benchmark.metrics,
             primary_metric=benchmark.primary_metric,
         )
-        _run_stage(
-            benchmark,
-            "scoring",
-            [score_job],
-            lambda execution, job=score_job: score_embedding_artifacts([job], store, execution),
+        score_cached = (
+            metric_cache_enabled
+            and not benchmark.cache_config.force_recompute
+            and _cached_artifact_matches(
+                store,
+                score_key,
+                artifact_type="metric_evaluation",
+                expected={
+                    "embedding_key": evaluated_key,
+                    "labels_key": labels_key,
+                    "groups_key": groups_key,
+                },
+            )
         )
+        if not score_cached:
+            _run_stage(
+                benchmark,
+                "scoring",
+                [score_job],
+                lambda execution, job=score_job: score_embedding_artifacts([job], store, execution),
+            )
 
         stability_key = None
         if benchmark.stability_config.enabled and benchmark.stability_config.mode != "none":
             stability_key = stability_artifact_key(
                 evaluated_key,
-                benchmark.stability_config,
+                labels_key=labels_key,
+                scoring_config=scoring_config,
+                stability_config=benchmark.stability_config,
             )
             stability_job = StabilityJob(
                 embedding_key=evaluated_key,
@@ -294,20 +340,37 @@ def _score_output_manifest(
                 scoring_config=scoring_config,
                 stability_config=benchmark.stability_config,
             )
-            _run_stage(
-                benchmark,
-                "diagnostics",
-                [stability_job],
-                lambda execution, job=stability_job: run_stability_artifacts(
-                    [job], store, execution
-                ),
+            stability_cached = (
+                cache_enabled
+                and not benchmark.cache_config.force_recompute
+                and _cached_artifact_matches(
+                    store,
+                    stability_key,
+                    artifact_type="stability_diagnostic",
+                    expected={
+                        "embedding_key": evaluated_key,
+                        "labels_key": labels_key,
+                    },
+                )
             )
+            if not stability_cached:
+                _run_stage(
+                    benchmark,
+                    "diagnostics",
+                    [stability_job],
+                    lambda execution, job=stability_job: run_stability_artifacts(
+                        [job], store, execution
+                    ),
+                )
 
         diagnostic_key = None
         if benchmark.separatix_config.enabled:
-            diagnostic_key = (
-                f"{separatix_artifact_key(evaluated_key)}-"
-                f"{hash_json(make_json_safe(benchmark.separatix_config))}"
+            diagnostic_key = separatix_artifact_key(
+                evaluated_key,
+                labels_key=labels_key,
+                groups_key=groups_key,
+                score_key=score_key,
+                separatix_config=benchmark.separatix_config,
             )
             diagnostic_job = SeparatixJob(
                 embedding_key=evaluated_key,
@@ -317,14 +380,30 @@ def _score_output_manifest(
                 output_key=diagnostic_key,
                 separatix_config=benchmark.separatix_config,
             )
-            _run_stage(
-                benchmark,
-                "diagnostics",
-                [diagnostic_job],
-                lambda execution, job=diagnostic_job: diagnose_embedding_artifacts(
-                    [job], store, execution
-                ),
+            diagnostic_cached = (
+                cache_enabled
+                and not benchmark.cache_config.force_recompute
+                and _cached_artifact_matches(
+                    store,
+                    diagnostic_key,
+                    artifact_type="separatix_diagnostic",
+                    expected={
+                        "embedding_key": evaluated_key,
+                        "labels_key": labels_key,
+                        "groups_key": groups_key,
+                        "score_key": score_key,
+                    },
+                )
             )
+            if not diagnostic_cached:
+                _run_stage(
+                    benchmark,
+                    "diagnostics",
+                    [diagnostic_job],
+                    lambda execution, job=diagnostic_job: diagnose_embedding_artifacts(
+                        [job], store, execution
+                    ),
+                )
 
         payload = benchmark_result_from_artifacts(
             score_key,
@@ -333,6 +412,14 @@ def _score_output_manifest(
             separatix_key=diagnostic_key,
         )
         result = _extractor_result_from_payload(payload["extractor_results"][0])
+        result.embedding_metadata.update(
+            {
+                field: raw_manifest[field]
+                for field in ("cache_key", "cache_hit", "cache_eligible", "cache_status")
+            }
+        )
+        if result.resource_profile is not None:
+            result.resource_profile.context["cache_status"] = raw_manifest["cache_status"]
         result.warnings = sorted(set(result.warnings + warnings))
         if not compression_config.enabled or compression_config.method == "none":
             result.compression_metadata.setdefault("method", "none")
@@ -354,6 +441,15 @@ def _normalized_output_manifests(
     )
     manifests = [dict(item) for item in outputs] if outputs else [dict(manifest)]
     for item in manifests:
+        for field in (
+            "dataset_identity_key",
+            "extractor_recipe",
+            "recipe_hash",
+            "cache_eligible",
+            "cache_status",
+        ):
+            if item.get(field) is None and manifest.get(field) is not None:
+                item[field] = manifest[field]
         name = extractor.name
         if item.get("output_name"):
             name = f"{name}:{item['output_name']}"
@@ -365,11 +461,48 @@ def _normalized_output_manifests(
                 "extractor_name": name,
                 "extractor_type": getattr(extractor, "extractor_type", "unknown"),
                 "modality": dataset.modality,
-                "cache_key": item["output_key"],
             }
         )
-        store.put_json(item["output_key"], item)
     return manifests
+
+
+def _embedding_cache_access_metadata(
+    benchmark: Any,
+    extractor: Any,
+    *,
+    cache_hit: bool,
+) -> dict[str, Any]:
+    """Describe the embedding cache decision made for the current run."""
+
+    cache_eligible = benchmark._cache_embeddings_enabled(extractor)
+    if cache_eligible:
+        cache_status = "hit" if cache_hit else "miss"
+    elif extractor.recipe().get("cache_safe") is False:
+        cache_status = "bypassed_unsafe_identity"
+    else:
+        cache_status = "disabled"
+    return {
+        "cache_hit": cache_hit,
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
+    }
+
+
+def _annotate_embedding_cache_access(
+    store: ArtifactStore,
+    manifest: dict[str, Any],
+    *,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach current-run cache provenance to a raw embedding manifest and its outputs."""
+
+    annotated = {**manifest, **metadata, "cache_key": manifest["output_key"]}
+    outputs = annotated.get("outputs")
+    if outputs is not None:
+        annotated["outputs"] = [
+            {**item, **metadata, "cache_key": item["output_key"]} for item in outputs
+        ]
+    return annotated
 
 
 def _cached_embedding_manifest(
@@ -390,6 +523,27 @@ def _cached_embedding_manifest(
             return manifest
         return None
     return manifest if store.exists(key) else None
+
+
+def _cached_artifact_matches(
+    store: ArtifactStore,
+    key: str,
+    *,
+    artifact_type: str,
+    expected: dict[str, Any],
+    require_array: bool = False,
+) -> bool:
+    """Validate a reusable artifact's commit marker and declared provenance."""
+
+    try:
+        manifest = store.get_json(key)
+    except FileNotFoundError:
+        return False
+    if manifest.get("artifact_type") != artifact_type:
+        return False
+    if any(manifest.get(name) != value for name, value in expected.items()):
+        return False
+    return not require_array or store.exists(key)
 
 
 def _run_stage(
@@ -537,7 +691,7 @@ def _result_metadata(
     metadata = {
         "vertebrae_version": __version__,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "scoring_config": asdict(benchmark.scoring_config),
+        "scoring_config": overlap_scoring_config_recipe(benchmark.scoring_config),
         "stability_config": asdict(benchmark.stability_config),
         "label_view_config": asdict(benchmark.label_view_config),
         "target_view_config": asdict(benchmark.target_view_config),

@@ -4,18 +4,20 @@ from collections import Counter
 from dataclasses import asdict
 from functools import partial
 from typing import Any, Iterable, Optional
+from uuid import uuid4
 
 import numpy as np
 
 from vertebrae._version import __version__
 from vertebrae.cache import ArtifactStore, ArtifactStoreConfig, create_artifact_store_from_config
-from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json, hash_json_exact
+from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json_exact
 from vertebrae.compression.paired import compress_embedding_pair
 from vertebrae.config import (
     EmbeddingCompressionConfig,
     OverlapScoringConfig,
     ResourceProfilingConfig,
     ZeroShotConfig,
+    overlap_scoring_config_recipe,
 )
 from vertebrae.execution.jobs import (
     EmbeddingMergeJob,
@@ -23,6 +25,10 @@ from vertebrae.execution.jobs import (
     ZeroShotCompressionJob,
     ZeroShotEmbeddingShardJob,
     ZeroShotScoringJob,
+)
+from vertebrae.extractors._identity import (
+    derived_cache_reuse_decision,
+    extractor_cache_reuse_decision,
 )
 from vertebrae.profiling import (
     ResourceProfiler,
@@ -40,6 +46,29 @@ from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import is_sparse_matrix
 
 
+def _embedding_metadata_from_array_manifest(array_manifest: Any) -> dict[str, Any]:
+    sparse = array_manifest.storage_format == "npz"
+    return {
+        "shape": list(array_manifest.shape),
+        "dtype": array_manifest.dtype,
+        "sparse": sparse,
+        "nnz": array_manifest.nnz if sparse else None,
+    }
+
+
+def _committed_shard_batches(
+    store: ArtifactStore, manifests: Iterable[dict[str, Any]]
+) -> Iterable[tuple[np.ndarray, Any]]:
+    for expected in manifests:
+        values, committed = store.get_artifact(expected["output_key"])
+        if committed != expected:
+            raise ValueError(
+                "Zero-shot shard changed after merge validation; retry from a stable "
+                "set of committed shard generations."
+            )
+        yield np.asarray(committed["sample_indices"], dtype=int), values
+
+
 def zero_shot_embedding_artifact_key(dataset: Any, extractor: Any, side: str, branch: str) -> str:
     """Build a stable endpoint key while allowing sample artifacts to be prompt-reused."""
 
@@ -49,13 +78,9 @@ def zero_shot_embedding_artifact_key(dataset: Any, extractor: Any, side: str, br
         dataset.dataset.identity_key() if side == "samples" else dataset.protocol_fingerprint()
     )
     recipe = extractor.recipe()
-    if recipe.get("cache_safe") is False:
-        raise ValueError(
-            "Cannot plan canonical zero-shot artifacts for a callable extractor without "
-            "portable callable paths or cache_identity. Supply cache_identity explicitly."
-        )
     recipe_hash = fingerprint_extractor_recipe(recipe)
-    return f"zero_shot/embeddings/{identity}/{recipe_hash}/{side}/{hash_json(branch)}"
+    branch_hash = hash_json_exact({"identity_schema": 2, "branch": branch})
+    return f"zero_shot/embeddings/{identity}/{recipe_hash}/{side}/{branch_hash}"
 
 
 def zero_shot_protocol_artifact_key(dataset: Any) -> str:
@@ -69,8 +94,15 @@ def zero_shot_compression_artifact_key(
 ) -> str:
     """Build a paired compression prefix for zero-shot endpoints."""
 
-    identity = hash_json({"samples": sample_embedding_key, "prompts": prompt_embedding_key})
-    return f"zero_shot/compressions/{identity}/{hash_json_exact(config)}"
+    identity = hash_json_exact(
+        {
+            "identity_schema": 2,
+            "samples": sample_embedding_key,
+            "prompts": prompt_embedding_key,
+        }
+    )
+    config_hash = hash_json_exact({"identity_schema": 2, "compression_config": config})
+    return f"zero_shot/compressions/{identity}/{config_hash}"
 
 
 def zero_shot_scoring_artifact_key(
@@ -104,7 +136,7 @@ def _evaluation_recipe(
         raise TypeError("scoring_config must be an OverlapScoringConfig.")
     return {
         "zero_shot_config": asdict(zero_config),
-        "overlap_scoring_config": asdict(overlap_config),
+        "overlap_scoring_config": overlap_scoring_config_recipe(overlap_config),
     }
 
 
@@ -174,9 +206,10 @@ def materialize_zero_shot_embedding_shard(
             "configured_batch_size": job.batch_size,
         },
     )
+    effective_batch_size = job.batch_size if job.streaming_enabled else len(indices)
     embeddings = encode_endpoint_batches(
         take_endpoint_rows(values, indices),
-        batch_size=job.batch_size,
+        batch_size=effective_batch_size,
         encode=lambda batch: encode(batch, branch=job.branch, modality=modality),
         owner=f"Zero-shot {job.side} shard embeddings",
         profiler=profiler if job.resource_profiling_config.enabled else None,
@@ -184,23 +217,11 @@ def materialize_zero_shot_embedding_shard(
     )
     if embeddings.shape[0] != len(indices):
         raise ValueError("Zero-shot extractor output does not align with its endpoint shard.")
-    path = store.put_array(job.output_key, embeddings)
-    profile = profiler.finish() if job.resource_profiling_config.enabled else None
-    profile = with_embedding_footprint(
-        profile,
-        embeddings,
-        embeddings,
-        store=store,
-        raw_key=job.output_key,
-        evaluated_key=job.output_key,
-        persisted_storage=job.resource_profiling_config.persisted_storage,
-    )
     sparse = is_sparse_matrix(embeddings)
     manifest = {
         "artifact_type": "zero_shot_embedding_shard",
         "vertebrae_version": __version__,
         "output_key": job.output_key,
-        "artifact_path": path,
         "source_dataset_identity_key": dataset.dataset.identity_key(),
         "protocol_fingerprint": dataset.protocol_fingerprint() if job.side == "prompts" else None,
         "endpoint_identity": identity,
@@ -216,15 +237,38 @@ def materialize_zero_shot_embedding_shard(
         "shape": list(embeddings.shape),
         "dtype": str(embeddings.dtype),
         "sparse": sparse,
+        "nnz": int(embeddings.nnz) if sparse else None,
         "storage_format": embeddings.getformat() if sparse else "dense",
+        "cache_eligible": job.cache_eligible,
+        "cache_status": job.cache_status,
         "compression_pair_id": None,
         "compression_source_key": None,
         "batch_size": job.batch_size,
         "resource_profiling_config": asdict(job.resource_profiling_config),
-        "resource_profile": make_json_safe(profile) if profile is not None else None,
     }
-    store.put_json(job.output_key, manifest)
-    return manifest
+
+    def finalize_shard_metadata(
+        metadata: dict[str, Any], _array_manifest: Any, artifact_stat: Any
+    ) -> dict[str, Any]:
+        profile = profiler.finish() if job.resource_profiling_config.enabled else None
+        profile = with_embedding_footprint(
+            profile,
+            embeddings,
+            embeddings,
+            raw_stat=artifact_stat,
+            evaluated_stat=artifact_stat,
+            persisted_storage=job.resource_profiling_config.persisted_storage,
+        )
+        metadata["resource_profile"] = make_json_safe(profile) if profile is not None else None
+        return metadata
+
+    store.put_artifact(
+        job.output_key,
+        embeddings,
+        manifest,
+        metadata_finalizer=finalize_shard_metadata,
+    )
+    return store.get_json(job.output_key)
 
 
 def merge_zero_shot_embedding_shards(job: EmbeddingMergeJob, store: ArtifactStore) -> dict:
@@ -234,28 +278,13 @@ def merge_zero_shot_embedding_shards(job: EmbeddingMergeJob, store: ArtifactStor
     if not manifests:
         raise ValueError("At least one zero-shot shard is required for merge.")
     _validate_shards(manifests, job.n_samples)
-    artifact_path = store.put_array_batches(
-        job.output_key,
-        [
-            (np.asarray(item["sample_indices"], dtype=int), store.get_array(item["output_key"]))
-            for item in manifests
-        ],
-        n_samples=job.n_samples,
-    )
-    embeddings = store.get_array(job.output_key)
     first = manifests[0]
     manifest = {
         "artifact_type": "zero_shot_embedding",
         "vertebrae_version": __version__,
         "output_key": job.output_key,
-        "artifact_path": artifact_path,
         "shard_keys": list(job.shard_keys),
         "n_shards": len(job.shard_keys),
-        "n_samples": int(embeddings.shape[0]),
-        "embedding_dim": int(embeddings.shape[1]),
-        "shape": list(embeddings.shape),
-        "dtype": str(embeddings.dtype),
-        "sparse": is_sparse_matrix(embeddings),
         "source_dataset_identity_key": first["source_dataset_identity_key"],
         "protocol_fingerprint": first.get("protocol_fingerprint"),
         "endpoint_identity": first["endpoint_identity"],
@@ -266,29 +295,43 @@ def merge_zero_shot_embedding_shards(job: EmbeddingMergeJob, store: ArtifactStor
         "modality": first.get("modality"),
         "compression_pair_id": None,
         "compression_source_key": None,
+        "cache_eligible": first.get("cache_eligible", True),
+        "cache_status": first.get("cache_status", "miss"),
     }
     serialized_profiles = [
         (item["output_key"], item.get("resource_profile"))
         for item in manifests
         if item.get("resource_profile") is not None
     ]
+    config = dict(first.get("resource_profiling_config") or {})
     if serialized_profiles:
-        config = dict(first.get("resource_profiling_config") or {})
-        distributed_profile = aggregate_distributed_resource_profiles(
-            [
-                (key, resource_profile_from_dict(dict(profile or {})))
-                for key, profile in serialized_profiles
-            ],
-            merged_embeddings=embeddings,
-            all_shard_keys=[item["output_key"] for item in manifests],
-            store=store,
-            merged_key=job.output_key,
-            persisted_storage=bool(config.get("persisted_storage", True)),
-        )
-        manifest["distributed_resource_profile"] = make_json_safe(distributed_profile)
         manifest["resource_profiling_config"] = config
-    store.put_json(job.output_key, manifest)
-    return manifest
+
+    def finalize_merge_metadata(
+        metadata: dict[str, Any], array_manifest: Any, artifact_stat: Any
+    ) -> dict[str, Any]:
+        if serialized_profiles:
+            distributed_profile = aggregate_distributed_resource_profiles(
+                [
+                    (key, resource_profile_from_dict(dict(profile or {})))
+                    for key, profile in serialized_profiles
+                ],
+                merged_embeddings=_embedding_metadata_from_array_manifest(array_manifest),
+                all_shard_keys=[item["output_key"] for item in manifests],
+                merged_stat=artifact_stat,
+                persisted_storage=bool(config.get("persisted_storage", True)),
+            )
+            metadata["distributed_resource_profile"] = make_json_safe(distributed_profile)
+        return metadata
+
+    store.put_artifact_batches(
+        job.output_key,
+        _committed_shard_batches(store, manifests),
+        n_samples=job.n_samples,
+        metadata=manifest,
+        metadata_finalizer=finalize_merge_metadata,
+    )
+    return store.get_json(job.output_key)
 
 
 def compress_zero_shot_embedding_artifacts(
@@ -296,11 +339,9 @@ def compress_zero_shot_embedding_artifacts(
 ) -> dict:
     """Fit compression on sample embeddings and transform prompt embeddings."""
 
-    sample_metadata = store.get_json(job.sample_embedding_key)
-    prompt_metadata = store.get_json(job.prompt_embedding_key)
+    samples, sample_metadata = store.get_artifact(job.sample_embedding_key)
+    prompts, prompt_metadata = store.get_artifact(job.prompt_embedding_key)
     _validate_pair(sample_metadata, prompt_metadata)
-    samples = store.get_array(job.sample_embedding_key)
-    prompts = store.get_array(job.prompt_embedding_key)
     _validate_endpoint_array(samples, sample_metadata)
     _validate_endpoint_array(prompts, prompt_metadata)
     if samples.shape[1] != prompts.shape[1]:
@@ -316,6 +357,10 @@ def compress_zero_shot_embedding_artifacts(
         paired_name="prompt embeddings",
     )
     metadata["fit_side"] = "samples"
+    cache_eligible, cache_status = derived_cache_reuse_decision(
+        sample_metadata,
+        prompt_metadata,
+    )
     compression_pair_id = hash_json_exact(
         {
             "sample_embedding_key": job.sample_embedding_key,
@@ -329,43 +374,63 @@ def compress_zero_shot_embedding_artifacts(
         (job.sample_output_key, compressed_samples, sample_metadata, "samples"),
         (job.prompt_output_key, compressed_prompts, prompt_metadata, "prompts"),
     ):
-        path = store.put_array(key, values)
         manifest = {
             **source,
             "artifact_type": "zero_shot_compressed_embedding",
             "output_key": key,
-            "artifact_path": path,
             "side": side,
             "n_samples": int(values.shape[0]),
             "embedding_dim": int(values.shape[1]),
             "shape": list(values.shape),
             "dtype": str(values.dtype),
             "sparse": is_sparse_matrix(values),
+            "nnz": int(values.nnz) if is_sparse_matrix(values) else None,
             "storage_format": values.getformat() if is_sparse_matrix(values) else "dense",
             "compression": metadata,
             "compression_pair_id": compression_pair_id,
             "compression_source_key": (
                 job.sample_embedding_key if side == "samples" else job.prompt_embedding_key
             ),
+            "cache_eligible": cache_eligible,
+            "cache_status": cache_status,
         }
         serialized_profile = source.get("distributed_resource_profile")
-        if serialized_profile is not None:
-            source_values = samples if side == "samples" else prompts
-            distributed_profile = with_distributed_embedding_footprint(
-                distributed_resource_profile_from_dict(dict(serialized_profile)),
-                source_values,
-                values,
-                store=store,
-                raw_key=(
-                    job.sample_embedding_key if side == "samples" else job.prompt_embedding_key
-                ),
-                evaluated_key=key,
-                persisted_storage=bool(
-                    source.get("resource_profiling_config", {}).get("persisted_storage", True)
-                ),
-            )
-            manifest["distributed_resource_profile"] = make_json_safe(distributed_profile)
-        store.put_json(key, manifest)
+        source_values = samples if side == "samples" else prompts
+        source_key = job.sample_embedding_key if side == "samples" else job.prompt_embedding_key
+
+        def finalize_compression_metadata(
+            candidate: dict[str, Any],
+            _array_manifest: Any,
+            artifact_stat: Any,
+            serialized: Any = serialized_profile,
+            raw_values: Any = source_values,
+            evaluated_values: Any = values,
+            raw_key: str = source_key,
+            source_manifest: dict[str, Any] = source,
+        ) -> dict[str, Any]:
+            if serialized is not None:
+                distributed_profile = with_distributed_embedding_footprint(
+                    distributed_resource_profile_from_dict(dict(serialized)),
+                    raw_values,
+                    evaluated_values,
+                    store=store,
+                    raw_key=raw_key,
+                    evaluated_stat=artifact_stat,
+                    persisted_storage=bool(
+                        source_manifest.get("resource_profiling_config", {}).get(
+                            "persisted_storage", True
+                        )
+                    ),
+                )
+                candidate["distributed_resource_profile"] = make_json_safe(distributed_profile)
+            return candidate
+
+        store.put_artifact(
+            key,
+            values,
+            manifest,
+            metadata_finalizer=finalize_compression_metadata,
+        )
     summary_key = job.output_key or zero_shot_compression_artifact_key(
         job.sample_embedding_key,
         job.prompt_embedding_key,
@@ -382,6 +447,8 @@ def compress_zero_shot_embedding_artifacts(
         "sample_endpoint": job.sample_embedding_key,
         "prompt_endpoint": job.prompt_embedding_key,
         "compression_pair_id": compression_pair_id,
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
     }
     store.put_json(summary_key, output)
     return output
@@ -390,8 +457,8 @@ def compress_zero_shot_embedding_artifacts(
 def score_zero_shot_artifact(job: ZeroShotScoringJob, store: ArtifactStore) -> dict:
     """Score persisted frozen endpoints and contextual sample overlap."""
 
-    sample_metadata = store.get_json(job.sample_embedding_key)
-    prompt_metadata = store.get_json(job.prompt_embedding_key)
+    samples, sample_metadata = store.get_artifact(job.sample_embedding_key)
+    prompts, prompt_metadata = store.get_artifact(job.prompt_embedding_key)
     protocol = store.get_json(job.protocol_key)
     _validate_protocol_artifact(protocol)
     _validate_pair(sample_metadata, prompt_metadata)
@@ -402,8 +469,6 @@ def score_zero_shot_artifact(job: ZeroShotScoringJob, store: ArtifactStore) -> d
     protocol_fingerprint = protocol["protocol_fingerprint"]
     if protocol_fingerprint != prompt_metadata.get("protocol_fingerprint"):
         raise ValueError("Zero-shot protocol and prompt artifact have different prompt protocols.")
-    samples = store.get_array(job.sample_embedding_key)
-    prompts = store.get_array(job.prompt_embedding_key)
     _validate_endpoint_array(samples, sample_metadata)
     _validate_endpoint_array(prompts, prompt_metadata)
     if sample_metadata.get("n_samples") != len(protocol.get("labels", [])):
@@ -421,6 +486,7 @@ def score_zero_shot_artifact(job: ZeroShotScoringJob, store: ArtifactStore) -> d
         prompt_labels=protocol["prompt_labels"],
         template_ids=protocol.get("template_ids"),
         sample_ids=protocol.get("sample_ids", list(range(len(protocol["labels"])))),
+        labels_are_semantic_keys=True,
     )
     result.metadata["label_encoding"] = LABEL_ENCODING
     result.metadata["label_catalog"] = list(protocol["label_catalog"])
@@ -428,6 +494,10 @@ def score_zero_shot_artifact(job: ZeroShotScoringJob, store: ArtifactStore) -> d
         samples,
         protocol["labels"],
         target_metadata={"target_type": "single_label"},
+    )
+    cache_eligible, cache_status = derived_cache_reuse_decision(
+        sample_metadata,
+        prompt_metadata,
     )
     artifact = {
         "artifact_type": "zero_shot_evaluation",
@@ -444,6 +514,8 @@ def score_zero_shot_artifact(job: ZeroShotScoringJob, store: ArtifactStore) -> d
         "compression_metadata": sample_metadata.get("compression", {"method": "none"}),
         "evaluation_recipe": evaluation_recipe,
         "evaluation_fingerprint": hash_json_exact(evaluation_recipe),
+        "cache_eligible": cache_eligible,
+        "cache_status": cache_status,
         "zero_shot": result.to_dict(),
         "overlap": portable_json(
             {
@@ -485,14 +557,37 @@ def plan_zero_shot_embedding_shard_jobs(
     branch: str,
     batch_size: int = 128,
     resource_profiling_config: Optional[ResourceProfilingConfig] = None,
+    output_key: Optional[str] = None,
+    run_prefix: Optional[str] = None,
 ) -> list[ZeroShotEmbeddingShardJob]:
     """Plan deterministic endpoint jobs for one zero-shot side."""
 
-    if total_shards < 1:
+    if isinstance(total_shards, (bool, np.bool_)) or not isinstance(
+        total_shards, (int, np.integer)
+    ):
+        raise ValueError("total_shards must be an integer >= 1.")
+    if int(total_shards) < 1:
         raise ValueError("total_shards must be >= 1.")
     n_rows = len(dataset.samples) if side == "samples" else len(dataset.prompt_rows()[0])
-    planned_shards = min(total_shards, n_rows)
-    base_key = zero_shot_embedding_artifact_key(dataset, extractor, side, branch)
+    streaming_enabled = bool(getattr(extractor, "streaming_safe", False))
+    planned_shards = min(int(total_shards), n_rows) if streaming_enabled else 1
+    canonical_key = zero_shot_embedding_artifact_key(dataset, extractor, side, branch)
+    cache_eligible, cache_status = extractor_cache_reuse_decision(extractor.recipe())
+    if output_key is not None:
+        if not cache_eligible and not output_key.startswith("runs/"):
+            raise ValueError(
+                "Cache-ineligible extractors require a run-scoped output key under 'runs/'. "
+                "Enable embedding caching and provide a safe cache_identity to opt into "
+                "canonical reuse."
+            )
+        base_key = output_key
+    elif cache_eligible:
+        base_key = canonical_key
+    else:
+        resolved_prefix = run_prefix or f"runs/{uuid4().hex}"
+        if not resolved_prefix.startswith("runs/"):
+            raise ValueError("run_prefix must be scoped beneath 'runs/'.")
+        base_key = f"{resolved_prefix}/{canonical_key}"
     return [
         ZeroShotEmbeddingShardJob(
             dataset=dataset,
@@ -502,6 +597,9 @@ def plan_zero_shot_embedding_shard_jobs(
             shard=ShardSpec(total_shards=planned_shards, shard_index=index),
             output_key=f"{base_key}/shards/{index:05d}-of-{planned_shards:05d}",
             batch_size=batch_size,
+            streaming_enabled=streaming_enabled,
+            cache_eligible=cache_eligible,
+            cache_status=cache_status,
             resource_profiling_config=(resource_profiling_config or ResourceProfilingConfig()),
         )
         for index in range(planned_shards)
@@ -560,6 +658,8 @@ def _validate_shards(manifests: list[dict], n_samples: int) -> None:
         "side",
         "branch",
         "modality",
+        "cache_eligible",
+        "cache_status",
     }
     if any(item.get("artifact_type") != "zero_shot_embedding_shard" for item in manifests):
         raise ValueError("All merged artifacts must be zero-shot embedding shards.")

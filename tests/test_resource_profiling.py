@@ -216,6 +216,7 @@ def test_profile_respects_embedding_cache(tmp_path, fake_overlapindex):
         transform,
         modality="tabular",
         streaming_safe=True,
+        cache_identity="cached-profile-test-transform-v1",
     )
     cache = CacheConfig(enabled=True, cache_dir=str(tmp_path / "cache"))
     _benchmark(_dataset(), extractor, cache_config=cache).run()
@@ -302,7 +303,9 @@ def test_multi_output_shares_inference_and_tracks_compressed_storage(fake_overla
         resource_profiling_config=ResourceProfilingConfig(enabled=True),
     ).run()
 
-    assert calls == [3, 3, 2]
+    # Auto-memory planning uses a disposable clone for one sizing call, while
+    # the live extractor still materializes each final row exactly once.
+    assert calls == [3, 3, 3, 2]
     wide, narrow = result.extractor_results
     assert wide.resource_profile.inference is narrow.resource_profile.inference
     assert wide.resource_profile.embedding.raw_bytes == 8 * 3 * 4
