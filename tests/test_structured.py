@@ -418,10 +418,13 @@ def test_structured_metadata_spill_preserves_many_rows_and_provenance(
     assert baseline.metadata["memory"]["metadata_staging_strategy"] == "memory"
 
 
-def test_structured_metadata_fails_before_unbounded_retention_without_spill():
+def test_structured_candidates_fail_before_unbounded_retention_without_spill():
     dataset, extractor = _large_structured_case()
 
-    with pytest.raises(ValueError, match="Structured candidate metadata.*allow_disk_spill"):
+    with pytest.raises(
+        ValueError,
+        match=r"Structured candidate (?:metadata|embeddings).*allow_disk_spill",
+    ):
         materialize_structured_outputs(
             dataset,
             extractor,
