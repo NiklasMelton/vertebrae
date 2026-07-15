@@ -330,7 +330,13 @@ def test_structured_multi_output_accumulates_only_retained_target_view_bytes():
     )
 
 
-def test_structured_final_metadata_peak_is_admitted_without_spill():
+def test_structured_final_metadata_peak_is_admitted_without_spill(monkeypatch):
+    monkeypatch.setattr(
+        structured_module,
+        "estimate_final_row_metadata_bytes",
+        lambda *_args, **_kwargs: 100_001,
+    )
+
     with pytest.raises(ValueError, match="Structured final row metadata.*memory budget"):
         materialize_structured_outputs(
             _dataset(),

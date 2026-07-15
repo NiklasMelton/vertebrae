@@ -3,6 +3,7 @@ from dataclasses import asdict
 import numpy as np
 import pytest
 
+import vertebrae.segmentation as segmentation_module
 import vertebrae.utils.memory as memory_module
 from vertebrae import (
     Benchmark,
@@ -224,7 +225,13 @@ def test_segmentation_final_metadata_is_admitted_even_when_spill_is_enabled():
         )
 
 
-def test_segmentation_final_metadata_peak_is_admitted_without_spill():
+def test_segmentation_final_metadata_peak_is_admitted_without_spill(monkeypatch):
+    monkeypatch.setattr(
+        segmentation_module,
+        "estimate_final_row_metadata_bytes",
+        lambda *_args, **_kwargs: 60_001,
+    )
+
     with pytest.raises(ValueError, match="Segmentation final row metadata.*memory budget"):
         materialize_segmentation_outputs(
             _dataset(),
@@ -397,10 +404,13 @@ def test_segmentation_metadata_spill_preserves_sampling_and_provenance(monkeypat
     assert baseline.metadata["memory"]["metadata_staging_strategy"] == "memory"
 
 
-def test_segmentation_metadata_fails_before_unbounded_retention_without_spill():
+def test_segmentation_candidates_fail_before_unbounded_retention_without_spill():
     dataset, extractor, config = _large_segmentation_case()
 
-    with pytest.raises(ValueError, match="Segmentation candidate metadata.*allow_disk_spill"):
+    with pytest.raises(
+        ValueError,
+        match=r"Segmentation candidate (?:metadata|embeddings).*allow_disk_spill",
+    ):
         materialize_segmentation_outputs(
             dataset,
             extractor,
