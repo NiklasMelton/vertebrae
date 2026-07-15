@@ -4,6 +4,7 @@ from typing import Any, Dict
 
 import numpy as np
 
+from vertebrae.extractors._identity import validate_extractor_name
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -12,10 +13,14 @@ class PrecomputedExtractor:
 
     Args:
         name: User-facing extractor name.
+        cache_embeddings: Whether benchmark workflows may cache the supplied embeddings.
     """
 
-    def __init__(self, name: str = "precomputed") -> None:
-        self.name = name
+    def __init__(self, name: str = "precomputed", *, cache_embeddings: bool = True) -> None:
+        if not isinstance(cache_embeddings, bool):
+            raise TypeError("cache_embeddings must be a bool.")
+        self.name = validate_extractor_name(name)
+        self.cache_embeddings = cache_embeddings
         self.modality = "embeddings"
         self.extractor_type = "precomputed"
         self.streaming_safe = True
@@ -70,4 +75,7 @@ class PrecomputedExtractor:
             "extractor_type": self.extractor_type,
             "modality": self.modality,
             "streaming_safe": self.streaming_safe,
+            "cache_embeddings": self.cache_embeddings,
+            "cache_identity": "precomputed-dataset-input-v1",
+            "cache_safe": True,
         }

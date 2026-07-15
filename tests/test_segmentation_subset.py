@@ -53,12 +53,25 @@ def test_segmentation_nested_subsets_preserve_original_image_indices_and_identit
 
     assert first.metadata["sample_indices"] == [3, 1, 2]
     assert nested.metadata["sample_indices"] == [3, 2]
+    assert nested.metadata["parent_row_positions"] == [0, 2]
     assert nested.metadata["subset"] is True
     assert nested.metadata["parent_n_images"] == 3
     assert nested.identity_key() == same.identity_key()
     assert nested.identity_key() != different.identity_key()
     with pytest.raises(ValueError, match="at least one image"):
         dataset.subset([])
+
+
+@pytest.mark.parametrize("batch_size", [True, 1.5, "2"])
+def test_segmentation_iter_batches_requires_exact_nonboolean_integer(batch_size):
+    dataset = SegmentationDataset.from_arrays(
+        np.zeros((2, 2, 2, 3)),
+        np.asarray([[[1, 2], [1, 2]], [[1, 2], [1, 2]]]),
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    with pytest.raises(TypeError, match="batch_size"):
+        list(dataset.iter_batches(batch_size=batch_size))
 
 
 def test_segmentation_materialization_uses_original_image_indices_after_subset():
@@ -89,3 +102,48 @@ def test_segmentation_materialization_uses_original_image_indices_after_subset()
 
     assert materialized.dataset.groups().tolist() == [1, 1, 3, 3]
     assert [row["image_id"] for row in materialized.provenance] == [1, 1, 3, 3]
+
+
+@pytest.mark.parametrize(
+    "annotation,error,message",
+    [
+        (
+            SegmentationAnnotation(semantic=np.asarray([[1, None]], dtype=object)),
+            ValueError,
+            "non-missing scalar",
+        ),
+        (
+            SegmentationAnnotation(
+                semantic=np.asarray([[1, 1]]),
+                instance=np.asarray([[1.0, np.nan]]),
+            ),
+            ValueError,
+            "non-missing scalar",
+        ),
+        (
+            SegmentationAnnotation(semantic=[[1]], class_metadata=[]),
+            TypeError,
+            "mapping",
+        ),
+        (
+            SegmentationAnnotation(
+                semantic=[[1]],
+                class_metadata={1: {"payload": object()}},
+            ),
+            ValueError,
+            "stable exact JSON",
+        ),
+        (
+            SegmentationAnnotation(semantic=[[1]], class_metadata={2: {}}),
+            ValueError,
+            "not present",
+        ),
+    ],
+)
+def test_segmentation_annotations_reject_invalid_cells_and_metadata(
+    annotation,
+    error,
+    message,
+):
+    with pytest.raises(error, match=message):
+        annotation.normalized()

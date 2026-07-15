@@ -279,6 +279,18 @@ def test_hf_vision_supports_structured_region_outputs(fake_vision_modules):
     assert output.embeddings[0].shape == (4, 6)
 
 
+def test_hf_vision_structured_output_preserves_hidden_layer_zero(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        structured_outputs=[{"name": "regions", "hidden_layer": 0, "special_tokens": 1}],
+    )
+
+    output = extractor.transform_structured([np.zeros((4, 4, 3), dtype=np.uint8)])[0]
+
+    assert output.embeddings[0][0].tolist() == [6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+
+
 def test_hf_vision_rejects_out_of_range_hidden_layer(fake_vision_modules):
     extractor = HFVisionExtractor(
         "vit",
@@ -305,6 +317,50 @@ def test_hf_vision_rgb_mode_converts_supported_numpy_shapes():
 
     assert [output.mode for output in outputs] == ["RGB", "RGB", "RGB", "RGB"]
     assert [output.size for output in outputs] == [(2, 2), (2, 2), (2, 2), (2, 2)]
+
+
+def test_hf_vision_scales_unit_float_images_to_uint8():
+    image_module = pytest.importorskip("PIL.Image")
+    unit_float = np.asarray([[[0.0, 0.5, 1.0]]], dtype=np.float32)
+
+    output = _coerce_image(
+        unit_float,
+        image_module,
+        image_mode="rgb",
+        alpha_mode="drop",
+    )
+
+    assert output.mode == "RGB"
+    assert np.asarray(output).dtype == np.uint8
+    assert np.asarray(output).tolist() == [[[0, 128, 255]]]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.nan,
+        np.inf,
+        -0.01,
+        1.01,
+    ],
+)
+def test_hf_vision_rejects_invalid_float_image_values(value):
+    image_module = pytest.importorskip("PIL.Image")
+    array = np.zeros((1, 1, 3), dtype=np.float32)
+    array[0, 0, 0] = value
+
+    with pytest.raises(ValueError, match=r"finite|\[0, 1\]"):
+        _coerce_image(array, image_module, image_mode="rgb", alpha_mode="drop")
+
+
+@pytest.mark.parametrize("value", [-1, 256])
+def test_hf_vision_rejects_out_of_range_integer_image_values(value):
+    image_module = pytest.importorskip("PIL.Image")
+    array = np.zeros((1, 1, 3), dtype=np.int16)
+    array[0, 0, 0] = value
+
+    with pytest.raises(ValueError, match=r"\[0, 255\]"):
+        _coerce_image(array, image_module, image_mode="rgb", alpha_mode="drop")
 
 
 def test_hf_vision_grayscale_mode_converts_supported_numpy_shapes():
@@ -344,6 +400,32 @@ def test_hf_vision_alpha_modes_are_deterministic():
     assert np.asarray(dropped).tolist() == [[[255, 0, 0]]]
     assert np.asarray(white).tolist() == [[[255, 255, 255]]]
     assert np.asarray(black).tolist() == [[[0, 0, 0]]]
+
+
+def test_hf_vision_auto_mode_handles_alpha_consistently_for_array_pil_and_path(tmp_path):
+    image_module = pytest.importorskip("PIL.Image")
+    transparent_red = np.asarray([[[255, 0, 0, 0]]], dtype=np.uint8)
+    pil_image = image_module.fromarray(transparent_red)
+    image_path = tmp_path / "transparent.png"
+    pil_image.save(image_path)
+
+    for source in (transparent_red, pil_image, image_path):
+        white = _coerce_image(
+            source,
+            image_module,
+            image_mode="auto",
+            alpha_mode="white_background",
+        )
+        black = _coerce_image(
+            source,
+            image_module,
+            image_mode="auto",
+            alpha_mode="black_background",
+        )
+        assert white.mode == "RGB"
+        assert black.mode == "RGB"
+        assert np.asarray(white).tolist() == [[[255, 255, 255]]]
+        assert np.asarray(black).tolist() == [[[0, 0, 0]]]
 
 
 def test_hf_vision_rejects_invalid_image_conversion_options():

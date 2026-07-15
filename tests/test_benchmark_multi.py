@@ -254,6 +254,7 @@ def test_output_levels_reuse_base_embedding_cache(tmp_path, fake_overlapindex):
         output_specs=[EmbeddingOutputSpec("layer_6"), EmbeddingOutputSpec("final")],
         transform_many_fn=transform_many,
         modality="tabular",
+        cache_identity="hierarchy-cache-test-v1",
     )
     config = LabelViewConfig(output_levels={"layer_6": "family", "final": "leaf"})
 
@@ -309,6 +310,7 @@ def test_multi_output_cache_keeps_formerly_colliding_names_independent(tmp_path,
         output_specs=[EmbeddingOutputSpec("a/b"), EmbeddingOutputSpec("a_b")],
         transform_many_fn=transform_many,
         modality="tabular",
+        cache_identity="named-output-cache-test-v1",
     )
     kwargs = {
         "stability_config": StabilityConfig(enabled=False),

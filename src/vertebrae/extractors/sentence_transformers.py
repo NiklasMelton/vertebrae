@@ -4,6 +4,19 @@ from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
+from vertebrae.extractors._utils import (
+    optional_dependency_versions,
+    snapshot_mapping,
+    validate_batch_size,
+    validate_bool,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
+)
 from vertebrae.utils.validation import ensure_dense_numeric_2d
 
 
@@ -32,20 +45,30 @@ class SentenceTransformerExtractor:
         model_kwargs: Optional[Dict[str, Any]] = None,
         encode_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[Sequence[str]] = None,
+        revision: Optional[str] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
-        self.model_id = model_id
+        batch_size = validate_batch_size(batch_size)
+        model_kwargs_snapshot = snapshot_mapping(model_kwargs, "model_kwargs")
+        encode_kwargs_snapshot = snapshot_mapping(encode_kwargs, "encode_kwargs")
+        revision = validate_optional_nonblank_string(revision, "revision")
+        if revision is not None and "revision" in model_kwargs_snapshot:
+            raise ValueError("Pass revision directly or in model_kwargs, not both.")
+        self.name = validate_extractor_name(name)
+        self.model_id = validate_nonblank_string(model_id, "model_id")
         self.batch_size = batch_size
-        self.normalize_embeddings = normalize_embeddings
-        self.device = device
-        self.show_progress_bar = show_progress_bar
-        self.model_kwargs = model_kwargs or {}
-        self.encode_kwargs = encode_kwargs or {}
+        self.normalize_embeddings = validate_bool(normalize_embeddings, "normalize_embeddings")
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.show_progress_bar = validate_bool(show_progress_bar, "show_progress_bar")
+        self.model_kwargs = model_kwargs_snapshot
+        self.encode_kwargs = encode_kwargs_snapshot
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "text"
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
         self._model: Any = None
+        self.revision = revision
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "SentenceTransformerExtractor":
         """No-op fit for frozen sentence-transformers models.
@@ -109,7 +132,7 @@ class SentenceTransformerExtractor:
             JSON-compatible recipe dictionary.
         """
 
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -120,8 +143,27 @@ class SentenceTransformerExtractor:
             "show_progress_bar": self.show_progress_bar,
             "model_kwargs": self.model_kwargs,
             "encode_kwargs": self.encode_kwargs,
+            "dependency_versions": optional_dependency_versions(
+                "sentence-transformers", "torch", "transformers"
+            ),
             "streaming_safe": self.streaming_safe,
+            "revision": self.revision,
         }
+        local_paths = (
+            (self.model_id, *self.checkpoint_paths)
+            if _is_local_path(self.model_id)
+            else self.checkpoint_paths
+        )
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                paths=local_paths,
+                require_pinned_revision=True,
+                revision=self.revision,
+                revision_identifiers=(self.model_id,),
+            )
+        )
+        return recipe
 
     def get_resource_profile_adapter(self) -> Any:
         from vertebrae.profiling import TorchResourceProfileAdapter
@@ -150,13 +192,16 @@ class SentenceTransformerExtractor:
                     "dependencies. Install with the documented Hugging Face extra or "
                     "Poetry group."
                 ) from exc
+            model_kwargs = dict(self.model_kwargs)
+            if self.revision is not None:
+                model_kwargs["revision"] = self.revision
             if self.device is None:
-                self._model = SentenceTransformer(self.model_id, **self.model_kwargs)
+                self._model = SentenceTransformer(self.model_id, **model_kwargs)
             else:
                 self._model = SentenceTransformer(
                     self.model_id,
                     device=self.device,
-                    **self.model_kwargs,
+                    **model_kwargs,
                 )
         return self._model
 
@@ -171,3 +216,12 @@ def _validate_text_sequence(value: Any, owner: str) -> list[str]:
     if not all(isinstance(text, str) for text in texts):
         raise ValueError(f"{owner} expects every input item to be a string.")
     return texts
+
+
+def _is_local_path(value: str) -> bool:
+    from pathlib import Path
+
+    try:
+        return Path(value).expanduser().exists()
+    except (OSError, ValueError):
+        return False

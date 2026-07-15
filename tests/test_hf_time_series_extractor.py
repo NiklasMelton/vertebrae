@@ -139,6 +139,18 @@ def test_hf_time_series_preserves_optional_inputs(fake_time_series_modules):
     assert "past_time_features" in FakeTimeSeriesModel.last_call_kwargs
 
 
+@pytest.mark.parametrize("field", ["observed_mask", "time_features"])
+def test_hf_time_series_rejects_mixed_optional_field_presence(fake_time_series_modules, field):
+    values = {
+        "series": np.arange(12, dtype=float).reshape(2, 6),
+        field: [np.ones(6), None],
+    }
+    extractor = HFTimeSeriesExtractor("ts", "fake-timeseries", batch_size=1)
+
+    with pytest.raises(ValueError, match=f"{field}.*all samples or none"):
+        extractor.transform(values)
+
+
 def test_hf_time_series_selects_hidden_layer(fake_time_series_modules):
     extractor = HFTimeSeriesExtractor(
         name="ts",

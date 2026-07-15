@@ -69,6 +69,12 @@ class FakeTensor:
         return FakeTensor(self.data[key])
 
 
+def explicit_feature_mask(feature_length, attention_mask):
+    assert feature_length == 2
+    lengths = attention_mask.data.sum(axis=1)
+    return FakeTensor(np.asarray([[1, int(length >= 3)] for length in lengths], dtype=int))
+
+
 class FakeNoGrad:
     def __enter__(self):
         return None
@@ -263,3 +269,215 @@ def test_hf_audio_supports_structured_frame_outputs(fake_audio_modules):
     assert len(output.embeddings) == 2
     assert output.embeddings[0].shape == (3, 4)
     assert output.embeddings[1].shape == (2, 4)
+
+
+def test_hf_audio_downsamples_attention_mask_to_feature_frames(fake_audio_modules):
+    class DownsampledAudioModel(FakeAudioModel):
+        def __call__(self, **encoded):
+            batch = encoded["input_values"].shape[0]
+            hidden = np.arange(batch * 2 * 4, dtype=float).reshape(batch, 2, 4)
+            hidden_states = tuple(FakeTensor(hidden + layer * 100) for layer in range(4))
+            return types.SimpleNamespace(
+                last_hidden_state=FakeTensor(hidden),
+                pooler_output=FakeTensor(np.ones((batch, 4))),
+                hidden_states=hidden_states if encoded.get("output_hidden_states") else None,
+            )
+
+        def _get_feature_vector_attention_mask(self, feature_length, attention_mask):
+            assert feature_length == 2
+            raw_lengths = attention_mask.data.sum(axis=1)
+            return FakeTensor(
+                np.asarray([[1, int(length >= 3)] for length in raw_lengths], dtype=int)
+            )
+
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        batch_size=2,
+        sampling_rate=16_000,
+        structured_outputs=[{"name": "frames", "hidden_layer": 2}],
+    )
+    extractor._processor = FakeAudioProcessor()
+    extractor._model = DownsampledAudioModel()
+    extractor._torch = FakeTorch
+
+    pooled = extractor.transform(
+        [
+            np.asarray([0.0, 0.1, 0.2], dtype=np.float32),
+            np.asarray([0.3, 0.4], dtype=np.float32),
+        ]
+    )
+    structured = extractor.transform_structured(
+        [
+            np.asarray([0.0, 0.1, 0.2], dtype=np.float32),
+            np.asarray([0.3, 0.4], dtype=np.float32),
+        ]
+    )[0]
+
+    assert pooled.tolist() == [[2.0, 3.0, 4.0, 5.0], [8.0, 9.0, 10.0, 11.0]]
+    assert [frames.shape[0] for frames in structured.embeddings] == [2, 1]
+
+
+def test_hf_audio_supports_explicit_feature_mask_adapter(fake_audio_modules):
+    class DownsampledWithoutPrivateHelper(FakeAudioModel):
+        def __call__(self, **encoded):
+            batch = encoded["input_values"].shape[0]
+            hidden = np.arange(batch * 2 * 4, dtype=float).reshape(batch, 2, 4)
+            hidden_states = tuple(FakeTensor(hidden + layer * 100) for layer in range(4))
+            return types.SimpleNamespace(
+                last_hidden_state=FakeTensor(hidden),
+                pooler_output=FakeTensor(np.ones((batch, 4))),
+                hidden_states=hidden_states if encoded.get("output_hidden_states") else None,
+            )
+
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        sampling_rate=16_000,
+        feature_mask_fn=explicit_feature_mask,
+        structured_outputs=[{"name": "frames"}],
+        cache_identity="explicit-feature-mask-v1",
+    )
+    extractor._processor = FakeAudioProcessor()
+    extractor._model = DownsampledWithoutPrivateHelper()
+    extractor._torch = FakeTorch
+
+    output = extractor.transform_structured(
+        [np.ones(3, dtype=np.float32), np.ones(2, dtype=np.float32)]
+    )[0]
+    recipe = extractor.recipe()
+
+    assert [frames.shape[0] for frames in output.embeddings] == [2, 1]
+    assert recipe["feature_mask_fn"].endswith(".explicit_feature_mask")
+    assert recipe["callable_identities"]["feature_mask_fn"] is None
+    assert recipe["cache_identity"] == "explicit-feature-mask-v1"
+    assert recipe["cache_safe"] is True
+
+
+def test_hf_audio_rejects_unequal_padding_without_attention_mask(fake_audio_modules):
+    class ProcessorWithoutMask(FakeAudioProcessor):
+        def __call__(self, batch, sampling_rate, **kwargs):
+            encoded = super().__call__(batch, sampling_rate, **kwargs)
+            encoded.pop("attention_mask")
+            return encoded
+
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        sampling_rate=16_000,
+        pooling="mean",
+    )
+    extractor._processor = ProcessorWithoutMask()
+    extractor._model = FakeAudioModel()
+    extractor._torch = FakeTorch
+
+    with pytest.raises(ValueError, match="padded unequal-length clips"):
+        extractor.transform([np.ones(3), np.ones(2)])
+
+
+def test_hf_audio_rejects_equal_clips_padded_beyond_raw_length_without_mask(
+    fake_audio_modules,
+):
+    class FixedPaddingProcessor(FakeAudioProcessor):
+        def __call__(self, batch, sampling_rate, **kwargs):
+            padded_length = max(len(item) for item in batch) + 2
+            padded = np.zeros((len(batch), padded_length), dtype=np.float32)
+            for index, item in enumerate(batch):
+                padded[index, : len(item)] = item
+            return {"input_values": FakeTensor(padded)}
+
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        sampling_rate=16_000,
+        pooling="mean",
+    )
+    extractor._processor = FixedPaddingProcessor()
+    extractor._model = FakeAudioModel()
+    extractor._torch = FakeTorch
+
+    with pytest.raises(ValueError, match="extended clips beyond their raw length"):
+        extractor.transform([np.ones(3), np.ones(3)])
+
+
+def test_hf_audio_rejects_maskless_fixed_feature_domain_padding(fake_audio_modules):
+    class FixedFeatureProcessor:
+        def __call__(self, batch, sampling_rate, **kwargs):
+            return {
+                "input_features": FakeTensor(np.zeros((len(batch), 80, 3_000), dtype=np.float32))
+            }
+
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        sampling_rate=16_000,
+        pooling="mean",
+    )
+    extractor._processor = FixedFeatureProcessor()
+    extractor._model = FakeAudioModel()
+    extractor._torch = FakeTorch
+
+    with pytest.raises(ValueError, match="feature-domain.*alignment cannot be proven"):
+        extractor.transform([np.ones(16_000)])
+
+
+def test_hf_audio_structured_output_uses_boolean_feature_mask(fake_audio_modules):
+    class NonContiguousMaskProcessor(FakeAudioProcessor):
+        def __call__(self, batch, sampling_rate, **kwargs):
+            encoded = super().__call__(batch, sampling_rate, **kwargs)
+            encoded["attention_mask"] = FakeTensor([[1, 0, 1]])
+            return encoded
+
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        sampling_rate=16_000,
+        structured_outputs=[{"name": "frames"}],
+    )
+    extractor._processor = NonContiguousMaskProcessor()
+    extractor._model = FakeAudioModel()
+    extractor._torch = FakeTorch
+
+    frames = extractor.transform_structured([np.ones(3)])[0].embeddings[0]
+
+    assert frames.tolist() == [[0.0, 1.0, 2.0, 3.0], [8.0, 9.0, 10.0, 11.0]]
+
+
+def test_hf_audio_rejects_wrong_feature_mask_shape(fake_audio_modules):
+    class DownsampledWithoutPrivateHelper(FakeAudioModel):
+        def __call__(self, **encoded):
+            batch = encoded["input_values"].shape[0]
+            hidden = np.ones((batch, 2, 4), dtype=float)
+            return types.SimpleNamespace(last_hidden_state=FakeTensor(hidden))
+
+    extractor = HFAudioExtractor(
+        "audio",
+        "fake-audio",
+        sampling_rate=16_000,
+        feature_mask_fn=lambda _length, _mask: FakeTensor(np.ones((1, 2))),
+    )
+    extractor._processor = FakeAudioProcessor()
+    extractor._model = DownsampledWithoutPrivateHelper()
+    extractor._torch = FakeTorch
+
+    with pytest.raises(ValueError, match=r"exact \(batch, frame\) shape"):
+        extractor.transform([np.ones(3), np.ones(2)])
+    assert extractor.recipe()["callable_identities"]["feature_mask_fn"] is None
+
+
+@pytest.mark.parametrize("sampling_rate", [True, 16_000.0, "16000", 0, -1])
+def test_hf_audio_requires_positive_exact_integer_sampling_rates(sampling_rate):
+    with pytest.raises((TypeError, ValueError), match="sampling_rate"):
+        HFAudioExtractor("audio", "fake-audio", sampling_rate=sampling_rate)
+
+
+def test_hf_audio_validates_per_sample_sampling_rates(fake_audio_modules):
+    extractor = HFAudioExtractor("audio", "fake-audio")
+
+    with pytest.raises(TypeError, match="sampling_rate"):
+        extractor.transform(
+            {
+                "array": [np.ones(2), np.ones(2)],
+                "sampling_rate": [16_000, True],
+            }
+        )

@@ -1,11 +1,30 @@
 """Optional Hugging Face video embedding extractor."""
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 import numpy as np
 
-from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    local_model_paths,
+    validate_cache_identity,
+    validate_extractor_name,
+)
+from vertebrae.extractors._utils import (
+    optional_dependency_versions,
+    snapshot_mapping,
+    validate_batch_size,
+    validate_bool,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
+)
+from vertebrae.extractors.base import (
+    EmbeddingOutput,
+    EmbeddingOutputSpec,
+    normalize_optional_output_integer,
+)
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
 
@@ -31,18 +50,25 @@ class HFVideoExtractor:
         processor_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[List[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        if pooling not in {"mean", "cls", "pooler"}:
-            raise ValueError("pooling must be one of: mean, cls, pooler.")
+        pooling = validate_choice(pooling, "pooling", {"mean", "cls", "pooler"})
+        batch_size = validate_batch_size(batch_size)
+        if isinstance(num_frames, bool) or not isinstance(num_frames, int):
+            raise TypeError("num_frames must be an integer.")
         if num_frames < 1:
             raise ValueError("num_frames must be >= 1.")
-        if clip_duration_sec is not None and clip_duration_sec <= 0:
-            raise ValueError("clip_duration_sec must be > 0 when provided.")
-        if clip_start_sec is not None and clip_start_sec < 0:
-            raise ValueError("clip_start_sec must be >= 0 when provided.")
-        self.name = name
-        self.model_id = model_id
-        self.processor_id = processor_id or model_id
+        clip_duration_sec = _optional_finite_time(
+            clip_duration_sec, "clip_duration_sec", minimum=0.0, strict=True
+        )
+        clip_start_sec = _optional_finite_time(
+            clip_start_sec, "clip_start_sec", minimum=0.0, strict=False
+        )
+        self.name = validate_extractor_name(name)
+        self.model_id = validate_nonblank_string(model_id, "model_id")
+        self.processor_id = (
+            validate_optional_nonblank_string(processor_id, "processor_id") or self.model_id
+        )
         self.pooling = pooling
         self.hidden_layer = hidden_layer
         self._output_specs = _resolve_output_specs(
@@ -55,11 +81,11 @@ class HFVideoExtractor:
         self.num_frames = num_frames
         self.clip_duration_sec = clip_duration_sec
         self.clip_start_sec = clip_start_sec
-        self.device = device
-        self.revision = revision
-        self.trust_remote_code = trust_remote_code
-        self.processor_kwargs = processor_kwargs or {}
-        self.model_kwargs = model_kwargs or {}
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.revision = validate_optional_nonblank_string(revision, "revision")
+        self.trust_remote_code = validate_bool(trust_remote_code, "trust_remote_code")
+        self.processor_kwargs = snapshot_mapping(processor_kwargs, "processor_kwargs")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "video"
         self.extractor_type = "frozen_pretrained"
@@ -67,6 +93,7 @@ class HFVideoExtractor:
         self._processor: Any = None
         self._model: Any = None
         self._torch: Any = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "HFVideoExtractor":
         """No-op fit for frozen Hugging Face video models."""
@@ -121,11 +148,9 @@ class HFVideoExtractor:
                 EmbeddingOutput(
                     name=spec.name,
                     embeddings=embeddings,
-                    recipe={
-                        "pooling": spec.pooling,
-                        "hidden_layer": spec.hidden_layer,
-                    },
+                    recipe=_spec_to_dict(spec),
                     metadata={
+                        **dict(spec.metadata),
                         "pooling": spec.pooling,
                         "hidden_layer": spec.hidden_layer,
                     },
@@ -162,7 +187,7 @@ class HFVideoExtractor:
                 name=spec.name,
                 embeddings=collected[spec.name],
                 unit_type=spec.unit_type,
-                recipe={"hidden_layer": spec.hidden_layer},
+                recipe=_structured_spec_to_dict(spec),
                 metadata=dict(spec.metadata),
             )
             for spec in self._structured_output_specs
@@ -188,14 +213,29 @@ class HFVideoExtractor:
             "trust_remote_code": self.trust_remote_code,
             "processor_kwargs": self.processor_kwargs,
             "model_kwargs": self.model_kwargs,
+            "dependency_versions": optional_dependency_versions(
+                "pytorchvideo", "torch", "transformers"
+            ),
             "streaming_safe": self.streaming_safe,
         }
-        if len(self._output_specs) > 1:
-            recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
                 _structured_spec_to_dict(spec) for spec in self._structured_output_specs
             ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                paths=local_model_paths(
+                    self.model_id,
+                    self.checkpoint_paths,
+                    additional_identifiers=(self.processor_id,),
+                ),
+                require_pinned_revision=True,
+                revision=self.revision,
+                revision_identifiers=(self.model_id, self.processor_id),
+            )
+        )
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:
@@ -270,6 +310,12 @@ class HFVideoExtractor:
     def _prepare_clip(self, sample: Dict[str, Any]) -> np.ndarray:
         if "frames" in sample:
             clip = _coerce_clip_array(sample["frames"])
+            clip = _window_predecoded_clip(
+                clip,
+                frame_rate=sample.get("frame_rate"),
+                start_sec=self.clip_start_sec,
+                duration_sec=self.clip_duration_sec,
+            )
         else:
             clip = self._decode_video_path(Path(sample["path"]))
         return _sample_video_frames(clip, self.num_frames)
@@ -396,6 +442,50 @@ def _optional_aligned_sequence(value: Any, size: int, name: str) -> List[Optiona
     return items
 
 
+def _window_predecoded_clip(
+    clip: np.ndarray,
+    *,
+    frame_rate: Any,
+    start_sec: Optional[float],
+    duration_sec: Optional[float],
+) -> np.ndarray:
+    if start_sec is None and duration_sec is None:
+        return clip
+    if isinstance(frame_rate, bool) or not isinstance(frame_rate, (int, float, np.number)):
+        raise ValueError("Timed windows for predecoded video arrays require a numeric frame_rate.")
+    rate = float(frame_rate)
+    if not np.isfinite(rate) or rate <= 0:
+        raise ValueError("Timed windows for predecoded video arrays require frame_rate > 0.")
+    start = float(start_sec or 0.0)
+    start_frame = int(np.floor(start * rate))
+    end_frame = (
+        clip.shape[0] if duration_sec is None else int(np.ceil((start + duration_sec) * rate))
+    )
+    start_frame = min(max(start_frame, 0), clip.shape[0])
+    end_frame = min(max(end_frame, start_frame), clip.shape[0])
+    if end_frame <= start_frame:
+        raise ValueError("The configured video time window contains no decoded frames.")
+    return clip[start_frame:end_frame]
+
+
+def _optional_finite_time(
+    value: Any,
+    name: str,
+    *,
+    minimum: float,
+    strict: bool,
+) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.number)):
+        raise TypeError(f"{name} must be a finite number when provided.")
+    normalized = float(value)
+    if not np.isfinite(normalized) or (normalized <= minimum if strict else normalized < minimum):
+        relation = ">" if strict else ">="
+        raise ValueError(f"{name} must be finite and {relation} {minimum:g} when provided.")
+    return normalized
+
+
 def _coerce_clip_array(value: Any) -> np.ndarray:
     array = np.asarray(value)
     if array.ndim != 4:
@@ -470,6 +560,8 @@ def _resolve_output_specs(
         ]
     specs = []
     for raw in outputs:
+        if not isinstance(raw, Mapping):
+            raise TypeError("HFVideoExtractor output specs must be mappings.")
         if "name" not in raw:
             raise ValueError("HFVideoExtractor output specs must include a name.")
         pooling = raw.get("pooling", default_pooling)
@@ -477,9 +569,10 @@ def _resolve_output_specs(
             raise ValueError("HFVideoExtractor output pooling must be one of: mean, cls, pooler.")
         specs.append(
             EmbeddingOutputSpec(
-                name=str(raw["name"]),
+                name=raw["name"],
                 pooling=pooling,
                 hidden_layer=raw.get("hidden_layer"),
+                metadata=raw.get("metadata", {}),
             )
         )
     _ensure_unique_names(specs)
@@ -506,16 +599,27 @@ def _resolve_structured_output_specs(
 ) -> List[StructuredOutputSpec]:
     specs = []
     for raw in outputs or []:
+        if not isinstance(raw, Mapping):
+            raise TypeError("HFVideoExtractor structured outputs must be mappings.")
         if "name" not in raw:
             raise ValueError("HFVideoExtractor structured outputs must include a name.")
+        special_tokens = normalize_optional_output_integer(
+            raw.get("special_tokens", 1), "HFVideoExtractor special_tokens"
+        )
+        assert special_tokens is not None
+        if special_tokens < 0:
+            raise ValueError("HFVideoExtractor special_tokens must be non-negative.")
+        raw_metadata = raw.get("metadata", {})
+        if not isinstance(raw_metadata, Mapping):
+            raise TypeError("HFVideoExtractor structured output metadata must be a mapping.")
         specs.append(
             StructuredOutputSpec(
-                name=str(raw["name"]),
-                unit_type=str(raw.get("unit_type", "frame")),
+                name=raw["name"],
+                unit_type=raw.get("unit_type", "frame"),
                 hidden_layer=raw.get("hidden_layer"),
                 metadata={
-                    "special_tokens": int(raw.get("special_tokens", 1)),
-                    **dict(raw.get("metadata", {})),
+                    **dict(raw_metadata),
+                    "special_tokens": special_tokens,
                 },
             )
         )

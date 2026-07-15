@@ -1,9 +1,10 @@
 import numpy as np
+import pytest
 
 from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import MultiOutputExtractor
-from vertebrae.extractors.base import EmbeddingOutputSpec
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 
 
 def test_multi_output_extractor_expands_to_multiple_results(fake_overlapindex):
@@ -51,3 +52,50 @@ def test_multi_output_extractor_expands_to_multiple_results(fake_overlapindex):
         "callable_multi:scaled",
     }
     assert len(fake_overlapindex.calls) == 6
+
+
+def test_multi_output_cache_identity_rejects_local_lambda_without_opt_in():
+    specs = [EmbeddingOutputSpec(name="identity")]
+    unsafe = MultiOutputExtractor(
+        "unsafe",
+        specs,
+        transform_many_fn=lambda value: {"identity": np.asarray(value)},
+    )
+    explicit = MultiOutputExtractor(
+        "explicit",
+        specs,
+        transform_many_fn=lambda value: {"identity": np.asarray(value)},
+        cache_identity="multi-v1",
+    )
+
+    assert unsafe.recipe()["cache_safe"] is False
+    assert explicit.recipe()["cache_safe"] is True
+    with pytest.raises(ValueError, match="cache_identity"):
+        MultiOutputExtractor("bad", specs, transform_many_fn=np.asarray, cache_identity="")
+
+
+def test_multi_output_requires_exact_raw_named_outputs():
+    specs = [EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")]
+    extra = MultiOutputExtractor(
+        "extra",
+        specs,
+        transform_many_fn=lambda value: {
+            "left": value,
+            "right": value,
+            "undeclared": value,
+        },
+    )
+    duplicate = MultiOutputExtractor(
+        "duplicate",
+        specs,
+        transform_many_fn=lambda value: [
+            EmbeddingOutput("left", value, {}),
+            EmbeddingOutput(" left ", value, {}),
+            EmbeddingOutput("right", value, {}),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="extra=.*undeclared"):
+        extra.transform_many(np.ones((2, 2)))
+    with pytest.raises(ValueError, match="duplicate output"):
+        duplicate.transform_many(np.ones((2, 2)))

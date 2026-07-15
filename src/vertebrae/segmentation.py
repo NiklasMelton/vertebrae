@@ -1,15 +1,24 @@
 """Spatial feature alignment and token materialization for segmentation."""
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
 import numpy as np
 
-from vertebrae.config import SegmentationConfig
+from vertebrae.cache.fingerprint import hash_json_exact
+from vertebrae.config import MemoryConfig, SegmentationConfig
 from vertebrae.datasets.base import BenchmarkDataset
 from vertebrae.datasets.identity import DatasetIdentity
 from vertebrae.datasets.segmentation import SegmentationAnnotation, SegmentationDataset
 from vertebrae.extractors.spatial import SpatialLayout
+from vertebrae.utils.labels import semantic_label_key
+from vertebrae.utils.memory import (
+    IncrementalMatrixStager,
+    IncrementalMetadataStager,
+    MatrixAssembly,
+    admit_final_metadata,
+    estimate_final_row_metadata_bytes,
+)
 
 
 @dataclass
@@ -28,17 +37,85 @@ def materialize_segmentation_outputs(
     config: Optional[SegmentationConfig] = None,
     batch_size: int = 16,
     resource_profiler: Optional[Any] = None,
+    memory_config: Optional[MemoryConfig] = None,
 ) -> List[SegmentationMaterialization]:
     """Extract, align, sample, and flatten all declared spatial outputs."""
 
+    return list(
+        iter_materialize_segmentation_outputs(
+            dataset,
+            extractor,
+            config=config,
+            batch_size=batch_size,
+            resource_profiler=resource_profiler,
+            memory_config=memory_config,
+        )
+    )
+
+
+def iter_materialize_segmentation_outputs(
+    dataset: SegmentationDataset,
+    extractor: Any,
+    config: Optional[SegmentationConfig] = None,
+    batch_size: int = 16,
+    resource_profiler: Optional[Any] = None,
+    memory_config: Optional[MemoryConfig] = None,
+) -> Iterator[SegmentationMaterialization]:
+    """Yield flattened spatial outputs one at a time after shared extraction."""
+
     resolved = config or SegmentationConfig()
+    resolved_memory = memory_config or MemoryConfig()
+    with (
+        IncrementalMatrixStager(
+            resolved_memory,
+            purpose="Segmentation candidate embeddings",
+        ) as stager,
+        IncrementalMetadataStager(
+            resolved_memory,
+            purpose="Segmentation candidate metadata",
+            matrix_stager=stager,
+        ) as metadata_stager,
+    ):
+        yield from _iter_materialize_segmentation_outputs(
+            dataset,
+            extractor,
+            resolved=resolved,
+            batch_size=batch_size,
+            resource_profiler=resource_profiler,
+            stager=stager,
+            metadata_stager=metadata_stager,
+        )
+
+
+def _iter_materialize_segmentation_outputs(
+    dataset: SegmentationDataset,
+    extractor: Any,
+    *,
+    resolved: SegmentationConfig,
+    batch_size: int,
+    resource_profiler: Optional[Any],
+    stager: IncrementalMatrixStager,
+    metadata_stager: IncrementalMetadataStager,
+) -> Iterator[SegmentationMaterialization]:
+    """Implement spatial extraction within a cleanup-scoped row stager."""
+
     dataset.validate()
     source_image_indices = dataset.metadata.get("sample_indices")
     if source_image_indices is None:
         source_image_indices = list(range(len(dataset.annotations)))
+    source_image_indices = list(source_image_indices)
+    if len(source_image_indices) != len(dataset.annotations):
+        raise ValueError("Segmentation source sample IDs must align with annotations.")
+    extractor_recipe = dict(extractor.recipe())
     extractor.fit(dataset.X, None)
+    expected_names = _declared_spatial_output_names(extractor)
     collected: Dict[str, Dict[str, Any]] = {}
-    for batch in dataset.iter_batches(batch_size=batch_size):
+    effective_batch_size = (
+        batch_size
+        if bool(getattr(extractor, "streaming_safe", False))
+        else len(dataset.annotations)
+    )
+    for batch in dataset.iter_batches(batch_size=effective_batch_size):
         batch_x = batch.X
 
         def call(values: Any = batch_x) -> List[Any]:
@@ -53,6 +130,7 @@ def materialize_segmentation_outputs(
             if resource_profiler is not None
             else call()
         )
+        _validate_output_names(outputs, expected_names)
         for output in outputs:
             if len(output.embeddings) != len(batch.indices):
                 raise ValueError(
@@ -66,35 +144,115 @@ def materialize_segmentation_outputs(
                     "recipe": output.recipe,
                     "metadata": output.metadata,
                     "annotation_transform": output.annotation_transform,
-                    "candidates": [],
+                    "candidate_tokens": 0,
+                    "ignored_tokens": {},
+                    "output_contract": _spatial_output_contract(output),
+                    "embedding_contract": None,
                 },
             )
-            if bucket["layout"] != output.layout:
-                raise ValueError(f"Spatial output {output.name!r} changed layout between batches.")
-            for local_index, image_index in enumerate(batch.indices):
-                source_image_index = int(source_image_indices[int(image_index)])
-                bucket["candidates"].extend(
-                    _align_image(
-                        output.embeddings[local_index],
-                        output.layout,
-                        dataset.annotations[int(image_index)],
-                        image_index=source_image_index,
-                        output_name=output.name,
-                        config=resolved,
-                        annotation_transform=output.annotation_transform,
-                    )
+            if _spatial_output_contract(output) != bucket["output_contract"]:
+                raise ValueError(
+                    f"Spatial output {output.name!r} changed its layout, recipe, metadata, or "
+                    "annotation transform between batches."
                 )
+            for local_index, image_index in enumerate(batch.indices):
+                source_image_index = source_image_indices[int(image_index)]
+                _validate_spatial_embedding_contract(
+                    bucket,
+                    output.embeddings[local_index],
+                    output_name=output.name,
+                    image_id=source_image_index,
+                )
+                for candidate in _align_image(
+                    output.embeddings[local_index],
+                    output.layout,
+                    dataset.annotations[int(image_index)],
+                    image_index=source_image_index,
+                    output_name=output.name,
+                    config=resolved,
+                    annotation_transform=output.annotation_transform,
+                ):
+                    bucket["candidate_tokens"] += 1
+                    reason = candidate["drop_reason"]
+                    if reason is not None:
+                        ignored = bucket["ignored_tokens"]
+                        ignored[reason] = ignored.get(reason, 0) + 1
+                        continue
+                    candidate["embedding_ref"] = stager.append(
+                        output.name,
+                        candidate.pop("embedding"),
+                    )
+                    metadata_stager.append(
+                        output.name,
+                        candidate,
+                        priority_key=f"{_priority(candidate, resolved.random_state):064x}",
+                        group_key=hash_json_exact(candidate["image_id"]),
+                        row_key=int(candidate["row"]),
+                        column_key=int(candidate["column"]),
+                    )
 
-    materializations = []
-    for output_name, bucket in collected.items():
-        selected = _sample_candidates(bucket["candidates"], resolved)
-        if not selected:
+    retained_final_metadata_bytes = 0
+    retained_output_matrix_bytes = 0
+    for output_name in list(collected):
+        bucket = collected.pop(output_name)
+        n_selected = _sample_candidates(metadata_stager, output_name, resolved)
+        if not n_selected:
             raise ValueError(f"Segmentation output {output_name!r} produced no valid tokens.")
-        embeddings = np.vstack([candidate["embedding"] for candidate in selected])
-        labels = np.asarray([candidate["label"] for candidate in selected], dtype=object)
-        groups = np.asarray([candidate["image_id"] for candidate in selected])
+
+        def selected_factory(
+            resolved_output_name: str = output_name,
+        ) -> Iterator[Dict[str, Any]]:
+            return (
+                row
+                for _, row in metadata_stager.iter_rows(
+                    resolved_output_name,
+                    order="final",
+                    selected_only=True,
+                )
+            )
+
+        final_metadata_bytes = estimate_final_row_metadata_bytes(
+            selected_factory(),
+            expected_rows=n_selected,
+            expansion_factor=2.5,
+            purpose="Segmentation final row metadata",
+        )
+        retained_final_metadata_bytes = admit_final_metadata(
+            stager,
+            final_metadata_bytes,
+            purpose="Segmentation final row metadata",
+            retained_bytes=retained_final_metadata_bytes,
+        )
+        assembly = stager.assemble(
+            output_name,
+            (candidate["embedding_ref"] for candidate in selected_factory()),
+            purpose="Segmentation materialized embeddings",
+            force_disk=stager.memory_config.allow_disk_spill,
+        )
+        embeddings = assembly.matrix
+        if assembly.strategy == "in_memory":
+            stager.reserve_metadata(
+                assembly.required_bytes,
+                purpose="Segmentation retained output matrices",
+            )
+            retained_output_matrix_bytes += assembly.required_bytes
+        labels = _object_array(
+            (candidate["label"] for candidate in selected_factory()),
+            n_selected,
+        )
+        groups = _object_array(
+            (candidate["image_id"] for candidate in selected_factory()),
+            n_selected,
+        )
+        provenance = [_provenance(candidate) for candidate in selected_factory()]
         token_metadata = _materialization_metadata(
-            bucket["candidates"], selected, bucket["layout"], resolved
+            bucket,
+            selected_factory,
+            n_selected,
+            metadata_stager,
+            output_name,
+            bucket["layout"],
+            resolved,
         )
         benchmark_dataset = BenchmarkDataset.from_embeddings(
             embeddings,
@@ -105,40 +263,83 @@ def materialize_segmentation_outputs(
                 {
                     "output_name": output_name,
                     "output_recipe": bucket["recipe"],
+                    "source_extractor_recipe": extractor_recipe,
+                    "annotation_transform": _callable_name(bucket["annotation_transform"]),
                     "config": resolved,
-                    "provenance": [_provenance(candidate) for candidate in selected],
+                    "provenance": provenance,
                 },
             ),
             metadata={
                 "segmentation": token_metadata,
                 "spatial_output": output_name,
                 "source_dataset_identity_key": dataset.identity_key(),
+                "source_extractor_recipe": extractor_recipe,
             },
         ).with_groups(groups, name="image_id")
-        materializations.append(
-            SegmentationMaterialization(
-                name=output_name,
-                dataset=benchmark_dataset,
-                provenance=[_provenance(candidate) for candidate in selected],
-                metadata={
-                    **token_metadata,
-                    "output_recipe": bucket["recipe"],
-                    "output_metadata": bucket["metadata"],
+        materialization = SegmentationMaterialization(
+            name=output_name,
+            dataset=benchmark_dataset,
+            provenance=provenance,
+            metadata={
+                **token_metadata,
+                "output_recipe": bucket["recipe"],
+                "output_metadata": bucket["metadata"],
+                "source_extractor_recipe": extractor_recipe,
+                "cache_safe": extractor_recipe.get("cache_safe") is not False,
+                "memory": {
+                    **_assembly_metadata(assembly),
+                    "metadata_staging_strategy": metadata_stager.strategy,
+                    "final_metadata_required_bytes": final_metadata_bytes,
+                    "cumulative_final_metadata_required_bytes": (retained_final_metadata_bytes),
+                    "cumulative_retained_output_bytes": (
+                        stager.memory_config.model_memory_bytes
+                        + stager.memory_config.raw_batch_memory_bytes
+                        + retained_final_metadata_bytes
+                        + retained_output_matrix_bytes
+                    ),
+                    "fixed_model_and_batch_bytes": (
+                        stager.memory_config.model_memory_bytes
+                        + stager.memory_config.raw_batch_memory_bytes
+                    ),
+                    "final_metadata_strategy": "resident",
                 },
-            )
+            },
         )
-    return materializations
+        metadata_stager.discard_output(output_name)
+        yield materialization
+        del (
+            assembly,
+            benchmark_dataset,
+            bucket,
+            embeddings,
+            final_metadata_bytes,
+            groups,
+            labels,
+            materialization,
+            provenance,
+            selected_factory,
+            token_metadata,
+        )
+
+
+def _assembly_metadata(assembly: MatrixAssembly) -> Dict[str, Any]:
+    return {
+        "strategy": assembly.strategy,
+        "staging_strategy": assembly.staging_strategy,
+        "required_bytes": assembly.required_bytes,
+        "budget_bytes": assembly.budget_bytes,
+    }
 
 
 def _align_image(
     features: Any,
     layout: SpatialLayout,
     annotation: SegmentationAnnotation,
-    image_index: int,
+    image_index: Any,
     output_name: str,
     config: SegmentationConfig,
     annotation_transform: Optional[Any] = None,
-) -> List[Dict[str, Any]]:
+) -> Iterator[Dict[str, Any]]:
     grid = _feature_grid(features, layout)
     if annotation_transform is not None:
         transformed = annotation_transform(annotation)
@@ -153,7 +354,6 @@ def _align_image(
         ).normalized()
     mask = np.asarray(annotation.semantic)
     height, width = mask.shape
-    candidates = []
     for row in range(layout.grid_height):
         y0 = int(np.floor(row * height / layout.grid_height))
         y1 = max(y0 + 1, int(np.floor((row + 1) * height / layout.grid_height)))
@@ -200,24 +400,21 @@ def _align_image(
                     if eligible:
                         best_id_index = max(eligible, key=lambda index: int(id_counts[index]))
                         instance_id = ids[best_id_index]
-            candidates.append(
-                {
-                    "embedding": np.asarray(grid[row, column], dtype=float).reshape(1, -1),
-                    "label": resolved_label,
-                    "image_id": image_index,
-                    "row": row,
-                    "column": column,
-                    "bounds": [y0, x0, y1, x1],
-                    "coverage": best,
-                    "second_coverage": second,
-                    "instance_id": instance_id,
-                    "is_background": is_background,
-                    "is_thing": is_thing,
-                    "output_name": output_name,
-                    "drop_reason": reason,
-                }
-            )
-    return candidates
+            yield {
+                "embedding": np.asarray(grid[row, column], dtype=float).reshape(1, -1),
+                "label": resolved_label,
+                "image_id": image_index,
+                "row": row,
+                "column": column,
+                "bounds": [y0, x0, y1, x1],
+                "coverage": best,
+                "second_coverage": second,
+                "instance_id": instance_id,
+                "is_background": is_background,
+                "is_thing": is_thing,
+                "output_name": output_name,
+                "drop_reason": reason,
+            }
 
 
 def _feature_grid(features: Any, layout: SpatialLayout) -> np.ndarray:
@@ -246,90 +443,142 @@ def _feature_grid(features: Any, layout: SpatialLayout) -> np.ndarray:
 
 
 def _sample_candidates(
-    candidates: Iterable[Dict[str, Any]],
+    stager: IncrementalMetadataStager,
+    output_name: str,
     config: SegmentationConfig,
-) -> List[Dict[str, Any]]:
-    valid = [candidate for candidate in candidates if candidate["drop_reason"] is None]
-    valid.sort(key=lambda candidate: _priority(candidate, config.random_state))
-    selected = []
-    class_counts: Dict[Any, int] = {}
-    instance_counts: Dict[Any, int] = {}
-    class_instances: Dict[Any, set] = {}
-    for candidate in valid:
+) -> int:
+    selected = 0
+    for reference, candidate in stager.iter_rows(output_name, order="priority"):
         label = candidate["label"]
-        instance_key = (candidate["image_id"], label, candidate["instance_id"])
+        label_key = semantic_label_key(label)
+        instance_key = hash_json_exact(
+            {
+                "image_id": candidate["image_id"],
+                "label": label,
+                "instance_id": candidate["instance_id"],
+            }
+        )
         if candidate["is_background"] and config.max_background_tokens is not None:
-            if class_counts.get(label, 0) >= config.max_background_tokens:
+            if (
+                stager.counter_value(output_name, "class_counts", label_key)
+                >= config.max_background_tokens
+            ):
                 continue
         if config.max_tokens_per_class is not None:
-            if class_counts.get(label, 0) >= config.max_tokens_per_class:
+            if (
+                stager.counter_value(output_name, "class_counts", label_key)
+                >= config.max_tokens_per_class
+            ):
                 continue
         if candidate["instance_id"] is not None:
-            instances = class_instances.setdefault(label, set())
-            if instance_key not in instances and config.max_instances_per_class is not None:
-                if len(instances) >= config.max_instances_per_class:
+            known_instance = stager.has_member(
+                output_name,
+                "class_instances",
+                label_key,
+                instance_key,
+            )
+            if not known_instance and config.max_instances_per_class is not None:
+                if (
+                    stager.member_count(output_name, "class_instances", label_key)
+                    >= config.max_instances_per_class
+                ):
                     continue
             if config.max_tokens_per_instance is not None:
-                if instance_counts.get(instance_key, 0) >= config.max_tokens_per_instance:
+                if (
+                    stager.counter_value(output_name, "instance_counts", instance_key)
+                    >= config.max_tokens_per_instance
+                ):
                     continue
-            instances.add(instance_key)
-            instance_counts[instance_key] = instance_counts.get(instance_key, 0) + 1
-        selected.append(candidate)
-        class_counts[label] = class_counts.get(label, 0) + 1
-    return sorted(
-        selected,
-        key=lambda candidate: (
-            candidate["image_id"],
-            candidate["row"],
-            candidate["column"],
-        ),
-    )
+            stager.add_member(
+                output_name,
+                "class_instances",
+                label_key,
+                instance_key,
+            )
+            stager.increment_counter(
+                output_name,
+                "instance_counts",
+                instance_key,
+            )
+            stager.add_member(
+                output_name,
+                "selected_instances",
+                "",
+                instance_key,
+            )
+        stager.mark_selected(reference, output_name)
+        stager.increment_counter(output_name, "class_counts", label_key)
+        stager.add_member(
+            output_name,
+            "selected_images",
+            "",
+            semantic_label_key(candidate["image_id"]),
+        )
+        if candidate["is_background"]:
+            stager.increment_counter(output_name, "summary", "background_tokens")
+        selected += 1
+    return selected
 
 
 def _priority(candidate: Dict[str, Any], seed: int) -> int:
-    import hashlib
-
-    payload = (
-        f"{seed}|{candidate['image_id']}|{candidate['output_name']}|"
-        f"{candidate['row']}|{candidate['column']}"
+    return int(
+        hash_json_exact(
+            {
+                "seed": seed,
+                "image_id": candidate["image_id"],
+                "output_name": candidate["output_name"],
+                "row": candidate["row"],
+                "column": candidate["column"],
+            }
+        ),
+        16,
     )
-    return int(hashlib.sha256(payload.encode("utf-8")).hexdigest(), 16)
 
 
 def _materialization_metadata(
-    candidates: List[Dict[str, Any]],
-    selected: List[Dict[str, Any]],
+    bucket: Dict[str, Any],
+    selected_factory: Callable[[], Iterator[Dict[str, Any]]],
+    n_selected: int,
+    stager: IncrementalMetadataStager,
+    output_name: str,
     layout: SpatialLayout,
     config: SegmentationConfig,
 ) -> Dict[str, Any]:
-    ignored: Dict[str, int] = {}
-    for candidate in candidates:
-        if candidate["drop_reason"]:
-            reason = candidate["drop_reason"]
-            ignored[reason] = ignored.get(reason, 0) + 1
     return {
-        "candidate_tokens": len(candidates),
-        "retained_tokens": len(selected),
-        "n_images": len({candidate["image_id"] for candidate in selected}),
-        "n_instances": len(
-            {
-                (candidate["image_id"], candidate["label"], candidate["instance_id"])
-                for candidate in selected
-                if candidate["instance_id"] is not None
-            }
+        "candidate_tokens": bucket["candidate_tokens"],
+        "retained_tokens": n_selected,
+        "n_images": stager.member_count(output_name, "selected_images"),
+        "n_instances": stager.member_count(output_name, "selected_instances"),
+        "background_tokens": stager.counter_value(
+            output_name,
+            "summary",
+            "background_tokens",
         ),
-        "background_tokens": sum(candidate["is_background"] for candidate in selected),
-        "background_labels": list(
-            {candidate["label"] for candidate in selected if candidate["is_background"]}
+        "background_labels": _unique_semantic_values(
+            candidate["label"] for candidate in selected_factory() if candidate["is_background"]
         ),
-        "ignored_tokens": ignored,
+        "ignored_tokens": dict(bucket["ignored_tokens"]),
         "layout": asdict(layout),
         "config": asdict(config),
     }
 
 
+def _object_array(values: Iterable[Any], expected: int) -> np.ndarray:
+    result = np.empty(expected, dtype=object)
+    observed = 0
+    for observed, value in enumerate(values, start=1):
+        if observed > expected:  # pragma: no cover - staging invariant
+            raise RuntimeError("Segmentation metadata staging produced extra selected rows.")
+        result[observed - 1] = value
+    if observed != expected:  # pragma: no cover - staging invariant
+        raise RuntimeError("Segmentation metadata staging lost selected rows.")
+    return result
+
+
 def _provenance(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: value for key, value in candidate.items() if key != "embedding"}
+    return {
+        key: value for key, value in candidate.items() if key not in {"embedding", "embedding_ref"}
+    }
 
 
 def _values_equal(left: Any, right: Any) -> bool:
@@ -337,3 +586,77 @@ def _values_equal(left: Any, right: Any) -> bool:
     if isinstance(result, np.ndarray):
         return bool(np.all(result))
     return bool(result)
+
+
+def _unique_semantic_values(values: Iterable[Any]) -> List[Any]:
+    observed: Dict[str, Any] = {}
+    for value in values:
+        observed.setdefault(semantic_label_key(value), value)
+    return list(observed.values())
+
+
+def _declared_spatial_output_names(extractor: Any) -> List[str]:
+    method = getattr(extractor, "spatial_output_specs", None)
+    if not callable(method):
+        raise ValueError(
+            f"Extractor {getattr(extractor, 'name', '<unknown>')!r} must declare "
+            "spatial_output_specs()."
+        )
+    raw_names = [getattr(spec, "name", None) for spec in list(method())]
+    if not raw_names or any(not isinstance(name, str) or not name.strip() for name in raw_names):
+        raise ValueError("Spatial output specs must use non-empty string names.")
+    names = [name for name in raw_names if isinstance(name, str)]
+    if len(names) != len(set(names)):
+        raise ValueError("Spatial output spec names must be unique.")
+    return names
+
+
+def _validate_output_names(outputs: List[Any], expected: List[str]) -> None:
+    actual = [getattr(output, "name", None) for output in outputs]
+    if any(not isinstance(name, str) or not name for name in actual):
+        raise ValueError("Spatial extractor returned an invalid output name.")
+    if len(actual) != len(set(actual)):
+        raise ValueError("Spatial extractor returned duplicate output names.")
+    if len(actual) != len(expected) or set(actual) != set(expected):
+        raise ValueError(
+            f"Spatial extractor returned outputs {actual!r}; expected {expected!r} on every "
+            "batch."
+        )
+
+
+def _spatial_output_contract(output: Any) -> Dict[str, Any]:
+    return {
+        "layout": asdict(output.layout),
+        "recipe": hash_json_exact(dict(output.recipe)),
+        "metadata": hash_json_exact(dict(output.metadata)),
+        "annotation_transform": _callable_name(output.annotation_transform),
+    }
+
+
+def _validate_spatial_embedding_contract(
+    bucket: Dict[str, Any],
+    features: Any,
+    *,
+    output_name: str,
+    image_id: Any,
+) -> None:
+    grid = _feature_grid(features, bucket["layout"])
+    contract = {"embedding_dim": int(grid.shape[-1]), "dtype": str(grid.dtype)}
+    expected = bucket["embedding_contract"]
+    if expected is None:
+        bucket["embedding_contract"] = contract
+    elif contract != expected:
+        raise ValueError(
+            f"Spatial output {output_name!r} changed embedding contract for image "
+            f"{image_id!r}; expected {expected}, received {contract}."
+        )
+
+
+def _callable_name(function: Any) -> Optional[str]:
+    if function is None:
+        return None
+    module = getattr(function, "__module__", None)
+    qualname = getattr(function, "__qualname__", None)
+    if not isinstance(module, str) or not isinstance(qualname, str):
+        raise ValueError("Annotation transforms must expose a stable module and qualified name.")
+    return f"{module}:{qualname}"

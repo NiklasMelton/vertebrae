@@ -1,7 +1,11 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 from scipy import sparse
 
+import vertebrae.structured as structured_module
+import vertebrae.utils.memory as memory_module
 from vertebrae import (
     Benchmark,
     BenchmarkDataset,
@@ -12,17 +16,23 @@ from vertebrae import (
     TargetView,
     UnitAnnotation,
     drop_special_rows,
+    select_frame_rows,
 )
 from vertebrae.cache import LocalArtifactStore
 from vertebrae.config import (
     CacheConfig,
+    MemoryConfig,
     ResourceProfilingConfig,
     SeparatixConfig,
     StabilityConfig,
 )
 from vertebrae.execution import materialize_structured_artifacts
 from vertebrae.extractors import StructuredOutputSpec
-from vertebrae.structured import materialize_structured_outputs
+from vertebrae.structured import (
+    iter_materialize_structured_outputs,
+    materialize_structured_outputs,
+)
+from vertebrae.utils.semantic_labels import semantic_label_key
 
 
 def _annotations():
@@ -91,6 +101,102 @@ def _two_row_extractor(transform_fn):
     )
 
 
+def _large_structured_case(n_units=96):
+    parent_values = np.array(["large-a", "large-b", "large-c", "large-d"], dtype=object)
+    annotations = []
+    matrices = {}
+    for parent_index, parent_value in enumerate(parent_values.tolist()):
+        labels = ["x" if index % 2 == 0 else "y" for index in range(n_units)]
+        annotations.append(
+            UnitAnnotation(
+                labels=labels,
+                unit_ids=[f"{parent_value}:{index}" for index in range(n_units)],
+                positions=list(range(n_units)),
+                spans=[[index, index + 1] for index in range(n_units)],
+                provenance=[
+                    {"parent": parent_value, "source_unit": index} for index in range(n_units)
+                ],
+            )
+        )
+        matrices[parent_value] = (
+            np.arange(n_units * 3, dtype=float).reshape(n_units, 3) + parent_index * 10_000
+        )
+    dataset = BenchmarkDataset.from_arrays(
+        parent_values,
+        ["left", "left", "right", "right"],
+        modality="text",
+        identity=DatasetIdentity.ephemeral(),
+    ).with_unit_annotations(annotations, unit_type="token")
+    extractor = CallableStructuredExtractor(
+        "large-structured",
+        transform_fn=lambda batch: [matrices[str(value)] for value in batch],
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+        streaming_safe=True,
+    )
+    return dataset, extractor
+
+
+def test_structured_materialization_honors_non_streaming_extractors():
+    calls = []
+    values = [np.eye(2, dtype=float) for _ in range(4)]
+
+    def transform(batch):
+        calls.append(len(batch))
+        if len(batch) != 4:
+            raise AssertionError("full parent context is required")
+        return values
+
+    extractor = CallableStructuredExtractor(
+        "contextual",
+        transform_fn=transform,
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+        streaming_safe=False,
+    )
+
+    materialized = materialize_structured_outputs(_dataset(), extractor, batch_size=1)
+
+    assert len(materialized) == 1
+    assert calls == [4]
+
+
+def test_structured_materialization_identity_includes_source_extractor_recipe():
+    first = CallableStructuredExtractor(
+        "same-name",
+        transform_fn=lambda batch: [np.eye(2, dtype=float) for _ in batch],
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+        recipe_data={"revision": "first"},
+    )
+    second = CallableStructuredExtractor(
+        "same-name",
+        transform_fn=lambda batch: [np.eye(2, dtype=float) for _ in batch],
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+        recipe_data={"revision": "second"},
+    )
+
+    first_dataset = materialize_structured_outputs(_dataset(), first)[0].dataset
+    second_dataset = materialize_structured_outputs(_dataset(), second)[0].dataset
+
+    assert first_dataset.identity_key() != second_dataset.identity_key()
+
+
+def test_structured_materialization_preserves_source_parent_ids_after_reordering():
+    reordered = _dataset().subset([3, 1, 2, 0])
+
+    materialized = materialize_structured_outputs(reordered, _extractor())[0]
+
+    assert materialized.dataset.groups().tolist() == [3, 3, 1, 1, 2, 2, 0, 0]
+    assert [row["parent_position"] for row in materialized.provenance] == [
+        0,
+        0,
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+    ]
+
+
 def test_dataset_with_unit_annotations_survives_subset_and_summary():
     dataset = BenchmarkDataset.from_arrays(
         np.array(["a", "b", "c", "d"], dtype=object),
@@ -124,6 +230,332 @@ def test_structured_materialization_flattens_units_and_target_views():
         "right",
         "right",
     ]
+
+
+def test_structured_materialization_spills_dense_final_assembly_under_tiny_budget():
+    materialized = materialize_structured_outputs(
+        _dataset(),
+        _extractor(),
+        memory_config=MemoryConfig(max_memory_bytes=100_000, allow_disk_spill=True),
+    )[0]
+
+    assert materialized.dataset.X.shape == (8, 2)
+    assert materialized.metadata["memory"]["strategy"] == "disk_spill"
+    assert materialized.metadata["memory"]["required_bytes"] > 1
+    assert materialized.metadata["memory"]["final_metadata_required_bytes"] <= 100_000
+    assert materialized.metadata["memory"]["target_view_metadata_required_bytes"] > 0
+    assert np.all(np.isfinite(materialized.dataset.X))
+
+
+def test_structured_final_metadata_is_admitted_even_when_spill_is_enabled():
+    with pytest.raises(ValueError, match="Structured final row metadata.*remain resident"):
+        materialize_structured_outputs(
+            _dataset(),
+            _extractor(),
+            memory_config=MemoryConfig(max_memory_bytes=1, allow_disk_spill=True),
+        )
+
+    with pytest.raises(ValueError, match="fixed model/raw-batch memory"):
+        materialize_structured_outputs(
+            _dataset(),
+            _extractor(),
+            memory_config=MemoryConfig(
+                max_memory_bytes=100_000,
+                model_memory_bytes=99_000,
+                allow_disk_spill=True,
+            ),
+        )
+
+
+def test_structured_target_views_are_admitted_before_materialization():
+    dataset = _dataset().with_target_views(
+        [
+            TargetView(
+                name=f"view-{index}",
+                targets=["left", "left", "right", "right"],
+            )
+            for index in range(200)
+        ]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Structured final row metadata.*estimated cumulative.*memory budget",
+    ):
+        materialize_structured_outputs(
+            dataset,
+            _extractor(),
+            memory_config=MemoryConfig(
+                max_memory_bytes=100_000,
+                allow_disk_spill=True,
+            ),
+        )
+
+
+def test_structured_multi_output_accumulates_only_retained_target_view_bytes():
+    dataset = _dataset().with_target_views(
+        [
+            TargetView(
+                name=f"view-{index}",
+                targets=["left", "left", "right", "right"],
+            )
+            for index in range(1000)
+        ]
+    )
+    values = [np.eye(2, dtype=float) for _ in range(4)]
+    extractor = CallableStructuredExtractor(
+        "target-view-multi-output",
+        transform_fn=lambda batch: {
+            "early": values[: len(batch)],
+            "late": [value * 2 for value in values[: len(batch)]],
+        },
+        output_specs=[
+            StructuredOutputSpec(name="early", unit_type="token"),
+            StructuredOutputSpec(name="late", unit_type="token"),
+        ],
+    )
+
+    materialized = materialize_structured_outputs(
+        dataset,
+        extractor,
+        memory_config=MemoryConfig(
+            max_memory_bytes=9_000_000,
+            allow_disk_spill=True,
+        ),
+    )
+
+    assert [item.name for item in materialized] == ["early", "late"]
+    assert (
+        materialized[1].metadata["memory"]["cumulative_final_metadata_required_bytes"] < 9_000_000
+    )
+
+
+def test_structured_final_metadata_peak_is_admitted_without_spill():
+    with pytest.raises(ValueError, match="Structured final row metadata.*memory budget"):
+        materialize_structured_outputs(
+            _dataset(),
+            _extractor(),
+            memory_config=MemoryConfig(
+                max_memory_bytes=100_000,
+                allow_disk_spill=False,
+            ),
+        )
+
+
+def test_structured_materialization_rejects_over_budget_assembly_without_spill():
+    with pytest.raises(ValueError, match="allow_disk_spill"):
+        materialize_structured_outputs(
+            _dataset(),
+            _extractor(),
+            memory_config=MemoryConfig(max_memory_bytes=1, allow_disk_spill=False),
+        )
+
+
+def test_structured_metadata_spill_preserves_many_rows_and_provenance(
+    monkeypatch,
+):
+    dataset, extractor = _large_structured_case()
+    baseline = materialize_structured_outputs(
+        dataset,
+        extractor,
+        batch_size=1,
+        memory_config=MemoryConfig(
+            max_memory_bytes=50_000_000,
+            allow_disk_spill=False,
+        ),
+    )[0]
+    original_append = memory_module.IncrementalMetadataStager.append
+    original_dense_assembly = memory_module._assemble_staged_dense_entries
+    observed_disk_appends = 0
+    observed_streaming_assemblies = 0
+
+    def append_and_assert_bounded(self, *args, **kwargs):
+        nonlocal observed_disk_appends
+        reference = original_append(self, *args, **kwargs)
+        if self.strategy == "disk":
+            observed_disk_appends += 1
+            assert self.resident_bytes == 0
+            assert not self._entries
+            assert not self.matrix_stager._entries
+            assert not self.matrix_stager._tokens_by_output
+        return reference
+
+    def assemble_from_stream(stage, entries, **kwargs):
+        nonlocal observed_streaming_assemblies
+        observed_streaming_assemblies += 1
+        assert not isinstance(entries, (list, tuple))
+        return original_dense_assembly(stage, entries, **kwargs)
+
+    monkeypatch.setattr(
+        memory_module.IncrementalMetadataStager,
+        "append",
+        append_and_assert_bounded,
+    )
+    monkeypatch.setattr(
+        memory_module,
+        "_assemble_staged_dense_entries",
+        assemble_from_stream,
+    )
+    spilled = materialize_structured_outputs(
+        dataset,
+        extractor,
+        batch_size=1,
+        memory_config=MemoryConfig(max_memory_bytes=4_000_000, allow_disk_spill=True),
+    )[0]
+
+    assert observed_disk_appends == 4 * 96
+    assert observed_streaming_assemblies == 1
+    assert np.array_equal(spilled.dataset.X, baseline.dataset.X)
+    assert np.array_equal(spilled.dataset.y, baseline.dataset.y)
+    assert spilled.provenance == baseline.provenance
+    assert spilled.dataset.metadata["unit_ids"] == baseline.dataset.metadata["unit_ids"]
+    assert spilled.dataset.metadata["unit_spans"] == baseline.dataset.metadata["unit_spans"]
+    assert (
+        spilled.dataset.metadata["unit_provenance"] == baseline.dataset.metadata["unit_provenance"]
+    )
+    assert spilled.dataset.identity_key() == baseline.dataset.identity_key()
+    assert spilled.metadata["memory"]["metadata_staging_strategy"] == "disk"
+    assert baseline.metadata["memory"]["metadata_staging_strategy"] == "memory"
+
+
+def test_structured_metadata_fails_before_unbounded_retention_without_spill():
+    dataset, extractor = _large_structured_case()
+
+    with pytest.raises(ValueError, match="Structured candidate metadata.*allow_disk_spill"):
+        materialize_structured_outputs(
+            dataset,
+            extractor,
+            batch_size=1,
+            memory_config=MemoryConfig(
+                max_memory_bytes=40_000,
+                allow_disk_spill=False,
+            ),
+        )
+
+
+def test_sparse_structured_materialization_spills_without_densifying(monkeypatch):
+    calls = []
+
+    def transform(batch):
+        calls.append(len(batch))
+        return {
+            "early": [sparse.coo_matrix(np.eye(2)) for _ in range(len(batch))],
+            "late": [sparse.csc_matrix(np.eye(2) * 2) for _ in range(len(batch))],
+        }
+
+    extractor = CallableStructuredExtractor(
+        "sparse-multi-output",
+        transform_fn=transform,
+        output_specs=[
+            StructuredOutputSpec(name="early", unit_type="token"),
+            StructuredOutputSpec(name="late", unit_type="token"),
+        ],
+        streaming_safe=True,
+    )
+    original_append = memory_module.IncrementalMatrixStager.append
+
+    def append_and_assert_staged(self, output_name, row):
+        reference = original_append(self, output_name, row)
+        assert not self._entries
+        assert not self._tokens_by_output
+        return reference
+
+    def reject_densification(*_args, **_kwargs):
+        raise AssertionError("sparse materialization must not densify")
+
+    monkeypatch.setattr(memory_module.IncrementalMatrixStager, "append", append_and_assert_staged)
+    for sparse_type in (sparse.coo_matrix, sparse.csc_matrix, sparse.csr_matrix):
+        monkeypatch.setattr(sparse_type, "toarray", reject_densification)
+
+    materialized = materialize_structured_outputs(
+        _dataset(),
+        extractor,
+        batch_size=1,
+        memory_config=MemoryConfig(max_memory_bytes=160_000, allow_disk_spill=True),
+    )
+
+    assert calls == [1, 1, 1, 1]
+    assert [output.name for output in materialized] == ["early", "late"]
+    assert all(sparse.issparse(output.dataset.X) for output in materialized)
+    assert all(isinstance(output.dataset.X.data, np.memmap) for output in materialized)
+    assert all(output.metadata["memory"]["strategy"] == "disk_spill" for output in materialized)
+    assert all(output.metadata["memory"]["staging_strategy"] == "disk" for output in materialized)
+    assert (materialized[1].dataset.X != materialized[0].dataset.X * 2).nnz == 0
+
+    with pytest.raises(
+        ValueError,
+        match="Structured final row metadata.*estimated cumulative.*memory budget",
+    ):
+        materialize_structured_outputs(
+            _dataset(),
+            extractor,
+            batch_size=1,
+            memory_config=MemoryConfig(
+                max_memory_bytes=100_000,
+                allow_disk_spill=True,
+            ),
+        )
+
+
+def test_structured_staging_cleanup_runs_when_output_iteration_closes_early(
+    tmp_path,
+    monkeypatch,
+):
+    values = [np.eye(2, dtype=float) for _ in range(4)]
+    extractor = CallableStructuredExtractor(
+        "cleanup-multi-output",
+        transform_fn=lambda batch: {
+            "early": values[: len(batch)],
+            "late": [value + 1 for value in values[: len(batch)]],
+        },
+        output_specs=[
+            StructuredOutputSpec(name="early", unit_type="token"),
+            StructuredOutputSpec(name="late", unit_type="token"),
+        ],
+    )
+    original_temporary_directory = memory_module.tempfile.TemporaryDirectory
+    created = []
+
+    def tracked_temporary_directory(*args, **kwargs):
+        kwargs["dir"] = tmp_path
+        directory = original_temporary_directory(*args, **kwargs)
+        created.append(Path(directory.name))
+        return directory
+
+    monkeypatch.setattr(
+        memory_module.tempfile,
+        "TemporaryDirectory",
+        tracked_temporary_directory,
+    )
+    materializations = iter_materialize_structured_outputs(
+        _dataset(),
+        extractor,
+        batch_size=1,
+        memory_config=MemoryConfig(max_memory_bytes=100_000, allow_disk_spill=True),
+    )
+
+    first = next(materializations)
+    assert first.name == "early"
+    assert created and created[0].exists()
+
+    materializations.close()
+
+    assert created
+    assert all(not path.exists() for path in created)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: drop_special_rows(leading=True),
+        lambda: drop_special_rows(trailing=1.5),
+        lambda: select_frame_rows(every_n=True),
+        lambda: select_frame_rows(every_n=2, start=0.5),
+    ],
+)
+def test_structured_alignment_helpers_require_exact_integer_options(factory):
+    with pytest.raises(TypeError, match="non-boolean integer"):
+        factory()
 
 
 def test_structured_benchmark_reuses_standard_scoring_pipeline(tmp_path, fake_overlapindex):
@@ -161,6 +593,25 @@ def test_structured_benchmark_reuses_standard_scoring_pipeline(tmp_path, fake_ov
     assert "drop_special_rows (drop_special_rows)" in report
 
 
+def test_structured_benchmark_slices_provenance_with_memory_subsampling(
+    tmp_path,
+    fake_overlapindex,
+):
+    result = Benchmark(
+        dataset=_dataset(),
+        extractors=[_extractor()],
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        memory_config=MemoryConfig(subsample_rate=0.5),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+    ).run()
+
+    metadata = result.extractor_results[0].embedding_metadata
+    assert metadata["n_samples"] == 4
+    assert metadata["provenance_rows"] == 4
+    assert metadata["cumulative_subsample_rate"] == pytest.approx(0.5)
+
+
 def test_structured_benchmark_dispatches_as_an_extractor_job(tmp_path, fake_overlapindex):
     result = Benchmark(
         dataset=_dataset(),
@@ -188,11 +639,99 @@ def test_structured_artifacts_have_independent_output_boundaries(tmp_path):
     assert output["artifact_type"] == "structured_embedding"
     assert store.get_array(output["output_key"]).shape == (8, 2)
     assert store.get_labels(output["labels_key"]).shape == (8,)
-    assert store.get_labels(output["groups_key"]).tolist() == [0, 0, 1, 1, 2, 2, 3, 3]
+    assert store.get_labels(output["groups_key"]).tolist() == [
+        semantic_label_key(value) for value in [0, 0, 1, 1, 2, 2, 3, 3]
+    ]
     assert len(store.get_json(output["provenance_key"])["rows"]) == 8
     assert output["task_family"] == "sequence"
     assert output["alignment_mode"] == "strict"
     assert output["alignment_recipe"] is None
+
+
+def test_structured_artifact_identity_includes_aligner_recipe_and_safety(tmp_path):
+    store = LocalArtifactStore(tmp_path)
+
+    strict = materialize_structured_artifacts(_dataset(), _extractor(), store)
+    aligned = materialize_structured_artifacts(
+        _dataset(),
+        _extractor(),
+        store,
+        aligners={"tokens": drop_special_rows()},
+    )
+    assert strict["output_key"] != aligned["output_key"]
+    assert aligned["aligner_recipes"]["tokens"]["cache_safe"] is True
+
+
+def test_structured_artifacts_pass_memory_config_to_spill_assembly(tmp_path):
+    store = LocalArtifactStore(tmp_path)
+
+    bundle = materialize_structured_artifacts(
+        _dataset(),
+        _extractor(),
+        store,
+        memory_config=MemoryConfig(max_memory_bytes=100_000, allow_disk_spill=True),
+    )
+
+    output = bundle["outputs"][0]
+    assert output["structured"]["memory"]["strategy"] == "disk_spill"
+    assert store.get_array(output["output_key"]).shape == (8, 2)
+
+
+def test_structured_artifacts_persist_sparse_spilled_outputs_without_densifying(
+    tmp_path,
+    monkeypatch,
+):
+    extractor = CallableStructuredExtractor(
+        "sparse-artifacts",
+        transform_fn=lambda batch: {
+            "early": [sparse.csr_matrix(np.eye(2)) for _ in range(len(batch))],
+            "late": [sparse.csr_matrix(np.eye(2) * 3) for _ in range(len(batch))],
+        },
+        output_specs=[
+            StructuredOutputSpec(name="early", unit_type="token"),
+            StructuredOutputSpec(name="late", unit_type="token"),
+        ],
+        streaming_safe=True,
+    )
+
+    def reject_densification(*_args, **_kwargs):
+        raise AssertionError("sparse artifact persistence must not densify")
+
+    monkeypatch.setattr(sparse.csr_matrix, "toarray", reject_densification)
+    store = LocalArtifactStore(tmp_path)
+
+    bundle = materialize_structured_artifacts(
+        _dataset(),
+        extractor,
+        store,
+        batch_size=1,
+        memory_config=MemoryConfig(max_memory_bytes=160_000, allow_disk_spill=True),
+    )
+
+    assert [output["output_name"] for output in bundle["outputs"]] == ["early", "late"]
+    stored = [store.get_array(output["output_key"]) for output in bundle["outputs"]]
+    assert all(sparse.issparse(matrix) for matrix in stored)
+    assert all(output["sparse"] is True for output in bundle["outputs"])
+    assert all(
+        output["structured"]["memory"]["strategy"] == "disk_spill" for output in bundle["outputs"]
+    )
+    assert (stored[1] != stored[0] * 3).nnz == 0
+
+
+def test_structured_artifacts_validate_row_alignment_before_writes(tmp_path, monkeypatch):
+    materialization = materialize_structured_outputs(_dataset(), _extractor())[0]
+    materialization.provenance = materialization.provenance[:-1]
+    monkeypatch.setattr(
+        structured_module,
+        "iter_materialize_structured_outputs",
+        lambda *args, **kwargs: iter([materialization]),
+    )
+    store = LocalArtifactStore(tmp_path)
+
+    with pytest.raises(ValueError, match="provenance rows"):
+        materialize_structured_artifacts(_dataset(), _extractor(), store)
+
+    assert not list(tmp_path.rglob("array-manifest.json"))
 
 
 def test_structured_artifacts_keep_formerly_colliding_names_independent(tmp_path):

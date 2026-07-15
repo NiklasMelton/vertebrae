@@ -4,6 +4,11 @@ from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -33,8 +38,9 @@ class CallableExtractor:
         allow_sparse: bool = True,
         streaming_safe: bool = False,
         resource_profile_adapter: Optional[Any] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
+        self.name = validate_extractor_name(name)
         self.transform_fn = transform_fn
         self.fit_fn = fit_fn
         self.modality = modality
@@ -43,6 +49,7 @@ class CallableExtractor:
         self.allow_sparse = allow_sparse
         self.streaming_safe = streaming_safe
         self._resource_profile_adapter = resource_profile_adapter
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "CallableExtractor":
         """Fit the callable extractor when a fit function is supplied.
@@ -96,7 +103,7 @@ class CallableExtractor:
             JSON-compatible recipe dictionary.
         """
 
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -106,6 +113,14 @@ class CallableExtractor:
             "allow_sparse": self.allow_sparse,
             "streaming_safe": self.streaming_safe,
         }
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(("transform_fn", self.transform_fn), ("fit_fn", self.fit_fn)),
+                state_required=self.fit_fn is not None,
+            )
+        )
+        return recipe
 
     def get_resource_profile_adapter(self) -> Any:
         """Return the optional user-supplied resource profiling adapter."""
@@ -114,4 +129,7 @@ class CallableExtractor:
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:
-    return f"{getattr(fn, '__module__', '<unknown>')}.{getattr(fn, '__qualname__', repr(fn))}"
+    value_type = type(fn)
+    module = getattr(fn, "__module__", value_type.__module__)
+    qualname = getattr(fn, "__qualname__", value_type.__qualname__)
+    return f"{module}.{qualname}"

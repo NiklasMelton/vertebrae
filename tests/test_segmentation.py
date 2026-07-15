@@ -3,6 +3,7 @@ from dataclasses import asdict
 import numpy as np
 import pytest
 
+import vertebrae.utils.memory as memory_module
 from vertebrae import (
     Benchmark,
     BenchmarkDataset,
@@ -11,6 +12,7 @@ from vertebrae import (
     DatasetIdentity,
     ExecutionConfig,
     LocalBackend,
+    MemoryConfig,
     ResourceProfilingConfig,
     SegmentationConfig,
     SegmentationDataset,
@@ -23,6 +25,7 @@ from vertebrae.cache import LocalArtifactStore
 from vertebrae.cache.fingerprint import hash_json_exact
 from vertebrae.execution import materialize_segmentation_artifacts
 from vertebrae.segmentation import materialize_segmentation_outputs
+from vertebrae.utils.labels import semantic_label_key
 
 
 def _dataset():
@@ -59,6 +62,101 @@ def _extractor():
     )
 
 
+def _large_segmentation_case(size=24):
+    row, column = np.indices((size, size))
+    semantic = np.where((row + column) % 2 == 0, 1, 2)
+    instances = row // 4 + 1
+    features = np.stack(
+        [row.astype(float), column.astype(float), semantic.astype(float)],
+        axis=-1,
+    )[None, ...]
+    dataset = SegmentationDataset.from_arrays(
+        np.zeros((1, size, size, 3), dtype=np.uint8),
+        semantic[None, ...],
+        instance_masks=instances[None, ...],
+        class_metadata={
+            1: {"is_thing": True},
+            2: {"is_thing": True},
+        },
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = CallableSpatialExtractor(
+        "large-spatial",
+        transform_fn=lambda batch: features[: len(batch)],
+        output_specs=[
+            SpatialOutputSpec(
+                name="layer",
+                layout=SpatialLayout(grid_height=size, grid_width=size),
+            )
+        ],
+        streaming_safe=True,
+    )
+    config = SegmentationConfig(
+        coverage_threshold=1.0,
+        ambiguity_margin=0.0,
+        max_tokens_per_class=17,
+        max_instances_per_class=3,
+        max_tokens_per_instance=4,
+        ignore_instance_ids=(),
+        random_state=73,
+    )
+    return dataset, extractor, config
+
+
+def test_segmentation_materialization_honors_non_streaming_extractors():
+    calls = []
+    values = np.arange(2 * 2 * 2 * 3, dtype=float).reshape(2, 2, 2, 3)
+
+    def transform(batch):
+        calls.append(len(batch))
+        if len(batch) != 2:
+            raise AssertionError("full image context is required")
+        return values
+
+    extractor = CallableSpatialExtractor(
+        "contextual",
+        transform_fn=transform,
+        output_specs=[SpatialOutputSpec("layer", SpatialLayout(grid_height=2, grid_width=2))],
+        streaming_safe=False,
+    )
+
+    materialized = materialize_segmentation_outputs(
+        _dataset(),
+        extractor,
+        SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            background_mode="include_excluded",
+        ),
+        batch_size=1,
+    )
+
+    assert len(materialized) == 1
+    assert calls == [2]
+
+
+def test_segmentation_materialization_identity_includes_source_extractor_recipe():
+    values = np.arange(2 * 2 * 2 * 3, dtype=float).reshape(2, 2, 2, 3)
+
+    def make_extractor(revision):
+        return CallableSpatialExtractor(
+            "same-name",
+            transform_fn=lambda batch: values[: len(batch)],
+            output_specs=[SpatialOutputSpec("layer", SpatialLayout(grid_height=2, grid_width=2))],
+            recipe_data={"revision": revision},
+        )
+
+    config = SegmentationConfig(
+        coverage_threshold=1.0,
+        ambiguity_margin=0.0,
+        background_mode="include_excluded",
+    )
+    first = materialize_segmentation_outputs(_dataset(), make_extractor("first"), config)[0]
+    second = materialize_segmentation_outputs(_dataset(), make_extractor("second"), config)[0]
+
+    assert first.dataset.identity_key() != second.dataset.identity_key()
+
+
 def test_segmentation_alignment_materializes_grouped_tokens():
     materialized = materialize_segmentation_outputs(
         _dataset(),
@@ -76,6 +174,243 @@ def test_segmentation_alignment_materializes_grouped_tokens():
     assert materialized.metadata["retained_tokens"] == 8
     assert "groups" not in materialized.dataset.summary()["metadata"]
     assert materialized.dataset.summary()["grouping"]["n_groups"] == 2
+
+
+def test_segmentation_materialization_spills_dense_final_assembly_under_tiny_budget():
+    materialized = materialize_segmentation_outputs(
+        _dataset(),
+        _extractor(),
+        SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            background_mode="include_excluded",
+        ),
+        memory_config=MemoryConfig(max_memory_bytes=64_000, allow_disk_spill=True),
+    )[0]
+
+    assert materialized.dataset.X.shape == (8, 3)
+    assert materialized.metadata["memory"]["strategy"] == "disk_spill"
+    assert materialized.metadata["memory"]["required_bytes"] > 1
+    assert materialized.metadata["memory"]["final_metadata_required_bytes"] <= 64_000
+
+
+def test_segmentation_final_metadata_is_admitted_even_when_spill_is_enabled():
+    with pytest.raises(ValueError, match="Segmentation final row metadata.*remain resident"):
+        materialize_segmentation_outputs(
+            _dataset(),
+            _extractor(),
+            SegmentationConfig(
+                coverage_threshold=1.0,
+                ambiguity_margin=0.0,
+                background_mode="include_excluded",
+            ),
+            memory_config=MemoryConfig(max_memory_bytes=1, allow_disk_spill=True),
+        )
+
+    with pytest.raises(ValueError, match="fixed model/raw-batch memory"):
+        materialize_segmentation_outputs(
+            _dataset(),
+            _extractor(),
+            SegmentationConfig(
+                coverage_threshold=1.0,
+                ambiguity_margin=0.0,
+                background_mode="include_excluded",
+            ),
+            memory_config=MemoryConfig(
+                max_memory_bytes=64_000,
+                raw_batch_memory_bytes=63_000,
+                allow_disk_spill=True,
+            ),
+        )
+
+
+def test_segmentation_final_metadata_peak_is_admitted_without_spill():
+    with pytest.raises(ValueError, match="Segmentation final row metadata.*memory budget"):
+        materialize_segmentation_outputs(
+            _dataset(),
+            _extractor(),
+            SegmentationConfig(
+                coverage_threshold=1.0,
+                ambiguity_margin=0.0,
+                background_mode="include_excluded",
+            ),
+            memory_config=MemoryConfig(
+                max_memory_bytes=60_000,
+                allow_disk_spill=False,
+            ),
+        )
+
+
+def test_segmentation_streams_multiple_outputs_to_disk_without_dense_row_accumulation(
+    monkeypatch,
+):
+    calls = []
+    values = np.arange(2 * 2 * 2 * 3, dtype=float).reshape(2, 2, 2, 3)
+
+    def transform(batch):
+        calls.append(len(batch))
+        return {
+            "early": values[: len(batch)],
+            "late": values[: len(batch)] + 100,
+        }
+
+    layout = SpatialLayout(grid_height=2, grid_width=2)
+    extractor = CallableSpatialExtractor(
+        "streaming-multi-output",
+        transform_fn=transform,
+        output_specs=[
+            SpatialOutputSpec(name="early", layout=layout),
+            SpatialOutputSpec(name="late", layout=layout),
+        ],
+        streaming_safe=True,
+    )
+    original_append = memory_module.IncrementalMatrixStager.append
+
+    def append_and_assert_staged(self, output_name, row):
+        reference = original_append(self, output_name, row)
+        assert not self._entries
+        assert not self._tokens_by_output
+        return reference
+
+    def reject_vstack(*_args, **_kwargs):
+        raise AssertionError("disk-staged dense rows must not be accumulated for vstack")
+
+    monkeypatch.setattr(memory_module.IncrementalMatrixStager, "append", append_and_assert_staged)
+    monkeypatch.setattr(memory_module.np, "vstack", reject_vstack)
+
+    materialized = materialize_segmentation_outputs(
+        _dataset(),
+        extractor,
+        SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            background_mode="include_excluded",
+        ),
+        batch_size=1,
+        memory_config=MemoryConfig(max_memory_bytes=100_000, allow_disk_spill=True),
+    )
+
+    assert calls == [1, 1]
+    assert [output.name for output in materialized] == ["early", "late"]
+    assert all(isinstance(output.dataset.X.base, np.memmap) for output in materialized)
+    assert all(output.metadata["memory"]["strategy"] == "disk_spill" for output in materialized)
+    assert all(output.metadata["memory"]["staging_strategy"] == "disk" for output in materialized)
+    assert np.array_equal(materialized[1].dataset.X, materialized[0].dataset.X + 100)
+
+    with pytest.raises(
+        ValueError,
+        match="Segmentation final row metadata.*estimated cumulative.*memory budget",
+    ):
+        materialize_segmentation_outputs(
+            _dataset(),
+            extractor,
+            SegmentationConfig(
+                coverage_threshold=1.0,
+                ambiguity_margin=0.0,
+                background_mode="include_excluded",
+            ),
+            batch_size=1,
+            memory_config=MemoryConfig(
+                max_memory_bytes=64_000,
+                allow_disk_spill=True,
+            ),
+        )
+
+
+def test_segmentation_materialization_rejects_over_budget_assembly_without_spill():
+    with pytest.raises(ValueError, match="allow_disk_spill"):
+        materialize_segmentation_outputs(
+            _dataset(),
+            _extractor(),
+            SegmentationConfig(
+                coverage_threshold=1.0,
+                ambiguity_margin=0.0,
+                background_mode="include_excluded",
+            ),
+            memory_config=MemoryConfig(max_memory_bytes=1, allow_disk_spill=False),
+        )
+
+
+def test_segmentation_metadata_spill_preserves_sampling_and_provenance(monkeypatch):
+    dataset, extractor, config = _large_segmentation_case()
+    baseline = materialize_segmentation_outputs(
+        dataset,
+        extractor,
+        config,
+        batch_size=1,
+        memory_config=MemoryConfig(
+            max_memory_bytes=50_000_000,
+            allow_disk_spill=False,
+        ),
+    )[0]
+    original_append = memory_module.IncrementalMetadataStager.append
+    original_dense_assembly = memory_module._assemble_staged_dense_entries
+    observed_disk_appends = 0
+    observed_streaming_assemblies = 0
+
+    def append_and_assert_bounded(self, *args, **kwargs):
+        nonlocal observed_disk_appends
+        reference = original_append(self, *args, **kwargs)
+        if self.strategy == "disk":
+            observed_disk_appends += 1
+            assert self.resident_bytes == 0
+            assert not self._entries
+            assert not self.matrix_stager._entries
+            assert not self.matrix_stager._tokens_by_output
+        return reference
+
+    def assemble_from_stream(stage, entries, **kwargs):
+        nonlocal observed_streaming_assemblies
+        observed_streaming_assemblies += 1
+        assert not isinstance(entries, (list, tuple))
+        return original_dense_assembly(stage, entries, **kwargs)
+
+    monkeypatch.setattr(
+        memory_module.IncrementalMetadataStager,
+        "append",
+        append_and_assert_bounded,
+    )
+    monkeypatch.setattr(
+        memory_module,
+        "_assemble_staged_dense_entries",
+        assemble_from_stream,
+    )
+    spilled = materialize_segmentation_outputs(
+        dataset,
+        extractor,
+        config,
+        batch_size=1,
+        memory_config=MemoryConfig(max_memory_bytes=200_000, allow_disk_spill=True),
+    )[0]
+
+    assert observed_disk_appends == 24 * 24
+    assert observed_streaming_assemblies == 1
+    assert np.array_equal(spilled.dataset.X, baseline.dataset.X)
+    assert np.array_equal(spilled.dataset.y, baseline.dataset.y)
+    assert spilled.dataset.groups().tolist() == baseline.dataset.groups().tolist()
+    assert spilled.provenance == baseline.provenance
+    assert spilled.dataset.identity_key() == baseline.dataset.identity_key()
+    assert {key: value for key, value in spilled.metadata.items() if key != "memory"} == {
+        key: value for key, value in baseline.metadata.items() if key != "memory"
+    }
+    assert spilled.metadata["memory"]["metadata_staging_strategy"] == "disk"
+    assert baseline.metadata["memory"]["metadata_staging_strategy"] == "memory"
+
+
+def test_segmentation_metadata_fails_before_unbounded_retention_without_spill():
+    dataset, extractor, config = _large_segmentation_case()
+
+    with pytest.raises(ValueError, match="Segmentation candidate metadata.*allow_disk_spill"):
+        materialize_segmentation_outputs(
+            dataset,
+            extractor,
+            config,
+            batch_size=1,
+            memory_config=MemoryConfig(
+                max_memory_bytes=40_000,
+                allow_disk_spill=False,
+            ),
+        )
 
 
 def test_precomputed_segmentation_embeddings_use_image_groups():
@@ -252,8 +587,8 @@ def test_segmentation_benchmark_reuses_standard_scoring_pipeline(
     item = result.extractor_results[0]
     assert item.name == "spatial:layer"
     assert item.embedding_metadata["segmentation"]["retained_tokens"] == 8
-    assert item.overlap.metadata["exclude_classes"] == [0]
-    assert fake_overlapindex.calls[-1]["exclude_classes"] == [0]
+    assert item.overlap.metadata["exclude_classes"] == [semantic_label_key(0)]
+    assert fake_overlapindex.calls[-1]["exclude_classes"] == [semantic_label_key(0)]
     assert result.dataset_summary["n_images"] == 2
     assert item.resource_profile.inference.status == "measured"
     assert item.resource_profile.context["call_types"] == ["transform_spatial"]
@@ -300,8 +635,30 @@ def test_segmentation_artifacts_have_independent_output_boundaries(tmp_path):
     assert output["artifact_type"] == "segmentation_embedding"
     assert store.get_array(output["output_key"]).shape == (8, 3)
     assert store.get_labels(output["labels_key"]).shape == (8,)
-    assert store.get_labels(output["groups_key"]).tolist() == [0, 0, 0, 0, 1, 1, 1, 1]
+    assert store.get_labels(output["groups_key"]).tolist() == [
+        semantic_label_key(value) for value in [0, 0, 0, 0, 1, 1, 1, 1]
+    ]
     assert len(store.get_json(output["provenance_key"])["rows"]) == 8
+
+
+def test_segmentation_artifacts_pass_memory_config_to_spill_assembly(tmp_path):
+    store = LocalArtifactStore(tmp_path)
+
+    bundle = materialize_segmentation_artifacts(
+        _dataset(),
+        _extractor(),
+        store,
+        segmentation_config=SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            background_mode="include_excluded",
+        ),
+        memory_config=MemoryConfig(max_memory_bytes=64_000, allow_disk_spill=True),
+    )
+
+    output = bundle["outputs"][0]
+    assert output["segmentation"]["memory"]["strategy"] == "disk_spill"
+    assert store.get_array(output["output_key"]).shape == (8, 3)
 
 
 def test_segmentation_artifact_keys_and_manifest_include_exact_resolved_config(tmp_path):

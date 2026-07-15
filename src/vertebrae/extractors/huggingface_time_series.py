@@ -1,14 +1,27 @@
 """Optional Hugging Face time-series embedding extractor."""
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    local_model_paths,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
     materialize_structured_parent_matrices,
+    optional_dependency_versions,
     resolve_output_value,
     resolve_structured_output_specs,
+    snapshot_mapping,
     structured_spec_to_recipe,
+    validate_batch_size,
+    validate_bool,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
@@ -46,11 +59,12 @@ class HFTimeSeriesExtractor:
         input_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[List[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        if pooling not in {"mean", "last", "flatten"}:
-            raise ValueError("pooling must be one of: mean, last, flatten.")
-        self.name = name
-        self.model_id = model_id
+        pooling = validate_choice(pooling, "pooling", {"mean", "last", "flatten"})
+        batch_size = validate_batch_size(batch_size)
+        self.name = validate_extractor_name(name)
+        self.model_id = validate_nonblank_string(model_id, "model_id")
         self.pooling = pooling
         self.hidden_layer = hidden_layer
         self._output_specs = _resolve_output_specs(
@@ -60,17 +74,18 @@ class HFTimeSeriesExtractor:
         )
         self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
         self.batch_size = batch_size
-        self.device = device
-        self.revision = revision
-        self.trust_remote_code = trust_remote_code
-        self.input_kwargs = input_kwargs or {}
-        self.model_kwargs = model_kwargs or {}
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.revision = validate_optional_nonblank_string(revision, "revision")
+        self.trust_remote_code = validate_bool(trust_remote_code, "trust_remote_code")
+        self.input_kwargs = snapshot_mapping(input_kwargs, "input_kwargs")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "time_series"
         self.extractor_type = "frozen_pretrained"
         self.streaming_safe = True
         self._model: Any = None
         self._torch: Any = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "HFTimeSeriesExtractor":
         """No-op fit for frozen Hugging Face time-series models."""
@@ -124,11 +139,9 @@ class HFTimeSeriesExtractor:
                 EmbeddingOutput(
                     name=spec.name,
                     embeddings=embeddings,
-                    recipe={
-                        "pooling": spec.pooling,
-                        "hidden_layer": spec.hidden_layer,
-                    },
+                    recipe=_spec_to_dict(spec),
                     metadata={
+                        **dict(spec.metadata),
                         "pooling": spec.pooling,
                         "hidden_layer": spec.hidden_layer,
                     },
@@ -188,14 +201,23 @@ class HFTimeSeriesExtractor:
             "trust_remote_code": self.trust_remote_code,
             "input_kwargs": self.input_kwargs,
             "model_kwargs": self.model_kwargs,
+            "dependency_versions": optional_dependency_versions("torch", "transformers"),
             "streaming_safe": self.streaming_safe,
         }
-        if len(self._output_specs) > 1:
-            recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
                 _structured_spec_to_dict(spec) for spec in self._structured_output_specs
             ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                paths=local_model_paths(self.model_id, self.checkpoint_paths),
+                require_pinned_revision=True,
+                revision=self.revision,
+                revision_identifiers=(self.model_id,),
+            )
+        )
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:
@@ -244,11 +266,13 @@ class HFTimeSeriesExtractor:
         series = np.asarray([sample["series"] for sample in batch], dtype=np.float32)
         encoded: Dict[str, Any] = {"past_values": torch.as_tensor(series).to(self._device(torch))}
         observed_mask = [sample.get("observed_mask") for sample in batch]
+        _require_uniform_optional_presence(observed_mask, "observed_mask")
         if all(mask is not None for mask in observed_mask):
             encoded["past_observed_mask"] = torch.as_tensor(
                 np.asarray(observed_mask, dtype=np.float32)
             ).to(self._device(torch))
         time_features = [sample.get("time_features") for sample in batch]
+        _require_uniform_optional_presence(time_features, "time_features")
         if all(features is not None for features in time_features):
             encoded["past_time_features"] = torch.as_tensor(
                 np.asarray(time_features, dtype=np.float32)
@@ -342,6 +366,8 @@ def _normalize_time_series_mapping(value: Dict[str, Any], owner: str) -> List[Di
     size = int(series.shape[0])
     observed_mask = _optional_aligned_sequence(value.get("observed_mask"), size, "observed_mask")
     time_features = _optional_aligned_sequence(value.get("time_features"), size, "time_features")
+    _require_uniform_optional_presence(observed_mask, "observed_mask")
+    _require_uniform_optional_presence(time_features, "time_features")
     return [
         {
             "series": series[index],
@@ -364,6 +390,14 @@ def _optional_aligned_sequence(value: Any, size: int, name: str) -> List[Optiona
     return items
 
 
+def _require_uniform_optional_presence(values: List[Optional[Any]], name: str) -> None:
+    present = [value is not None for value in values]
+    if any(present) and not all(present):
+        raise ValueError(
+            f"Structured time-series field '{name}' must be provided for all samples or none."
+        )
+
+
 def _iter_chunks(items: List[Dict[str, Any]], batch_size: int) -> Any:
     for start in range(0, len(items), batch_size):
         yield items[start : start + batch_size]
@@ -384,6 +418,8 @@ def _resolve_output_specs(
         ]
     specs = []
     for raw in outputs:
+        if not isinstance(raw, Mapping):
+            raise TypeError("HFTimeSeriesExtractor output specs must be mappings.")
         if "name" not in raw:
             raise ValueError("HFTimeSeriesExtractor output specs must include a name.")
         pooling = raw.get("pooling", default_pooling)
@@ -393,9 +429,10 @@ def _resolve_output_specs(
             )
         specs.append(
             EmbeddingOutputSpec(
-                name=str(raw["name"]),
+                name=raw["name"],
                 pooling=pooling,
                 hidden_layer=raw.get("hidden_layer"),
+                metadata=raw.get("metadata", {}),
             )
         )
     _ensure_unique_names(specs)

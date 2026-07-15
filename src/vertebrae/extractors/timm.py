@@ -4,6 +4,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
     callable_name,
     coerce_image,
@@ -11,11 +16,18 @@ from vertebrae.extractors._utils import (
     materialize_named_outputs,
     materialize_named_structured_outputs,
     maybe_move_to_device,
+    optional_dependency_versions,
     resolve_output_specs,
     resolve_structured_output_specs,
+    snapshot_mapping,
     spec_to_recipe,
     stack_batch,
     structured_spec_to_recipe,
+    validate_batch_size,
+    validate_bool,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
@@ -40,20 +52,32 @@ class TimmVisionExtractor:
         model_kwargs: Optional[Dict[str, Any]] = None,
         data_config: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[Sequence[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
-        self.model_name = model_name
-        self.pretrained = pretrained
+        batch_size = validate_batch_size(batch_size)
+        if preprocess_fn is not None and not callable(preprocess_fn):
+            raise TypeError("preprocess_fn must be callable when provided.")
+        if output_fn is not None and not callable(output_fn):
+            raise TypeError("output_fn must be callable when provided.")
+        self.name = validate_extractor_name(name)
+        self.model_name = validate_nonblank_string(model_name, "model_name")
+        self.pretrained = validate_bool(pretrained, "pretrained")
         self.batch_size = batch_size
         self.preprocess_fn = preprocess_fn
         self.output_fn = output_fn
         self._output_specs = resolve_output_specs(outputs)
         self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
-        self.image_mode = image_mode
-        self.alpha_mode = alpha_mode
-        self.device = device
-        self.model_kwargs = model_kwargs or {}
-        self.data_config = data_config or {}
+        self.image_mode = validate_choice(
+            image_mode, "image_mode", {"auto", "rgb", "grayscale", "preserve"}
+        )
+        self.alpha_mode = validate_choice(
+            alpha_mode,
+            "alpha_mode",
+            {"drop", "white_background", "black_background"},
+        )
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
+        self.data_config = snapshot_mapping(data_config, "data_config")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "image"
         self.extractor_type = "timm"
@@ -62,6 +86,7 @@ class TimmVisionExtractor:
         self._image_module: Any = None
         self._model: Any = None
         self._resolved_preprocess: Optional[Callable[[Any], Any]] = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "TimmVisionExtractor":
         return self
@@ -195,25 +220,32 @@ class TimmVisionExtractor:
                 else "<timm-default>"
             ),
             "output_fn": callable_name(self.output_fn) if self.output_fn is not None else None,
-            "outputs": [
-                {
-                    "name": spec.name,
-                    "selector": spec.metadata.get("selector"),
-                    "flatten": spec.metadata.get("flatten", True),
-                }
-                for spec in self._output_specs
-            ],
+            "outputs": [spec_to_recipe(spec) for spec in self._output_specs],
             "image_mode": self.image_mode,
             "alpha_mode": self.alpha_mode,
             "device": self.device,
             "model_kwargs": self.model_kwargs,
             "data_config": self.data_config,
+            "dependency_versions": optional_dependency_versions("Pillow", "timm", "torch"),
             "streaming_safe": self.streaming_safe,
         }
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
                 structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(
+                    ("preprocess_fn", self.preprocess_fn),
+                    ("output_fn", self.output_fn),
+                ),
+                paths=self.checkpoint_paths,
+                state_required=not self.pretrained,
+                require_pinned_revision=self.pretrained,
+                paths_authoritative=False,
+            )
+        )
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:

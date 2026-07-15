@@ -1,9 +1,24 @@
 """Optional Hugging Face text embedding extractor."""
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    local_model_paths,
+    validate_cache_identity,
+    validate_extractor_name,
+)
+from vertebrae.extractors._utils import (
+    optional_dependency_versions,
+    snapshot_mapping,
+    validate_batch_size,
+    validate_bool,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
+)
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 
@@ -42,11 +57,16 @@ class HFTextExtractor:
         tokenizer_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[List[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        if pooling not in {"mean", "cls", "last_token"}:
-            raise ValueError("pooling must be one of: mean, cls, last_token.")
-        self.name = name
-        self.model_id = model_id
+        pooling = validate_choice(pooling, "pooling", {"mean", "cls", "last_token"})
+        batch_size = validate_batch_size(batch_size)
+        if isinstance(max_length, bool) or not isinstance(max_length, int):
+            raise TypeError("max_length must be an integer.")
+        if max_length < 1:
+            raise ValueError("max_length must be >= 1.")
+        self.name = validate_extractor_name(name)
+        self.model_id = validate_nonblank_string(model_id, "model_id")
         self.pooling = pooling
         self.hidden_layer = hidden_layer
         self._output_specs = _resolve_output_specs(
@@ -57,11 +77,11 @@ class HFTextExtractor:
         self._structured_output_specs = _resolve_structured_output_specs(structured_outputs)
         self.batch_size = batch_size
         self.max_length = max_length
-        self.device = device
-        self.revision = revision
-        self.trust_remote_code = trust_remote_code
-        self.tokenizer_kwargs = tokenizer_kwargs or {}
-        self.model_kwargs = model_kwargs or {}
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.revision = validate_optional_nonblank_string(revision, "revision")
+        self.trust_remote_code = validate_bool(trust_remote_code, "trust_remote_code")
+        self.tokenizer_kwargs = snapshot_mapping(tokenizer_kwargs, "tokenizer_kwargs")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "text"
         self.extractor_type = "frozen_pretrained"
@@ -69,6 +89,7 @@ class HFTextExtractor:
         self._tokenizer: Any = None
         self._model: Any = None
         self._torch: Any = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "HFTextExtractor":
         """No-op fit for frozen Hugging Face text models.
@@ -164,11 +185,9 @@ class HFTextExtractor:
                 EmbeddingOutput(
                     name=spec.name,
                     embeddings=embeddings,
-                    recipe={
-                        "pooling": spec.pooling,
-                        "hidden_layer": spec.hidden_layer,
-                    },
+                    recipe=_spec_to_dict(spec),
                     metadata={
+                        **dict(spec.metadata),
                         "pooling": spec.pooling,
                         "hidden_layer": spec.hidden_layer,
                     },
@@ -197,27 +216,39 @@ class HFTextExtractor:
                     truncation=True,
                     max_length=self.max_length,
                     return_tensors="pt",
+                    return_special_tokens_mask=True,
                     **self.tokenizer_kwargs,
                 )
+                special_tokens_mask = encoded.pop("special_tokens_mask", None)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
                 model_output = model(**encoded, output_hidden_states=True)
                 for spec in self._structured_output_specs:
                     hidden = self._select_hidden_state(model_output, spec.hidden_layer)
                     values = hidden.detach().cpu().numpy().astype(np.float32, copy=False)
                     mask = encoded["attention_mask"].detach().cpu().numpy()
+                    special_mask = (
+                        None
+                        if special_tokens_mask is None
+                        else special_tokens_mask.detach().cpu().numpy()
+                    )
                     include_special = bool(spec.metadata.get("include_special_tokens", False))
                     for index in range(values.shape[0]):
-                        length = int(mask[index].sum())
-                        tokens = values[index, :length]
-                        if not include_special and tokens.shape[0] >= 2:
-                            tokens = tokens[1:-1]
+                        active = mask[index].astype(bool)
+                        tokens = values[index, active]
+                        if not include_special:
+                            if special_mask is None:
+                                raise ValueError(
+                                    "Tokenizer did not return special_tokens_mask required to "
+                                    "exclude special tokens from structured output."
+                                )
+                            tokens = tokens[~special_mask[index, active].astype(bool)]
                         collected[spec.name].append(tokens)
         return [
             StructuredEmbeddingOutput(
                 name=spec.name,
                 embeddings=collected[spec.name],
                 unit_type=spec.unit_type,
-                recipe={"hidden_layer": spec.hidden_layer},
+                recipe=_structured_spec_to_dict(spec),
                 metadata=dict(spec.metadata),
             )
             for spec in self._structured_output_specs
@@ -244,14 +275,23 @@ class HFTextExtractor:
             "trust_remote_code": self.trust_remote_code,
             "tokenizer_kwargs": self.tokenizer_kwargs,
             "model_kwargs": self.model_kwargs,
+            "dependency_versions": optional_dependency_versions("torch", "transformers"),
             "streaming_safe": self.streaming_safe,
         }
-        if len(self._output_specs) > 1:
-            recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
+        recipe["outputs"] = [_spec_to_dict(spec) for spec in self._output_specs]
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
                 _structured_spec_to_dict(spec) for spec in self._structured_output_specs
             ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                paths=local_model_paths(self.model_id, self.checkpoint_paths),
+                require_pinned_revision=True,
+                revision=self.revision,
+                revision_identifiers=(self.model_id,),
+            )
+        )
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:
@@ -324,7 +364,12 @@ class HFTextExtractor:
         if pooling == "cls":
             return hidden[:, 0, :]
         if pooling == "last_token":
-            lengths = mask.sum(dim=1) - 1
+            mask_array = mask.detach().cpu().numpy().astype(bool)
+            positions = np.broadcast_to(np.arange(mask_array.shape[1]), mask_array.shape)
+            last_positions = np.where(mask_array, positions, -1).max(axis=1)
+            if np.any(last_positions < 0):
+                raise ValueError("attention_mask must retain at least one token per sample.")
+            lengths = torch.as_tensor(last_positions, device=hidden.device)
             batch_ids = torch.arange(hidden.shape[0], device=hidden.device)
             return hidden[batch_ids, lengths, :]
         expanded_mask = mask.unsqueeze(-1).expand(hidden.size()).float()
@@ -360,6 +405,8 @@ def _resolve_output_specs(
         ]
     specs = []
     for raw in outputs:
+        if not isinstance(raw, Mapping):
+            raise TypeError("HFTextExtractor output specs must be mappings.")
         if "name" not in raw:
             raise ValueError("HFTextExtractor output specs must include a name.")
         pooling = raw.get("pooling", default_pooling)
@@ -369,10 +416,10 @@ def _resolve_output_specs(
             )
         specs.append(
             EmbeddingOutputSpec(
-                name=str(raw["name"]),
+                name=raw["name"],
                 pooling=pooling,
                 hidden_layer=raw.get("hidden_layer"),
-                metadata={},
+                metadata=raw.get("metadata", {}),
             )
         )
     _ensure_unique_names(specs)
@@ -399,15 +446,24 @@ def _resolve_structured_output_specs(
 ) -> List[StructuredOutputSpec]:
     specs = []
     for raw in outputs or []:
+        if not isinstance(raw, Mapping):
+            raise TypeError("HFTextExtractor structured outputs must be mappings.")
         if "name" not in raw:
             raise ValueError("HFTextExtractor structured outputs must include a name.")
+        include_special_tokens = raw.get("include_special_tokens", False)
+        if not isinstance(include_special_tokens, bool):
+            raise TypeError("include_special_tokens must be a bool.")
+        raw_metadata = raw.get("metadata", {})
+        if not isinstance(raw_metadata, Mapping):
+            raise TypeError("HFTextExtractor structured output metadata must be a mapping.")
         specs.append(
             StructuredOutputSpec(
-                name=str(raw["name"]),
-                unit_type=str(raw.get("unit_type", "token")),
+                name=raw["name"],
+                unit_type=raw.get("unit_type", "token"),
                 hidden_layer=raw.get("hidden_layer"),
                 metadata={
-                    "include_special_tokens": bool(raw.get("include_special_tokens", False)),
+                    **dict(raw_metadata),
+                    "include_special_tokens": include_special_tokens,
                 },
             )
         )

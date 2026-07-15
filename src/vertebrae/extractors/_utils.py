@@ -1,23 +1,48 @@
 """Shared helpers for optional extractor adapters."""
 
+from copy import deepcopy
+from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
+from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 _IMAGE_MODES = {"auto", "grayscale", "preserve", "rgb"}
 _ALPHA_MODES = {"black_background", "drop", "white_background"}
 
 
+def optional_dependency_versions(*distributions: str) -> Dict[str, Optional[str]]:
+    """Resolve optional distribution versions without importing their runtime modules.
+
+    Missing distributions remain explicit ``None`` entries. This keeps recipes
+    deterministic in lightweight environments while ensuring that an installed
+    backend upgrade changes the extractor fingerprint.
+    """
+
+    versions: Dict[str, Optional[str]] = {}
+    for distribution in sorted(set(distributions)):
+        normalized = validate_nonblank_string(distribution, "distribution name")
+        try:
+            versions[normalized] = importlib_metadata.version(normalized)
+        except importlib_metadata.PackageNotFoundError:
+            versions[normalized] = None
+    return versions
+
+
 def callable_name(fn: Callable[..., Any]) -> str:
-    return f"{getattr(fn, '__module__', '<unknown>')}.{getattr(fn, '__qualname__', repr(fn))}"
+    value_type = type(fn)
+    module = getattr(fn, "__module__", value_type.__module__)
+    qualname = getattr(fn, "__qualname__", value_type.__qualname__)
+    return f"{module}.{qualname}"
 
 
 def iter_chunks(items: Iterable[Any], size: int) -> Iterator[List[Any]]:
+    validate_batch_size(size, "chunk size")
     chunk: List[Any] = []
     for item in items:
         chunk.append(item)
@@ -26,6 +51,137 @@ def iter_chunks(items: Iterable[Any], size: int) -> Iterator[List[Any]]:
             chunk = []
     if chunk:
         yield chunk
+
+
+def validate_batch_size(value: Any, owner: str = "batch_size") -> int:
+    """Validate a public batch-size option before any iteration starts."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise TypeError(f"{owner} must be an integer.")
+    if int(value) < 1:
+        raise ValueError(f"{owner} must be >= 1.")
+    return int(value)
+
+
+def validate_nonblank_string(value: Any, owner: str) -> str:
+    """Return a normalized, nonblank public string option."""
+
+    if not isinstance(value, str):
+        raise TypeError(f"{owner} must be a string.")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{owner} must be a non-empty string.")
+    return normalized
+
+
+def validate_optional_nonblank_string(value: Any, owner: str) -> Optional[str]:
+    """Validate an optional string without treating blank input as absent."""
+
+    if value is None:
+        return None
+    return validate_nonblank_string(value, owner)
+
+
+def validate_bool(value: Any, owner: str) -> bool:
+    """Reject truthy integer/string substitutes for public boolean options."""
+
+    if not isinstance(value, bool):
+        raise TypeError(f"{owner} must be a bool.")
+    return value
+
+
+def validate_choice(value: Any, owner: str, choices: Iterable[str]) -> str:
+    """Validate a string enum and return it unchanged after whitespace checks."""
+
+    normalized = validate_nonblank_string(value, owner)
+    allowed = tuple(choices)
+    if normalized not in allowed:
+        rendered = ", ".join(repr(choice) for choice in sorted(allowed))
+        raise ValueError(f"{owner} must be one of: {rendered}.")
+    return normalized
+
+
+def snapshot_mapping(
+    value: Any,
+    owner: str,
+    *,
+    require_string_keys: bool = True,
+    serializable: bool = True,
+) -> Dict[Any, Any]:
+    """Validate and defensively copy constructor mappings.
+
+    Optional extractor mappings become part of recipes/cache identities, so they
+    must not change when a caller later mutates the object passed to the
+    constructor. Keyword-argument mappings also need string keys because they are
+    eventually expanded with ``**``.
+    """
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{owner} must be a mapping when provided.")
+    if require_string_keys:
+        for key in value:
+            validate_nonblank_string(key, f"{owner} keys")
+    try:
+        snapshot = deepcopy(dict(value))
+    except Exception as exc:
+        raise TypeError(f"{owner} must be defensively copyable.") from exc
+    if serializable:
+        try:
+            make_json_safe(snapshot)
+        except TypeError as exc:
+            raise TypeError(f"{owner} must contain serializable values: {exc}") from exc
+    return snapshot
+
+
+def snapshot_string_mapping(
+    value: Any,
+    owner: str,
+    *,
+    allowed_values: Optional[Iterable[str]] = None,
+) -> Dict[str, str]:
+    """Snapshot a mapping whose keys and values are nonblank strings."""
+
+    snapshot = snapshot_mapping(value, owner, serializable=True)
+    allowed = set(allowed_values) if allowed_values is not None else None
+    result: Dict[str, str] = {}
+    for key, item in snapshot.items():
+        normalized_key = validate_nonblank_string(key, f"{owner} keys")
+        normalized_value = validate_nonblank_string(item, f"{owner}[{normalized_key!r}]")
+        if allowed is not None and normalized_value not in allowed:
+            rendered = ", ".join(repr(choice) for choice in sorted(allowed))
+            raise ValueError(f"{owner}[{normalized_key!r}] must be one of: {rendered}.")
+        result[normalized_key] = normalized_value
+    return result
+
+
+def snapshot_string_sequence(value: Any, owner: str) -> Optional[List[str]]:
+    """Snapshot an optional sequence of nonblank strings."""
+
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes)):
+        raise TypeError(f"{owner} must be a sequence of strings, not a string.")
+    try:
+        items = list(value)
+    except TypeError as exc:
+        raise TypeError(f"{owner} must be a sequence of strings.") from exc
+    return [validate_nonblank_string(item, f"{owner}[{index}]") for index, item in enumerate(items)]
+
+
+def snapshot_mapping_sequence(value: Any, owner: str) -> Optional[List[Dict[Any, Any]]]:
+    """Snapshot an optional sequence of serializable mappings."""
+
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes, Mapping)):
+        raise TypeError(f"{owner} must be a sequence of mappings.")
+    try:
+        items = list(value)
+    except TypeError as exc:
+        raise TypeError(f"{owner} must be a sequence of mappings.") from exc
+    return [snapshot_mapping(item, f"{owner}[{index}]") for index, item in enumerate(items)]
 
 
 def tensor_to_numpy(value: Any) -> Any:
@@ -104,19 +260,32 @@ def coerce_image(
         raise ValueError(f"alpha_mode must be one of: {', '.join(sorted(_ALPHA_MODES))}.")
     if isinstance(value, (str, Path)):
         image = image_module.open(value)
-        return _convert_image_mode(image, image_mode=image_mode, alpha_mode=alpha_mode)
+        return _convert_image_mode(
+            image, image_mode=image_mode, alpha_mode=alpha_mode, image_module=image_module
+        )
     if isinstance(value, np.ndarray):
-        array = value
+        array = _image_array_to_uint8(value)
         if array.ndim == 2:
-            image = image_module.fromarray(array.astype(np.uint8))
-            return _convert_image_mode(image, image_mode=image_mode, alpha_mode=alpha_mode)
+            image = image_module.fromarray(array)
+            return _convert_image_mode(
+                image, image_mode=image_mode, alpha_mode=alpha_mode, image_module=image_module
+            )
         if array.ndim == 3 and array.shape[-1] in {1, 3, 4}:
             if array.shape[-1] == 1:
                 array = array[:, :, 0]
-            image = image_module.fromarray(array.astype(np.uint8))
-            return _convert_image_mode(image, image_mode=image_mode, alpha_mode=alpha_mode)
+            image = image_module.fromarray(array)
+            return _convert_image_mode(
+                image, image_mode=image_mode, alpha_mode=alpha_mode, image_module=image_module
+            )
+        raise ValueError(
+            "NumPy image arrays must have shape (height, width), "
+            "(height, width, 1), (height, width, 3), or (height, width, 4); "
+            "the channel dimension must contain 1, 3, or 4 channels."
+        )
     if hasattr(value, "convert"):
-        return _convert_image_mode(value, image_mode=image_mode, alpha_mode=alpha_mode)
+        return _convert_image_mode(
+            value, image_mode=image_mode, alpha_mode=alpha_mode, image_module=image_module
+        )
     return value
 
 
@@ -131,24 +300,36 @@ def resolve_output_specs(
     specs: List[EmbeddingOutputSpec] = []
     seen = set()
     for output in outputs:
-        name = str(output.get("name", "")).strip()
-        if not name:
+        if not isinstance(output, Mapping):
+            raise TypeError("Every output spec must be a mapping.")
+        raw_name = output.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
             raise ValueError("Output specs must include a name.")
+        name = raw_name.strip()
         if name in seen:
             raise ValueError("Output names must be unique.")
-        metadata = dict(output.get("metadata") or {})
+        raw_metadata = output.get("metadata", {})
+        metadata = snapshot_mapping(raw_metadata, "Output spec metadata")
         if "selector" in output:
-            metadata["selector"] = str(output["selector"])
+            if not isinstance(output["selector"], str):
+                raise TypeError("Output spec selector must be a string.")
+            metadata["selector"] = output["selector"]
         if "source" in output:
-            metadata["source"] = str(output["source"])
-        metadata["flatten"] = bool(output.get("flatten", True))
+            if not isinstance(output["source"], str):
+                raise TypeError("Output spec source must be a string.")
+            metadata["source"] = output["source"]
+        flatten = output.get("flatten", True)
+        if not isinstance(flatten, bool):
+            raise TypeError("Output spec flatten must be a bool.")
+        metadata["flatten"] = flatten
+        pooling = output.get("pooling")
+        if pooling is not None and not isinstance(pooling, str):
+            raise TypeError("Output spec pooling must be a string when provided.")
         specs.append(
             EmbeddingOutputSpec(
                 name=name,
-                pooling=str(output["pooling"]) if output.get("pooling") is not None else None,
-                hidden_layer=(
-                    int(output["hidden_layer"]) if output.get("hidden_layer") is not None else None
-                ),
+                pooling=pooling,
+                hidden_layer=_optional_integral(output.get("hidden_layer"), "hidden_layer"),
                 metadata=metadata,
             )
         )
@@ -209,30 +390,43 @@ def resolve_structured_output_specs(
     specs: List[StructuredOutputSpec] = []
     seen = set()
     for output in outputs:
-        name = str(output.get("name", "")).strip()
-        if not name:
+        if not isinstance(output, Mapping):
+            raise TypeError("Every structured output spec must be a mapping.")
+        raw_name = output.get("name")
+        if not isinstance(raw_name, str) or not raw_name.strip():
             raise ValueError("Structured output specs must include a name.")
+        name = raw_name.strip()
         if name in seen:
             raise ValueError("Structured output names must be unique.")
-        unit_type = str(output.get("unit_type", "")).strip()
-        if not unit_type:
+        raw_unit_type = output.get("unit_type")
+        if not isinstance(raw_unit_type, str) or not raw_unit_type.strip():
             raise ValueError(f"Structured output '{name}' must include a unit_type.")
-        metadata = dict(output.get("metadata") or {})
+        unit_type = raw_unit_type.strip()
+        raw_metadata = output.get("metadata", {})
+        metadata = snapshot_mapping(raw_metadata, "Structured output spec metadata")
         for key in ("selector", "source", "model_output"):
             if output.get(key) is not None:
-                metadata[key] = str(output[key])
+                if not isinstance(output[key], str):
+                    raise TypeError(f"Structured output spec {key} must be a string.")
+                metadata[key] = output[key]
         specs.append(
             StructuredOutputSpec(
                 name=name,
                 unit_type=unit_type,
-                hidden_layer=(
-                    int(output["hidden_layer"]) if output.get("hidden_layer") is not None else None
-                ),
+                hidden_layer=_optional_integral(output.get("hidden_layer"), "hidden_layer"),
                 metadata=metadata,
             )
         )
         seen.add(name)
     return specs
+
+
+def _optional_integral(value: Any, name: str) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise TypeError(f"Output spec {name} must be an integer when provided.")
+    return int(value)
 
 
 def materialize_named_structured_outputs(
@@ -365,6 +559,7 @@ def spec_to_recipe(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
         "name": spec.name,
         "pooling": spec.pooling,
         "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
     }
     for key in ("selector", "source"):
         if key in spec.metadata:
@@ -377,11 +572,29 @@ def structured_spec_to_recipe(spec: StructuredOutputSpec) -> Dict[str, Any]:
         "name": spec.name,
         "unit_type": spec.unit_type,
         "hidden_layer": spec.hidden_layer,
+        "metadata": dict(spec.metadata),
     }
     for key in ("selector", "source", "model_output"):
         if key in spec.metadata:
             recipe[key] = spec.metadata[key]
     return recipe
+
+
+def _image_array_to_uint8(value: np.ndarray) -> np.ndarray:
+    """Convert supported image arrays without silent wrapping or float truncation."""
+
+    array = np.asarray(value)
+    if np.issubdtype(array.dtype, np.floating):
+        if not np.all(np.isfinite(array)):
+            raise ValueError("Floating-point image arrays must contain only finite values.")
+        if array.size and (float(np.min(array)) < 0.0 or float(np.max(array)) > 1.0):
+            raise ValueError("Floating-point image arrays must have values in the [0, 1] range.")
+        return np.rint(array * 255.0).astype(np.uint8)
+    if np.issubdtype(array.dtype, np.integer):
+        if array.size and (int(np.min(array)) < 0 or int(np.max(array)) > 255):
+            raise ValueError("Integer image arrays must have values in the [0, 255] range.")
+        return array.astype(np.uint8, copy=False)
+    raise TypeError("NumPy image arrays must use an integer or floating-point dtype.")
 
 
 def stack_batch(values: Sequence[Any], torch_module: Any = None) -> Any:
@@ -404,13 +617,24 @@ def infer_batch_size(value: Any) -> int:
     return int(len(value))
 
 
-def _convert_image_mode(value: Any, image_mode: str, alpha_mode: str) -> Any:
+def _convert_image_mode(value: Any, image_mode: str, alpha_mode: str, image_module: Any) -> Any:
     if not hasattr(value, "convert"):
         return value
     if image_mode == "preserve":
         return value
+    bands = tuple(value.getbands()) if hasattr(value, "getbands") else ()
+    if "A" in bands:
+        rgba = value.convert("RGBA")
+        if alpha_mode == "drop":
+            value = rgba.convert("RGB")
+        else:
+            fill = "white" if alpha_mode == "white_background" else "black"
+            background = image_module.new("RGB", rgba.size, fill)
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            value = background
     if image_mode == "grayscale":
-        return value.convert("L")
+        grayscale = np.asarray(value.convert("L"), dtype=np.uint8)
+        return grayscale[:, :, np.newaxis]
     if image_mode in {"auto", "rgb"}:
         return value.convert("RGB")
     return value

@@ -4,6 +4,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
     callable_name,
     coerce_image,
@@ -11,11 +16,17 @@ from vertebrae.extractors._utils import (
     materialize_named_outputs,
     materialize_named_structured_outputs,
     maybe_move_to_device,
+    optional_dependency_versions,
     resolve_output_specs,
     resolve_structured_output_specs,
+    snapshot_mapping,
     spec_to_recipe,
     stack_batch,
     structured_spec_to_recipe,
+    validate_batch_size,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
@@ -39,19 +50,31 @@ class TorchvisionVisionExtractor:
         device: Optional[str] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         checkpoint_paths: Optional[Sequence[str]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
-        self.model_name = model_name
+        batch_size = validate_batch_size(batch_size)
+        if preprocess_fn is not None and not callable(preprocess_fn):
+            raise TypeError("preprocess_fn must be callable when provided.")
+        if output_fn is not None and not callable(output_fn):
+            raise TypeError("output_fn must be callable when provided.")
+        self.name = validate_extractor_name(name)
+        self.model_name = validate_nonblank_string(model_name, "model_name")
         self.weights = weights
         self.batch_size = batch_size
         self.preprocess_fn = preprocess_fn
         self.output_fn = output_fn
         self._output_specs = resolve_output_specs(outputs)
         self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
-        self.image_mode = image_mode
-        self.alpha_mode = alpha_mode
-        self.device = device
-        self.model_kwargs = model_kwargs or {}
+        self.image_mode = validate_choice(
+            image_mode, "image_mode", {"auto", "rgb", "grayscale", "preserve"}
+        )
+        self.alpha_mode = validate_choice(
+            alpha_mode,
+            "alpha_mode",
+            {"drop", "white_background", "black_background"},
+        )
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
         self.checkpoint_paths = tuple(checkpoint_paths or ())
         self.modality = "image"
         self.extractor_type = "torchvision"
@@ -60,6 +83,7 @@ class TorchvisionVisionExtractor:
         self._image_module: Any = None
         self._model: Any = None
         self._resolved_preprocess: Optional[Callable[[Any], Any]] = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "TorchvisionVisionExtractor":
         return self
@@ -200,12 +224,25 @@ class TorchvisionVisionExtractor:
             "alpha_mode": self.alpha_mode,
             "device": self.device,
             "model_kwargs": self.model_kwargs,
+            "dependency_versions": optional_dependency_versions("Pillow", "torch", "torchvision"),
             "streaming_safe": self.streaming_safe,
         }
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
                 structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(
+                    ("preprocess_fn", self.preprocess_fn),
+                    ("output_fn", self.output_fn),
+                ),
+                paths=self.checkpoint_paths,
+                state_required=True,
+                paths_authoritative=False,
+            )
+        )
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:
@@ -245,10 +282,32 @@ class TorchvisionVisionExtractor:
             preprocess_fn = self.preprocess_fn
             if preprocess_fn is None:
                 preprocess_fn = (
-                    self.weights.transforms() if self.weights is not None else np.asarray
+                    self.weights.transforms()
+                    if self.weights is not None
+                    else lambda image: _default_tensor_preprocess(image, torch)
                 )
             self._torch = torch
             self._image_module = Image
             self._model = model
             self._resolved_preprocess = preprocess_fn
         return self._torch, self._image_module, self._model, self._resolved_preprocess
+
+
+def _default_tensor_preprocess(image: Any, torch_module: Any) -> Any:
+    """Match torchvision's basic ToTensor layout/dtype when no weights are supplied."""
+
+    array = np.asarray(image)
+    if array.ndim == 2:
+        array = array[:, :, np.newaxis]
+    if array.ndim != 3 or array.shape[-1] not in {1, 3, 4}:
+        raise ValueError(
+            "TorchvisionVisionExtractor default preprocessing expects an HWC image with "
+            "1, 3, or 4 channels. Provide preprocess_fn for other layouts."
+        )
+    array = np.moveaxis(array, -1, 0).astype(np.float32, copy=False)
+    if np.issubdtype(np.asarray(image).dtype, np.integer):
+        array = array / 255.0
+    converter = getattr(torch_module, "as_tensor", None)
+    if not callable(converter):
+        raise TypeError("The installed torch module does not expose as_tensor().")
+    return converter(np.ascontiguousarray(array))

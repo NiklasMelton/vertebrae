@@ -4,15 +4,24 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.extractors._utils import (
     callable_name,
     infer_batch_size,
     materialize_named_outputs,
     materialize_named_structured_outputs,
+    optional_dependency_versions,
     resolve_output_specs,
     resolve_structured_output_specs,
+    snapshot_mapping,
     spec_to_recipe,
     structured_spec_to_recipe,
+    validate_bool,
+    validate_nonblank_string,
 )
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
@@ -34,10 +43,17 @@ class JAXFlaxExtractor:
         modality: str = "unknown",
         jit: bool = True,
         apply_kwargs: Optional[Dict[str, Any]] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
         if apply_fn is None and model is None:
             raise ValueError("JAXFlaxExtractor requires either apply_fn or model.")
-        self.name = name
+        if not callable(input_fn):
+            raise TypeError("input_fn must be callable.")
+        if output_fn is not None and not callable(output_fn):
+            raise TypeError("output_fn must be callable when provided.")
+        if apply_fn is not None and not callable(apply_fn):
+            raise TypeError("apply_fn must be callable when provided.")
+        self.name = validate_extractor_name(name)
         self.input_fn = input_fn
         self.output_fn = output_fn
         self.apply_fn = apply_fn
@@ -45,13 +61,14 @@ class JAXFlaxExtractor:
         self.params = params
         self._output_specs = resolve_output_specs(outputs)
         self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
-        self.modality = modality
-        self.jit = jit
-        self.apply_kwargs = apply_kwargs or {}
+        self.modality = validate_nonblank_string(modality, "modality")
+        self.jit = validate_bool(jit, "jit")
+        self.apply_kwargs = snapshot_mapping(apply_kwargs, "apply_kwargs")
         self.extractor_type = "jax_flax"
         self.streaming_safe = True
         self._jax: Any = None
         self._compiled_apply: Optional[Callable[..., Any]] = None
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "JAXFlaxExtractor":
         return self
@@ -137,12 +154,24 @@ class JAXFlaxExtractor:
             "outputs": [spec_to_recipe(spec) for spec in self._output_specs],
             "jit": self.jit,
             "apply_kwargs": self.apply_kwargs,
+            "dependency_versions": optional_dependency_versions("flax", "jax"),
             "streaming_safe": self.streaming_safe,
         }
         if self._structured_output_specs:
             recipe["structured_outputs"] = [
                 structured_spec_to_recipe(spec) for spec in self._structured_output_specs
             ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(
+                    ("input_fn", self.input_fn),
+                    ("output_fn", self.output_fn),
+                    ("apply_fn", self.apply_fn),
+                ),
+                state_required=self.params is not None or self.model is not None,
+            )
+        )
         return recipe
 
     def get_resource_profile_adapter(self) -> Any:
