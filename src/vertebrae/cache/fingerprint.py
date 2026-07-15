@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -15,17 +16,16 @@ import numpy as np
 
 
 def hash_json(value: Any) -> str:
-    """Hash a value after conservative JSON normalization.
+    """Hash the complete typed value using the canonical identity representation.
 
-    Args:
-        value: Value to fingerprint.
-
-    Returns:
-        SHA-256 hash string.
+    ``hash_json`` is the public identity hash.  It intentionally has the same
+    exact semantics as :func:`hash_json_exact`; the latter name remains useful
+    at call sites that want to emphasize that every value participates in the
+    identity.  Unsupported opaque objects fail instead of silently falling back
+    to unstable ``repr`` output.
     """
 
-    payload = json.dumps(_fingerprintable(value), sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hash_json_exact(value)
 
 
 def hash_json_exact(value: Any) -> str:
@@ -72,42 +72,9 @@ def fingerprint_extractor_recipe(recipe: dict) -> str:
         SHA-256 hash string.
     """
 
-    return hash_json(recipe)
-
-
-def _fingerprintable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            str(key): _fingerprintable(item)
-            for key, item in sorted(value.items(), key=lambda x: str(x[0]))
-        }
-    if isinstance(value, (list, tuple)):
-        return [_fingerprintable(item) for item in value[:100]]
-    if isinstance(value, np.ndarray):
-        sample = _array_sample(value)
-        return {
-            "type": "ndarray",
-            "shape": list(value.shape),
-            "dtype": str(value.dtype),
-            "sample": sample,
-        }
-    if _is_sparse_matrix(value):
-        return {
-            "type": "sparse_matrix",
-            "format": value.getformat(),
-            "shape": list(value.shape),
-            "dtype": str(value.dtype),
-            "nnz": int(value.nnz),
-            "data_sample": _array_sample(value.data),
-            "indices_sample": _array_sample(value.indices) if hasattr(value, "indices") else None,
-        }
-    if hasattr(value, "to_numpy"):
-        return _fingerprintable(value.to_numpy())
-    if hasattr(value, "shape") and hasattr(value, "dtype"):
-        return _fingerprintable(np.asarray(value))
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return repr(value)
+    if not isinstance(recipe, dict):
+        raise TypeError("Extractor recipes must be dictionaries.")
+    return hash_json_exact({"identity_schema": 2, "recipe": recipe})
 
 
 def _exact_fingerprintable(value: Any) -> Any:
@@ -120,7 +87,7 @@ def _exact_fingerprintable(value: Any) -> Any:
                 for field in fields(value)
             },
         }
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         entries = [
             [_exact_fingerprintable(key), _exact_fingerprintable(item)]
             for key, item in value.items()
@@ -235,14 +202,6 @@ def _normalized_decimal(value: Decimal) -> str:
     if value.is_finite():
         return str(value.normalize())
     return str(value)
-
-
-def _array_sample(arr: np.ndarray) -> Any:
-    flat = arr.reshape(-1) if arr.size else arr
-    if flat.size <= 50:
-        return flat.tolist()
-    positions = np.linspace(0, flat.size - 1, num=50, dtype=int)
-    return flat[positions].tolist()
 
 
 def _hash_array_bytes(value: np.ndarray, chunk_bytes: int = 1024 * 1024) -> str:

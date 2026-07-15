@@ -40,6 +40,10 @@ def test_declared_identity_requires_id_and_revision_and_is_data_independent():
 
     assert first.identity_key() == reconstructed.identity_key()
     assert first.identity_key() != revised.identity_key()
+    normalized = DatasetIdentity.declared(" demo ", " 1 ")
+    assert normalized.dataset_id == "demo"
+    assert normalized.revision == "1"
+    assert normalized.resolve() == DatasetIdentity.declared("demo", "1").resolve()
 
 
 def test_manifest_identity_is_canonical_and_summary_omits_manifest_content():

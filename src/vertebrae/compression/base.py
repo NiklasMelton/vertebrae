@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from vertebrae.cache.fingerprint import hash_json
+from vertebrae.cache.fingerprint import hash_json_exact
 from vertebrae.config import EmbeddingCompressionConfig
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
@@ -349,7 +349,7 @@ def create_embedding_compressor(
 
 
 def compression_recipe_hash(config: EmbeddingCompressionConfig) -> str:
-    return hash_json(asdict(config))
+    return hash_json_exact({"identity_schema": 2, "compression_config": asdict(config)})
 
 
 def compress_embedding_artifact_key(
