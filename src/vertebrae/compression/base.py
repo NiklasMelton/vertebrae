@@ -179,10 +179,11 @@ class _QuantizeCompressor(EmbeddingCompressor):
                 "scoring_dtype": "float32",
             }
         else:
+            sparse_input = is_sparse_matrix(matrix)
             self._calibration = {
-                "mode": "cast",
+                "mode": "cast_round_trip" if sparse_input else "cast",
                 "encoded_dtype": "float16",
-                "scoring_dtype": "float16",
+                "scoring_dtype": "float32" if sparse_input else "float16",
             }
         return self
 
@@ -190,6 +191,11 @@ class _QuantizeCompressor(EmbeddingCompressor):
         matrix = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
         precision = self.config.precision
         if precision == "float16":
+            if is_sparse_matrix(matrix):
+                return _sparse_float16_round_trip(
+                    matrix,
+                    "quantize compressed embeddings",
+                )
             return _validate_compression_output(
                 matrix,
                 "quantize compressed embeddings",
@@ -243,8 +249,15 @@ def _validate_compression_output(
     """Validate a compression-stage matrix after dtype or precision conversion."""
 
     if dtype is not None:
+        resolved_dtype = np.dtype(dtype)
+        if is_sparse_matrix(value) and resolved_dtype == np.dtype(np.float16):
+            raise ValueError(
+                f"{name} cannot use dtype='float16' while preserving sparse storage "
+                "because scipy.sparse does not portably support float16. Use "
+                "dtype='float32' or method='quantize' with precision='float16'."
+            )
         with np.errstate(over="ignore", invalid="ignore"):
-            value = value.astype(dtype, copy=False)
+            value = value.astype(resolved_dtype, copy=False)
     matrix = ensure_numeric_matrix(value, name, allow_sparse=allow_sparse)
     if not np.issubdtype(matrix.dtype, np.floating):
         if np.issubdtype(matrix.dtype, np.integer):
@@ -252,6 +265,16 @@ def _validate_compression_output(
         else:
             raise ValueError(f"{name} must use a real floating-point dtype.")
     return matrix
+
+
+def _sparse_float16_round_trip(value: Any, name: str) -> Any:
+    """Apply float16 rounding to sparse data while retaining a supported dtype."""
+
+    matrix = ensure_numeric_matrix(value, name, allow_sparse=True)
+    transformed = matrix.astype(np.float32, copy=True).tocsr(copy=False)
+    with np.errstate(over="ignore", invalid="ignore"):
+        transformed.data = transformed.data.astype(np.float16).astype(np.float32)
+    return _validate_compression_output(transformed, name, allow_sparse=True)
 
 
 def compress_embeddings(

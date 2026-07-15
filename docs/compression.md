@@ -100,6 +100,9 @@ Keeps the first `n_components` dimensions without fitting a model.
 - Accepts dense and sparse input.
 - Requires `n_components`.
 - Honors `dtype` after truncation while preserving sparse storage.
+- Sparse `float16` output is rejected because SciPy does not support it
+  consistently across versions; use sparse `float32` or `quantize` with
+  `precision="float16"` instead.
 - Use `assume_matryoshka=True` when the embedding source is intentionally
   dimension-ordered, such as matryoshka-trained or shortened embeddings.
 
@@ -121,13 +124,14 @@ still be scored by OverlapIndex.
 
 Supported precisions:
 
-- `float16`: direct cast for dense or sparse embeddings.
+- `float16`: direct cast for dense embeddings; sparse values are rounded through
+  `float16` and returned as a sparse `float32` scoring matrix.
 - `int8`: dense scalar quantize/dequantize round trip using symmetric per-dimension scaling.
 - `uint8`: dense scalar quantize/dequantize round trip using affine per-dimension min/max scaling.
 
-The integer precisions record the encoded dtype and estimated encoded size in
-metadata, then return dequantized `float32` embeddings for scoring. They do not
-return integer matrices to the scoring pipeline.
+The integer precisions and sparse `float16` record the encoded dtype and estimated
+encoded size in metadata, then return `float32` embeddings for scoring. They do
+not return unsupported or integer matrices to the scoring pipeline.
 
 Binary and packed-bit quantization are intentionally not included here because
 they are more appropriate for retrieval or ANN index evaluation than for

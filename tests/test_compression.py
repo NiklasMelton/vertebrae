@@ -288,8 +288,17 @@ def test_prefix_truncate_normalizes_sparse_integer_output_to_float():
     assert result.metadata["dtype"] == "float64"
 
 
-def test_quantize_float16_preserves_sparse_output_and_validates_dtype():
+def test_quantize_float16_round_trips_sparse_output_through_float32(monkeypatch):
     embeddings = sparse.csr_matrix(np.eye(4, dtype=np.float32))
+    matrix_type = type(embeddings)
+    original_astype = matrix_type.astype
+
+    def reject_sparse_float16(self, dtype, *args, **kwargs):
+        if np.dtype(dtype) == np.dtype(np.float16):
+            raise AssertionError("Sparse float16 construction is not portable.")
+        return original_astype(self, dtype, *args, **kwargs)
+
+    monkeypatch.setattr(matrix_type, "astype", reject_sparse_float16)
     result = compress_embeddings(
         embeddings,
         EmbeddingCompressionConfig(
@@ -300,12 +309,38 @@ def test_quantize_float16_preserves_sparse_output_and_validates_dtype():
     )
 
     assert sparse.issparse(result.embeddings)
-    assert result.embeddings.dtype == np.float16
-    assert result.metadata["dtype"] == "float16"
+    assert result.embeddings.dtype == np.float32
+    assert result.metadata["dtype"] == "float32"
+    assert result.metadata["encoded_dtype"] == "float16"
+    assert result.metadata["scoring_dtype"] == "float32"
+    assert result.metadata["quantization_mode"] == "cast_round_trip"
+    assert np.array_equal(
+        result.embeddings.toarray(),
+        embeddings.toarray().astype(np.float16).astype(np.float32),
+    )
 
 
-@pytest.mark.parametrize("sparse_input", [False, True])
-def test_prefix_truncate_rejects_nonfinite_output_after_dtype_cast(sparse_input):
+def test_prefix_truncate_rejects_nonportable_sparse_float16_output():
+    embeddings = sparse.csr_matrix(np.eye(4, dtype=np.float32))
+
+    with pytest.raises(ValueError, match="does not portably support float16"):
+        compress_embeddings(
+            embeddings,
+            EmbeddingCompressionConfig(
+                enabled=True,
+                method="prefix_truncate",
+                n_components=2,
+                assume_matryoshka=True,
+                dtype="float16",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("sparse_input", "dtype"),
+    [(False, "float16"), (True, "float32")],
+)
+def test_prefix_truncate_rejects_nonfinite_output_after_dtype_cast(sparse_input, dtype):
     embeddings = np.asarray(
         [
             [1e100, 0.0],
@@ -324,7 +359,7 @@ def test_prefix_truncate_rejects_nonfinite_output_after_dtype_cast(sparse_input)
                 method="prefix_truncate",
                 n_components=1,
                 assume_matryoshka=True,
-                dtype="float16",
+                dtype=dtype,
             ),
         )
 
