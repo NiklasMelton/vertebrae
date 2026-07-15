@@ -2,7 +2,13 @@ import numpy as np
 import pytest
 
 from vertebrae import BenchmarkDataset, DatasetIdentity, EmbeddingConfig, Evaluator, MemoryConfig
-from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
+from vertebrae.config import (
+    CacheConfig,
+    ContinuousOverlapScoringConfig,
+    OverlapScoringConfig,
+    SeparatixConfig,
+    StabilityConfig,
+)
 from vertebrae.extractors import CallableExtractor
 from vertebrae.utils.memory import resolve_memory_budget
 
@@ -140,6 +146,80 @@ def test_user_requested_subsample_rate_limits_benchmark_samples(tmp_path, fake_o
     assert set(metadata["sample_indices"]).issubset(set(range(12)))
     assert len(seen) == 6
     assert any("user-requested" in warning for warning in extractor_result.warnings)
+
+
+def test_user_requested_regression_subsample_expands_to_valid_minimum(
+    tmp_path,
+    fake_overlapindex,
+):
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(30).reshape(10, 3),
+        np.asarray([0.0] * 9 + [1.0]),
+        modality="tabular",
+        target_type="regression",
+        target_names=["score"],
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = CallableExtractor(
+        "regression_subsample",
+        lambda batch: np.asarray(batch)[:, :2].astype(np.float32),
+        streaming_safe=True,
+    )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=extractor,
+        scoring_config=ContinuousOverlapScoringConfig(k=1),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        memory_config=MemoryConfig(max_memory_bytes=10_000_000, subsample_rate=0.01),
+    ).run()
+
+    item = result.extractor_results[0]
+    assert item.embedding_metadata["requested_subsample_rate"] == 0.01
+    assert item.embedding_metadata["effective_subsample_rate"] == 0.3
+    assert item.embedding_metadata["n_samples"] == 3
+    assert np.var(fake_overlapindex.continuous_calls[-1]["fit_y"]) > 0.0
+    assert any(
+        "user-requested target-preserving regression subsample" in warning
+        for warning in item.warnings
+    )
+
+
+def test_memory_triggered_regression_subsample_preserves_variation(
+    tmp_path,
+    fake_overlapindex,
+):
+    def embed(batch):
+        return np.ones((len(batch), 100), dtype=np.float64)
+
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(30).reshape(10, 3),
+        np.asarray([0.0] * 9 + [1.0]),
+        modality="tabular",
+        target_type="regression",
+        target_names=["score"],
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=CallableExtractor("large_regression_embeddings", embed, streaming_safe=True),
+        scoring_config=ContinuousOverlapScoringConfig(k=1),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        embedding_config=EmbeddingConfig(batch_size=2),
+        memory_config=MemoryConfig(max_memory_bytes=4_000),
+    ).run()
+
+    item = result.extractor_results[0]
+    assert item.embedding_metadata["subsample_reason"] == "memory_limit"
+    assert item.embedding_metadata["requested_subsample_rate"] == 0.5
+    assert item.embedding_metadata["effective_subsample_rate"] == 0.5
+    assert np.var(fake_overlapindex.continuous_calls[-1]["fit_y"]) > 0.0
+    assert any("target-preserving regression subsample" in warning for warning in item.warnings)
 
 
 def test_streaming_embedding_records_memory_estimate(tmp_path, fake_overlapindex):

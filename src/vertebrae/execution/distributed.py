@@ -12,7 +12,11 @@ from vertebrae.cache import (
     ArtifactStoreConfig,
     create_artifact_store_from_config,
 )
-from vertebrae.cache.fingerprint import fingerprint_extractor_recipe, hash_json
+from vertebrae.cache.fingerprint import (
+    fingerprint_extractor_recipe,
+    hash_json,
+    hash_json_exact,
+)
 from vertebrae.cache.keys import named_output_artifact_key, named_output_artifact_keys
 from vertebrae.compression import (
     compress_embedding_artifact_key,
@@ -20,7 +24,7 @@ from vertebrae.compression import (
     compression_variant_name,
 )
 from vertebrae.compression.paired import compress_embedding_pair
-from vertebrae.config import ResourceProfilingConfig
+from vertebrae.config import ResourceProfilingConfig, SegmentationConfig
 from vertebrae.execution.jobs import (
     CompressionJob,
     EmbeddingMergeJob,
@@ -197,6 +201,11 @@ def materialize_segmentation_artifacts(
     from vertebrae.segmentation import materialize_segmentation_outputs
 
     recipe = extractor.recipe()
+    resolved_segmentation_config = (
+        segmentation_config if segmentation_config is not None else SegmentationConfig()
+    )
+    segmentation_config_dict = asdict(resolved_segmentation_config)
+    segmentation_config_hash = hash_json_exact(segmentation_config_dict)
     resource_config = resource_profiling_config or ResourceProfilingConfig()
     profiler = ResourceProfiler(
         resource_config,
@@ -204,13 +213,16 @@ def materialize_segmentation_artifacts(
         streaming=True,
         context={"measurement_scope": "artifact_materialization", "modality": "segmentation"},
     )
-    base_key = f"segmentation/{dataset.identity_key()}/" f"{fingerprint_extractor_recipe(recipe)}"
+    base_key = (
+        f"segmentation/{dataset.identity_key()}/"
+        f"{fingerprint_extractor_recipe(recipe)}/{segmentation_config_hash}"
+    )
     outputs = []
     materializations = list(
         materialize_segmentation_outputs(
             dataset,
             extractor,
-            config=segmentation_config,
+            config=resolved_segmentation_config,
             batch_size=batch_size,
             resource_profiler=profiler if resource_config.enabled else None,
         )
@@ -239,6 +251,8 @@ def materialize_segmentation_artifacts(
             "source_dataset_identity_key": dataset.identity_key(),
             "extractor_recipe": recipe,
             "recipe_hash": fingerprint_extractor_recipe(recipe),
+            "segmentation_config": make_json_safe(segmentation_config_dict),
+            "segmentation_config_hash": segmentation_config_hash,
             "output_name": materialization.name,
             "n_samples": int(embeddings.shape[0]),
             "embedding_dim": int(embeddings.shape[1]),
@@ -309,6 +323,8 @@ def materialize_segmentation_artifacts(
         "output_key": base_key,
         "dataset_identity_key": dataset.identity_key(),
         "extractor_recipe": recipe,
+        "segmentation_config": make_json_safe(segmentation_config_dict),
+        "segmentation_config_hash": segmentation_config_hash,
         "resource_profiling_config": asdict(resource_config),
         "resource_profile": (
             make_json_safe(shared_profile) if shared_profile is not None else None

@@ -1036,7 +1036,8 @@ class Benchmark:
             if regression:
                 warning = (
                     "Embedding memory estimate exceeded the configured budget; using a "
-                    f"random regression subsample with effective rate {effective_rate:.3f} "
+                    "target-preserving regression subsample with effective rate "
+                    f"{effective_rate:.3f} "
                     f"({len(indices)}/{parent_n_samples} samples)."
                 )
             else:
@@ -1048,7 +1049,8 @@ class Benchmark:
         else:
             if regression:
                 warning = (
-                    "Using user-requested random regression subsample with effective rate "
+                    "Using user-requested target-preserving regression subsample with effective "
+                    "rate "
                     f"{effective_rate:.3f} ({len(indices)}/{parent_n_samples} samples)."
                 )
             else:

@@ -359,6 +359,46 @@ def stratified_label_indices(
     return np.asarray(sorted(selected), dtype=int)
 
 
+def regression_subsample_indices(
+    y: Any,
+    n_take: int,
+    random_state: int = 42,
+) -> np.ndarray:
+    """Select deterministic regression rows while preserving target variation."""
+
+    values = np.asarray(y, dtype=float)
+    matrix = values.reshape(-1, 1) if values.ndim == 1 else values
+    if matrix.ndim != 2:
+        raise ValueError("Regression targets must be one- or two-dimensional.")
+    n_samples = len(matrix)
+    if n_samples < 3:
+        raise ValueError("Regression subsampling requires at least 3 target rows.")
+    if isinstance(n_take, bool) or not isinstance(n_take, (int, np.integer)):
+        raise TypeError("n_take must be an integer.")
+    if not 3 <= int(n_take) <= n_samples:
+        raise ValueError(f"n_take must be between 3 and {n_samples}.")
+
+    nonconstant_columns = np.flatnonzero(np.any(matrix != matrix[0], axis=0))
+    if not len(nonconstant_columns):
+        raise ValueError("Regression subsampling requires at least one non-constant target.")
+    if int(n_take) == n_samples:
+        return np.arange(n_samples, dtype=int)
+
+    rng = np.random.default_rng(random_state)
+    column = int(rng.choice(nonconstant_columns))
+    first = int(rng.integers(0, n_samples))
+    distinct = np.flatnonzero(matrix[:, column] != matrix[first, column])
+    second = int(rng.choice(distinct))
+    anchors = np.asarray([first, second], dtype=int)
+    remaining = np.setdiff1d(
+        np.arange(n_samples, dtype=int),
+        anchors,
+        assume_unique=False,
+    )
+    fill = rng.choice(remaining, size=int(n_take) - len(anchors), replace=False)
+    return np.sort(np.concatenate([anchors, np.asarray(fill, dtype=int)]))
+
+
 def display_label(label: Any) -> str:
     """Convert a label value to display text."""
 

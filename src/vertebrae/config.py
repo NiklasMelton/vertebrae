@@ -420,6 +420,7 @@ class SegmentationConfig:
     background_label: Any = "background"
     include_things: bool = True
     include_stuff: bool = True
+    ignore_instance_ids: Tuple[Any, ...] = (0,)
     max_instances_per_class: Optional[int] = None
     max_tokens_per_instance: Optional[int] = None
     max_tokens_per_class: Optional[int] = None
@@ -427,6 +428,15 @@ class SegmentationConfig:
     random_state: int = 42
 
     def __post_init__(self) -> None:
+        if isinstance(self.ignore_instance_ids, (str, bytes)):
+            raise TypeError("ignore_instance_ids must be an iterable of instance IDs.")
+        try:
+            self.ignore_instance_ids = tuple(self.ignore_instance_ids)
+        except TypeError as exc:
+            raise TypeError("ignore_instance_ids must be an iterable of instance IDs.") from exc
+        from vertebrae.utils.serialization import make_json_safe
+
+        make_json_safe(self.ignore_instance_ids)
         if not 0.0 <= self.coverage_threshold <= 1.0:
             raise ValueError("coverage_threshold must be between 0 and 1.")
         if not 0.0 <= self.ambiguity_margin <= 1.0:

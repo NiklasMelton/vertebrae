@@ -33,6 +33,9 @@ def materialize_segmentation_outputs(
 
     resolved = config or SegmentationConfig()
     dataset.validate()
+    source_image_indices = dataset.metadata.get("sample_indices")
+    if source_image_indices is None:
+        source_image_indices = list(range(len(dataset.annotations)))
     extractor.fit(dataset.X, None)
     collected: Dict[str, Dict[str, Any]] = {}
     for batch in dataset.iter_batches(batch_size=batch_size):
@@ -69,12 +72,13 @@ def materialize_segmentation_outputs(
             if bucket["layout"] != output.layout:
                 raise ValueError(f"Spatial output {output.name!r} changed layout between batches.")
             for local_index, image_index in enumerate(batch.indices):
+                source_image_index = int(source_image_indices[int(image_index)])
                 bucket["candidates"].extend(
                     _align_image(
                         output.embeddings[local_index],
                         output.layout,
                         dataset.annotations[int(image_index)],
-                        image_index=int(image_index),
+                        image_index=source_image_index,
                         output_name=output.name,
                         config=resolved,
                         annotation_transform=output.annotation_transform,
@@ -180,12 +184,22 @@ def _align_image(
                 reason = "stuff_disabled"
             resolved_label = label
             instance_id = None
-            if annotation.instance is not None:
+            if annotation.instance is not None and is_thing and not is_background:
                 instance_region = np.asarray(annotation.instance)[y0:y1, x0:x1]
                 matching = instance_region[region == label]
                 if matching.size:
                     ids, id_counts = np.unique(matching, return_counts=True)
-                    instance_id = ids[int(np.argmax(id_counts))]
+                    eligible = [
+                        index
+                        for index, candidate_id in enumerate(ids)
+                        if not any(
+                            _values_equal(candidate_id, ignored_id)
+                            for ignored_id in config.ignore_instance_ids
+                        )
+                    ]
+                    if eligible:
+                        best_id_index = max(eligible, key=lambda index: int(id_counts[index]))
+                        instance_id = ids[best_id_index]
             candidates.append(
                 {
                     "embedding": np.asarray(grid[row, column], dtype=float).reshape(1, -1),
@@ -243,7 +257,7 @@ def _sample_candidates(
     class_instances: Dict[Any, set] = {}
     for candidate in valid:
         label = candidate["label"]
-        instance_key = (candidate["image_id"], candidate["instance_id"])
+        instance_key = (candidate["image_id"], label, candidate["instance_id"])
         if candidate["is_background"] and config.max_background_tokens is not None:
             if class_counts.get(label, 0) >= config.max_background_tokens:
                 continue
@@ -299,7 +313,7 @@ def _materialization_metadata(
         "n_images": len({candidate["image_id"] for candidate in selected}),
         "n_instances": len(
             {
-                (candidate["image_id"], candidate["instance_id"])
+                (candidate["image_id"], candidate["label"], candidate["instance_id"])
                 for candidate in selected
                 if candidate["instance_id"] is not None
             }
@@ -316,3 +330,10 @@ def _materialization_metadata(
 
 def _provenance(candidate: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in candidate.items() if key != "embedding"}
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    result = left == right
+    if isinstance(result, np.ndarray):
+        return bool(np.all(result))
+    return bool(result)

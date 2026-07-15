@@ -58,10 +58,25 @@ when the leading class reaches `coverage_threshold` and exceeds the second class
 by `ambiguity_margin`. Sampling is deterministic and can be capped per instance,
 class, and background.
 
+Instance sampling applies only to non-background classes declared or inferred as
+things. Stuff and background tokens always have `instance_id=None`, even when an
+instance raster uses a numeric fill value for those pixels. By default,
+`ignore_instance_ids=(0,)` treats zero as a sentinel for thing regions as well;
+set `ignore_instance_ids=()` when zero is a legitimate instance ID. Instance
+counts and per-instance caps use the full `(image_id, semantic_label, instance_id)`
+identity, so the same raster ID in two semantic classes represents two distinct
+instances.
+
 Each retained token carries its source image as an independence group. Separatix
 therefore uses image-disjoint evaluation. If grouped Separatix support is
 insufficient, vertebrae records a structured skipped diagnostic and never retries
 row-wise.
+
+Subsetting a `SegmentationDataset` records the selected original image indices in
+`metadata["sample_indices"]`. Nested subsets compose those indices, and token
+groups and provenance continue to report the original dataset positions rather
+than subset-local positions. Empty subsets and misaligned source-index metadata
+fail during dataset construction.
 
 Torch and Keras wrappers accept `spatial_output_fn` plus explicit
 `spatial_output_specs`. `HFVisionExtractor` accepts `spatial_outputs` with
