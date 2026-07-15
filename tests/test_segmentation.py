@@ -1,4 +1,7 @@
+from dataclasses import asdict
+
 import numpy as np
+import pytest
 
 from vertebrae import (
     Benchmark,
@@ -17,6 +20,7 @@ from vertebrae import (
     StabilityConfig,
 )
 from vertebrae.cache import LocalArtifactStore
+from vertebrae.cache.fingerprint import hash_json_exact
 from vertebrae.execution import materialize_segmentation_artifacts
 from vertebrae.segmentation import materialize_segmentation_outputs
 
@@ -97,6 +101,136 @@ def test_precomputed_segmentation_embeddings_use_image_groups():
     ]
 
 
+def test_segmentation_config_normalizes_serializable_ignored_instance_ids():
+    config = SegmentationConfig(ignore_instance_ids=[0, 255])
+
+    assert config.ignore_instance_ids == (0, 255)
+    with pytest.raises(TypeError, match="iterable"):
+        SegmentationConfig(ignore_instance_ids=0)
+    with pytest.raises(TypeError, match="unsupported object"):
+        SegmentationConfig(ignore_instance_ids=(object(),))
+
+
+def test_segmentation_stuff_and_background_never_receive_instance_ids():
+    dataset = SegmentationDataset.from_arrays(
+        np.zeros((2, 2, 2, 3)),
+        np.array([[[0, 2], [0, 2]], [[0, 2], [0, 2]]]),
+        instance_masks=np.zeros((2, 2, 2), dtype=int),
+        class_metadata={
+            0: {"background": True, "is_thing": False},
+            2: {"is_thing": False},
+        },
+        identity=DatasetIdentity.declared("stuff-sentinel", "1"),
+    )
+    values = np.arange(2 * 1 * 2 * 3, dtype=float).reshape(2, 1, 2, 3)
+    extractor = CallableSpatialExtractor(
+        "stuff-sentinel",
+        transform_fn=lambda batch: values[: len(batch)],
+        output_specs=[
+            SpatialOutputSpec(
+                name="layer",
+                layout=SpatialLayout(grid_height=1, grid_width=2),
+            )
+        ],
+    )
+
+    materialized = materialize_segmentation_outputs(
+        dataset,
+        extractor,
+        SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            background_mode="include",
+            max_instances_per_class=1,
+            max_tokens_per_instance=1,
+        ),
+    )[0]
+
+    assert materialized.metadata["retained_tokens"] == 4
+    assert materialized.metadata["n_instances"] == 0
+    assert all(row["instance_id"] is None for row in materialized.provenance)
+
+
+def test_segmentation_ignored_thing_instance_zero_can_be_enabled_explicitly():
+    dataset = SegmentationDataset.from_arrays(
+        np.zeros((2, 1, 2, 3)),
+        np.array([[[1, 2]], [[1, 2]]]),
+        instance_masks=np.array([[[0, 5]], [[0, 5]]]),
+        class_metadata={1: {"is_thing": True}, 2: {"is_thing": True}},
+        identity=DatasetIdentity.declared("thing-zero", "1"),
+    )
+    values = np.arange(2 * 1 * 2 * 3, dtype=float).reshape(2, 1, 2, 3)
+
+    def materialize(config):
+        extractor = CallableSpatialExtractor(
+            "thing-zero",
+            transform_fn=lambda batch: values[: len(batch)],
+            output_specs=[
+                SpatialOutputSpec(
+                    name="layer",
+                    layout=SpatialLayout(grid_height=1, grid_width=2),
+                )
+            ],
+        )
+        return materialize_segmentation_outputs(dataset, extractor, config)[0]
+
+    default = materialize(SegmentationConfig(coverage_threshold=1.0, ambiguity_margin=0.0))
+    enabled = materialize(
+        SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            ignore_instance_ids=(),
+        )
+    )
+
+    assert default.metadata["n_instances"] == 2
+    assert enabled.metadata["n_instances"] == 4
+    assert [row["instance_id"] for row in default.provenance if row["label"] == 1] == [
+        None,
+        None,
+    ]
+    assert [row["instance_id"] for row in enabled.provenance if row["label"] == 1] == [
+        0,
+        0,
+    ]
+
+
+def test_segmentation_equal_instance_ids_in_different_classes_are_capped_independently():
+    dataset = SegmentationDataset.from_arrays(
+        np.zeros((2, 2, 2, 3)),
+        np.array([[[1, 1], [2, 2]], [[1, 1], [2, 2]]]),
+        instance_masks=np.full((2, 2, 2), 7),
+        class_metadata={1: {"is_thing": True}, 2: {"is_thing": True}},
+        identity=DatasetIdentity.declared("cross-class-instances", "1"),
+    )
+    values = np.arange(2 * 2 * 2 * 3, dtype=float).reshape(2, 2, 2, 3)
+    extractor = CallableSpatialExtractor(
+        "cross-class-instances",
+        transform_fn=lambda batch: values[: len(batch)],
+        output_specs=[
+            SpatialOutputSpec(
+                name="layer",
+                layout=SpatialLayout(grid_height=2, grid_width=2),
+            )
+        ],
+    )
+
+    materialized = materialize_segmentation_outputs(
+        dataset,
+        extractor,
+        SegmentationConfig(
+            coverage_threshold=1.0,
+            ambiguity_margin=0.0,
+            max_tokens_per_instance=1,
+        ),
+    )[0]
+
+    assert materialized.metadata["retained_tokens"] == 4
+    assert materialized.metadata["n_instances"] == 4
+    assert materialized.dataset.y.tolist().count(1) == 2
+    assert materialized.dataset.y.tolist().count(2) == 2
+
+
 def test_segmentation_benchmark_reuses_standard_scoring_pipeline(
     tmp_path,
     fake_overlapindex,
@@ -168,6 +302,40 @@ def test_segmentation_artifacts_have_independent_output_boundaries(tmp_path):
     assert store.get_labels(output["labels_key"]).shape == (8,)
     assert store.get_labels(output["groups_key"]).tolist() == [0, 0, 0, 0, 1, 1, 1, 1]
     assert len(store.get_json(output["provenance_key"])["rows"]) == 8
+
+
+def test_segmentation_artifact_keys_and_manifest_include_exact_resolved_config(tmp_path):
+    store = LocalArtifactStore(tmp_path)
+    common = {
+        "coverage_threshold": 1.0,
+        "ambiguity_margin": 0.0,
+        "background_mode": "include_excluded",
+    }
+    default_sentinel = SegmentationConfig(**common)
+    zero_is_valid = SegmentationConfig(**common, ignore_instance_ids=())
+    dataset = _dataset()
+    extractor = _extractor()
+
+    first = materialize_segmentation_artifacts(
+        dataset,
+        extractor,
+        store,
+        segmentation_config=default_sentinel,
+    )
+    second = materialize_segmentation_artifacts(
+        dataset,
+        extractor,
+        store,
+        segmentation_config=zero_is_valid,
+    )
+
+    assert first["output_key"] != second["output_key"]
+    assert first["segmentation_config_hash"] == hash_json_exact(asdict(default_sentinel))
+    assert second["segmentation_config_hash"] == hash_json_exact(asdict(zero_is_valid))
+    assert first["segmentation_config"]["ignore_instance_ids"] == [0]
+    assert second["segmentation_config"]["ignore_instance_ids"] == []
+    assert store.get_json(first["output_key"])["output_key"] == first["output_key"]
+    assert store.get_json(second["output_key"])["output_key"] == second["output_key"]
 
 
 def test_segmentation_artifacts_keep_formerly_colliding_names_independent(tmp_path):
