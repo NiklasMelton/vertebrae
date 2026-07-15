@@ -33,6 +33,9 @@ def materialize_segmentation_outputs(
 
     resolved = config or SegmentationConfig()
     dataset.validate()
+    source_image_indices = dataset.metadata.get("sample_indices")
+    if source_image_indices is None:
+        source_image_indices = list(range(len(dataset.annotations)))
     extractor.fit(dataset.X, None)
     collected: Dict[str, Dict[str, Any]] = {}
     for batch in dataset.iter_batches(batch_size=batch_size):
@@ -69,12 +72,13 @@ def materialize_segmentation_outputs(
             if bucket["layout"] != output.layout:
                 raise ValueError(f"Spatial output {output.name!r} changed layout between batches.")
             for local_index, image_index in enumerate(batch.indices):
+                source_image_index = int(source_image_indices[int(image_index)])
                 bucket["candidates"].extend(
                     _align_image(
                         output.embeddings[local_index],
                         output.layout,
                         dataset.annotations[int(image_index)],
-                        image_index=int(image_index),
+                        image_index=source_image_index,
                         output_name=output.name,
                         config=resolved,
                         annotation_transform=output.annotation_transform,

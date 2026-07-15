@@ -1,6 +1,7 @@
 """Image-aligned semantic, instance, and panoptic segmentation datasets."""
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Any, Dict, Iterable, Optional
 
 import numpy as np
@@ -44,6 +45,9 @@ class SegmentationDataset:
     modality: str = "segmentation"
     _identity_key_cache: Optional[str] = field(default=None, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        self.validate()
+
     @classmethod
     def from_arrays(
         cls,
@@ -69,14 +73,12 @@ class SegmentationDataset:
             )
             for semantic, instance in zip(semantics, instances)
         ]
-        dataset = cls(
+        return cls(
             X=_coerce_samples(images),
             annotations=annotations,
             identity=identity,
             metadata=metadata or {},
         )
-        dataset.validate()
-        return dataset
 
     @classmethod
     def from_image_paths(
@@ -99,6 +101,8 @@ class SegmentationDataset:
     def validate(self) -> None:
         if not isinstance(self.identity, DatasetIdentity):
             raise TypeError("identity must be a DatasetIdentity.")
+        self.annotations = list(self.annotations)
+        self.metadata = dict(self.metadata)
         if len(self.X) != len(self.annotations):
             raise ValueError(
                 f"images and annotations must have the same length; got {len(self.X)} "
@@ -106,7 +110,28 @@ class SegmentationDataset:
             )
         if not self.annotations:
             raise ValueError("SegmentationDataset must contain at least one image.")
+        if any(
+            not isinstance(annotation, SegmentationAnnotation)
+            for annotation in self.annotations
+        ):
+            raise TypeError("annotations must contain SegmentationAnnotation values.")
         self.annotations = [annotation.normalized() for annotation in self.annotations]
+        sample_indices = self.metadata.get("sample_indices")
+        if sample_indices is not None:
+            normalized_indices = list(sample_indices)
+            if len(normalized_indices) != len(self.annotations):
+                raise ValueError(
+                    "metadata sample_indices must have one entry per image; "
+                    f"got {len(normalized_indices)} and {len(self.annotations)}."
+                )
+            if any(
+                isinstance(index, (bool, np.bool_)) or not isinstance(index, Integral)
+                for index in normalized_indices
+            ):
+                raise TypeError("metadata sample_indices entries must be integers.")
+            if any(int(index) < 0 for index in normalized_indices):
+                raise ValueError("metadata sample_indices entries must be non-negative.")
+            self.metadata["sample_indices"] = [int(index) for index in normalized_indices]
 
     def iter_batches(
         self,
@@ -122,13 +147,25 @@ class SegmentationDataset:
 
     def subset(self, indices: Any) -> "SegmentationDataset":
         index_array = np.asarray(indices, dtype=int)
+        if index_array.ndim != 1:
+            raise ValueError("subset indices must be one-dimensional.")
+        parent_indices = self.metadata.get("sample_indices")
+        if parent_indices is None:
+            sample_indices = index_array.tolist()
+        else:
+            sample_indices = np.asarray(parent_indices, dtype=int)[index_array].tolist()
         return SegmentationDataset(
             X=_take(self.X, index_array),
             annotations=[self.annotations[int(index)] for index in index_array],
             identity=DatasetIdentity.derived(
                 self.identity_key(), "subset", {"indices": index_array}
             ),
-            metadata={**self.metadata, "sample_indices": index_array.tolist()},
+            metadata={
+                **self.metadata,
+                "subset": True,
+                "parent_n_images": len(self.annotations),
+                "sample_indices": sample_indices,
+            },
         )
 
     def summary(self) -> Dict[str, Any]:
