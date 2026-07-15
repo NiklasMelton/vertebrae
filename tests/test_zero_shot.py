@@ -19,10 +19,12 @@ from vertebrae import (
     DatasetIdentity,
     EmbeddingCompressionConfig,
     EmbeddingConfig,
+    MemoryConfig,
     OverlapScoringConfig,
     ResourceProfilingConfig,
     ZeroShotBenchmark,
     ZeroShotCandidate,
+    ZeroShotClassSpec,
     ZeroShotCompressionJob,
     ZeroShotConfig,
     ZeroShotDataset,
@@ -46,9 +48,10 @@ from vertebrae.execution import (
     zero_shot_scoring_artifact_key,
 )
 from vertebrae.execution.jobs import ShardSpec
-from vertebrae.extractors import CallableRetrievalExtractor
+from vertebrae.extractors import CallableRetrievalExtractor, PrecomputedExtractor
 from vertebrae.scoring import ZeroShotScorer
 from vertebrae.utils.semantic_labels import LABEL_KEY_PREFIX, semantic_label_key
+from vertebrae.zero_shot import _semantic_overlap_config, render_zero_shot_markdown_report
 
 
 def _cli_query(values):
@@ -67,6 +70,81 @@ def _alternate_query(values):
 
 def _alternate_gallery(values):
     return _cli_gallery(values)
+
+
+def test_local_zero_shot_propagates_progressive_memory_admission():
+    dataset = BenchmarkDataset.from_arrays(
+        ["left-0", "left-1", "right-0", "right-1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
+    sample_calls = []
+    prompt_calls = []
+
+    def encode_samples(values):
+        sample_calls.append(list(values))
+        return _cli_query(values)
+
+    def encode_prompts(values):
+        prompt_calls.append(list(values))
+        return _cli_gallery(values)
+
+    with pytest.raises(ValueError, match="memory budget"):
+        ZeroShotBenchmark(
+            protocol,
+            [
+                CallableRetrievalExtractor(
+                    "bounded",
+                    encode_samples,
+                    encode_prompts,
+                    query_modality="image",
+                    gallery_modality="text",
+                )
+            ],
+            sample_branch="query",
+            text_branch="gallery",
+            cache_config=CacheConfig(enabled=False),
+            embedding_config=EmbeddingConfig(batch_size=2),
+            memory_config=MemoryConfig(
+                max_memory_bytes=16,
+                allow_disk_spill=False,
+            ),
+        ).run()
+
+    assert sample_calls == [["left-0", "left-1"]]
+    assert prompt_calls == []
+
+
+def test_local_zero_shot_disk_spill_preserves_scores(fake_overlapindex):
+    dataset = BenchmarkDataset.from_arrays(
+        ["left-0", "left-1", "right-0", "right-1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
+    result = ZeroShotBenchmark(
+        protocol,
+        [
+            CallableRetrievalExtractor(
+                "spilled",
+                _cli_query,
+                _cli_gallery,
+                query_modality="image",
+                gallery_modality="text",
+            )
+        ],
+        sample_branch="query",
+        text_branch="gallery",
+        cache_config=CacheConfig(enabled=False),
+        embedding_config=EmbeddingConfig(batch_size=1),
+        memory_config=MemoryConfig(max_memory_bytes=1, allow_disk_spill=True),
+    ).run()
+
+    assert result.extractor_results[0].primary_score == pytest.approx(1.0)
+    assert result.metadata["memory_config"]["max_memory_bytes"] == 1
 
 
 def _materialize_aligned_zero_shot_endpoints(protocol, store):
@@ -150,6 +228,112 @@ def test_zero_shot_dataset_requires_explicit_complete_prompts():
     assert prompts[0] == "a photo of left"
     assert labels == ("left", "left", "right", "right")
     assert template_ids is not None
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{label.name}",
+        "{label[0]}",
+        "{other}",
+        "{label!r}",
+        "{label:>10}",
+        "{label",
+        "{{label}}",
+    ],
+)
+def test_zero_shot_templates_reject_malformed_or_unsafe_fields(template):
+    dataset = BenchmarkDataset.from_arrays(
+        ["a0", "a1", "b0", "b1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    with pytest.raises(ValueError, match="template|field|format"):
+        ZeroShotDataset.from_templates(dataset, [template])
+
+
+def test_zero_shot_templates_allow_repeated_exact_label_fields():
+    dataset = BenchmarkDataset.from_arrays(
+        ["a0", "a1", "b0", "b1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    protocol = ZeroShotDataset.from_templates(dataset, ["{label} versus {label}"])
+
+    assert protocol.prompt_rows()[0][0] == "left versus left"
+
+
+def test_zero_shot_protocol_uses_validated_immutable_snapshots():
+    dataset = BenchmarkDataset.from_arrays(
+        ["a0", "a1", "b0", "b1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    dataset.metadata["sample_indices"] = [10, 11, 12, 13]
+    metadata = {"nested": {"version": 1}}
+    protocol = ZeroShotDataset.from_templates(dataset, ["a {label}"], metadata=metadata)
+    original_recipe = protocol.protocol_recipe()
+    original_rows = protocol.prompt_rows()
+    original_samples = tuple(protocol.samples)
+    original_summary = protocol.summary()
+
+    metadata["nested"]["version"] = 2
+    with pytest.raises(TypeError):
+        protocol.metadata["nested"]["version"] = 3
+    with pytest.raises(AttributeError):
+        protocol.class_specs = ()
+    dataset.metadata["sample_indices"][0] = 999
+    dataset.X[0] = "changed"
+    dataset.modality = "changed"
+    original_recipe["metadata"]["nested"]["version"] = 999
+    original_summary["source_dataset"]["modality"] = "changed"
+
+    assert protocol.protocol_recipe()["metadata"]["nested"]["version"] == 1
+    assert protocol.prompt_rows() == original_rows
+    assert protocol.sample_ids() == (10, 11, 12, 13)
+    assert protocol.samples == original_samples
+    assert isinstance(protocol.samples, tuple)
+    assert protocol.modality == "image"
+    assert protocol.summary()["source_dataset"]["modality"] == "image"
+
+
+def test_zero_shot_dataset_rejects_duplicate_template_ids_within_a_class():
+    dataset = BenchmarkDataset.from_arrays(
+        ["a0", "a1", "b0", "b1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    with pytest.raises(ValueError, match="template_ids must be unique"):
+        ZeroShotDataset(
+            dataset,
+            [
+                ZeroShotClassSpec("left", ("left one", "left two"), ("same", "same")),
+                ZeroShotClassSpec("right", ("right one", "right two"), ("same", "same")),
+            ],
+        )
+
+
+def test_zero_shot_dataset_rejects_blank_manual_template_ids():
+    dataset = BenchmarkDataset.from_arrays(
+        ["a0", "a1", "b0", "b1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    with pytest.raises(ValueError, match="template_ids must be non-empty"):
+        ZeroShotDataset(
+            dataset,
+            [
+                ZeroShotClassSpec("left", ("left",), (" ",)),
+                ZeroShotClassSpec("right", ("right",), (" ",)),
+            ],
+        )
 
 
 def test_zero_shot_protocol_and_evaluation_identities_hash_complete_content():
@@ -238,6 +422,16 @@ def test_exact_hash_supports_stable_semantic_label_types():
     assert semantic_label_key(reserved) != reserved
 
 
+def test_zero_shot_overlap_config_translates_semantic_label_options():
+    label = UUID("00112233-4455-6677-8899-aabbccddeeff")
+    translated = _semantic_overlap_config(
+        OverlapScoringConfig(k={label: 3}, exclude_classes=[label])
+    )
+
+    assert translated.k == {semantic_label_key(label): 3}
+    assert translated.exclude_classes == [semantic_label_key(label)]
+
+
 def test_zero_shot_supports_uuid_labels_through_protocol_artifacts_and_scoring(tmp_path):
     left = UUID("00112233-4455-6677-8899-aabbccddeeff")
     right = UUID("00112233-4455-6677-8899-aabbccddee00")
@@ -269,17 +463,32 @@ def test_zero_shot_supports_uuid_labels_through_protocol_artifacts_and_scoring(t
     assert set(result.per_class) == {left, right}
 
 
+def test_zero_shot_scorer_distinguishes_python_equal_typed_labels():
+    labels = [1, 1, True, True]
+    result = ZeroShotScorer().score(
+        np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]]),
+        np.asarray([[1.0, 0.0], [0.0, 1.0]]),
+        labels,
+        class_labels=[1, True],
+        prompt_labels=[1, True],
+    )
+
+    expected_keys = {semantic_label_key(1), semantic_label_key(True)}
+    assert result.score == pytest.approx(1.0)
+    assert set(result.per_class) == expected_keys
+    assert set(result.to_dict()["per_class"]) == expected_keys
+
+
 def test_zero_shot_rejects_custom_labels_without_stable_exact_identity():
     left = _UnsupportedLabel("left")
     right = _UnsupportedLabel("right")
-    dataset = BenchmarkDataset.from_arrays(
-        ["left-0", "left-1", "right-0", "right-1"],
-        [left, left, right, right],
-        modality="image",
-        identity=DatasetIdentity.ephemeral(),
-    )
-    with pytest.raises(ValueError, match="stable exact identity"):
-        ZeroShotDataset.from_dataset(dataset, {left: "left", right: "right"})
+    with pytest.raises(ValueError, match="deterministic semantic values"):
+        BenchmarkDataset.from_arrays(
+            ["left-0", "left-1", "right-0", "right-1"],
+            [left, left, right, right],
+            modality="image",
+            identity=DatasetIdentity.ephemeral(),
+        )
 
 
 def test_zero_shot_typed_label_collisions_survive_local_and_artifact_reports(
@@ -291,9 +500,9 @@ def test_zero_shot_typed_label_collisions_survive_local_and_artifact_reports(
         ["left-0", "left-1", "right-0", "right-1"],
         [uuid_label, uuid_label, string_label, string_label],
         modality="image",
-        metadata={"sample_indices": [UUID(int=index + 1) for index in range(4)]},
         identity=DatasetIdentity.ephemeral(),
     )
+    dataset.metadata["sample_indices"] = [UUID(int=index + 1) for index in range(4)]
     protocol = ZeroShotDataset.from_templates(
         dataset,
         ["{label}"],
@@ -718,6 +927,31 @@ def test_zero_shot_rejects_multilabel_and_zero_embeddings():
         )
 
 
+@pytest.mark.parametrize("similarity", ["dot", "squared_l2"])
+def test_zero_shot_non_cosine_similarity_accepts_zero_sample_rows(similarity):
+    result = ZeroShotScorer(ZeroShotConfig(similarity=similarity, top_k=(1,))).score(
+        np.asarray([[0.0, 0.0], [1.0, 0.0]]),
+        np.asarray([[1.0, 0.0], [0.0, 1.0]]),
+        ["x", "y"],
+        class_labels=["x", "y"],
+        prompt_labels=["x", "y"],
+    )
+
+    assert np.isfinite(result.score)
+
+
+def test_zero_shot_scorer_rejects_incomplete_template_class_coverage():
+    with pytest.raises(ValueError, match="Every template_id"):
+        ZeroShotScorer().score(
+            np.eye(2),
+            np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]]),
+            ["left", "right"],
+            class_labels=["left", "right"],
+            prompt_labels=["left", "left", "right", "right"],
+            template_ids=["first", "first", "second", "second"],
+        )
+
+
 def test_zero_shot_artifact_round_trip(tmp_path, fake_overlapindex):
     dataset = BenchmarkDataset.from_arrays(
         ["left-0", "left-1", "right-0", "right-1"],
@@ -748,6 +982,8 @@ def test_zero_shot_artifact_round_trip(tmp_path, fake_overlapindex):
                     branch=branch,
                     shard=ShardSpec(total_shards=2, shard_index=index),
                     output_key=key,
+                    cache_eligible=False,
+                    cache_status="disabled",
                 ),
                 store,
             )
@@ -772,11 +1008,15 @@ def test_zero_shot_artifact_round_trip(tmp_path, fake_overlapindex):
         store,
     )
     assert compressed["compression_metadata"]["fit_side"] == "samples"
+    assert compressed["cache_eligible"] is False
+    assert compressed["cache_status"] == "disabled"
     assert store.get_json(compressed["output_key"])["sample_output_key"] == "compressed/samples"
     compressed_samples = store.get_json("compressed/samples")
     compressed_prompts = store.get_json("compressed/prompts")
     assert compressed_samples["compression_pair_id"] == compressed_prompts["compression_pair_id"]
     assert compressed_samples["dtype"] == "float16"
+    assert compressed_samples["cache_status"] == "disabled"
+    assert compressed_prompts["cache_status"] == "disabled"
     artifact = score_zero_shot_artifact(
         ZeroShotScoringJob(
             sample_embedding_key="compressed/samples",
@@ -787,6 +1027,8 @@ def test_zero_shot_artifact_round_trip(tmp_path, fake_overlapindex):
         store,
     )
     assert artifact["artifact_type"] == "zero_shot_evaluation"
+    assert artifact["cache_eligible"] is False
+    assert artifact["cache_status"] == "disabled"
     assert artifact["zero_shot"]["metrics"]["accuracy"] == pytest.approx(1.0)
     reconstructed = zero_shot_benchmark_result_from_artifacts(["score"], store, "report")
     assert reconstructed.extractor_results[0].zero_shot.score == pytest.approx(1.0)
@@ -988,6 +1230,16 @@ def test_zero_shot_planning_caps_endpoint_shards_and_cli_uses_plan(tmp_path):
         protocol, extractor, 4, side="prompts", branch="gallery"
     )
     assert [job.shard.total_shards for job in prompts] == [2, 2]
+    disabled = plan_zero_shot_embedding_shard_jobs(
+        protocol,
+        PrecomputedExtractor(cache_embeddings=False),
+        2,
+        side="samples",
+        branch="query",
+    )
+    assert all(job.output_key.startswith("runs/") for job in disabled)
+    assert all(not job.cache_eligible for job in disabled)
+    assert all(job.cache_status == "disabled" for job in disabled)
     dataset_path, extractor_path = tmp_path / "dataset.pkl", tmp_path / "extractor.pkl"
     dataset_path.write_bytes(pickle.dumps(protocol))
     extractor_path.write_bytes(pickle.dumps(extractor))
@@ -1076,12 +1328,34 @@ def test_zero_shot_callable_cache_identity_and_candidate_branches(tmp_path, fake
         cache_config=CacheConfig(cache_dir=str(tmp_path)),
     ).run()
     assert not run.extractor_results[0].cache_metadata["samples"]["enabled"]
+    assert (
+        run.extractor_results[0].cache_metadata["samples"]["cache_status"]
+        == "bypassed_unsafe_identity"
+    )
+    assert (
+        run.extractor_results[0].cache_metadata["prompts"]["cache_status"]
+        == "bypassed_unsafe_identity"
+    )
     assert any(
         "Skipped zero-shot embedding cache" in warning
         for warning in run.extractor_results[0].warnings
     )
-    with pytest.raises(ValueError, match="cache_identity"):
-        zero_shot_embedding_artifact_key(protocol, unsafe, "samples", "query")
+    canonical_unsafe_key = zero_shot_embedding_artifact_key(
+        protocol,
+        unsafe,
+        "samples",
+        "query",
+    )
+    unsafe_jobs = plan_zero_shot_embedding_shard_jobs(
+        protocol,
+        unsafe,
+        2,
+        side="samples",
+        branch="query",
+    )
+    assert all(job.output_key.startswith("runs/") for job in unsafe_jobs)
+    assert all(canonical_unsafe_key in job.output_key for job in unsafe_jobs)
+    assert all(job.cache_status == "bypassed_unsafe_identity" for job in unsafe_jobs)
     restored = CallableRetrievalExtractor(
         "restored",
         lambda values: _cli_query(values),
@@ -1107,6 +1381,8 @@ def test_zero_shot_callable_cache_identity_and_candidate_branches(tmp_path, fake
     ).run()
     assert not first_run.extractor_results[0].cache_metadata["samples"]["hit"]
     assert second_run.extractor_results[0].cache_metadata["samples"]["hit"]
+    assert first_run.extractor_results[0].cache_metadata["samples"]["cache_status"] == "miss"
+    assert second_run.extractor_results[0].cache_metadata["samples"]["cache_status"] == "hit"
     heterogeneous = ZeroShotBenchmark(
         protocol,
         [
@@ -1119,14 +1395,59 @@ def test_zero_shot_callable_cache_identity_and_candidate_branches(tmp_path, fake
     } == {"query", "vision"}
 
 
+def test_zero_shot_markdown_escapes_all_dynamic_values(fake_overlapindex):
+    dataset = BenchmarkDataset.from_arrays(
+        ["left-0", "left-1", "right-0", "right-1"],
+        ["left", "left", "right", "right"],
+        modality="image",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    protocol = ZeroShotDataset.from_templates(dataset, ["{label}"])
+    result = ZeroShotBenchmark(
+        protocol,
+        [
+            CallableRetrievalExtractor(
+                "aligned",
+                _cli_query,
+                _cli_gallery,
+                query_modality="image",
+                gallery_modality="text",
+            )
+        ],
+        sample_branch="query",
+        text_branch="gallery",
+    ).run()
+    item = result.extractor_results[0]
+    injected = "name|C:\\model\n## injected"
+    item.name = injected
+    item.zero_shot.primary_metric = "accuracy|unsafe\\metric\n## metric-injected"
+    item.compression_metadata["method"] = "method|unsafe\\path\n## method-injected"
+    item.warnings = ["warning|unsafe\\text\n- injected-list-item"]
+    item.zero_shot.metadata["label_catalog"][0]["report_display"] = (
+        "label|unsafe\\text\n## label-injected"
+    )
+    result.dataset_summary["sample_modality"] = "<script>|unsafe\\value\n## summary-injected"
+
+    report = render_zero_shot_markdown_report(result)
+
+    assert r"name\|C:\\model<br>## injected" in report
+    assert r"accuracy\|unsafe\\metric<br>## metric-injected" in report
+    assert r"method\|unsafe\\path<br>## method-injected" in report
+    assert r"warning\|unsafe\\text<br>- injected-list-item" in report
+    assert r"label\|unsafe\\text<br>## label-injected" in report
+    assert "&lt;script&gt;\\|unsafe" in report
+    assert "\n## injected" not in report
+    assert "<script>" not in report
+
+
 def test_zero_shot_protocol_provenance_variants_and_sample_ids(tmp_path, fake_overlapindex):
     dataset = BenchmarkDataset.from_arrays(
         ["left-0", "left-1", "right-0", "right-1"],
         ["left", "left", "right", "right"],
         modality="image",
-        metadata={"sample_indices": [10, 11, 20, 21]},
         identity=DatasetIdentity.ephemeral(),
     )
+    dataset.metadata["sample_indices"] = [10, 11, 20, 21]
     protocol = ZeroShotDataset.from_templates(dataset, ["look at {label}"])
     extractor = CallableRetrievalExtractor(
         "aligned", _cli_query, _cli_gallery, query_modality="image", gallery_modality="text"

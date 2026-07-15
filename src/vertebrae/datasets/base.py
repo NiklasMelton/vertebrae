@@ -1,6 +1,7 @@
 """Dataset abstraction for benchmark inputs."""
 
 from dataclasses import dataclass, field
+from numbers import Integral, Real
 from typing import Any, Dict, Iterable, Iterator, Optional, Union, cast
 
 import numpy as np
@@ -26,7 +27,63 @@ from vertebrae.utils.labels import (
     stratified_label_indices,
     target_summary,
 )
-from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
+from vertebrae.utils.semantic_labels import label_display, semantic_label_key
+from vertebrae.utils.validation import (
+    ensure_numeric_matrix,
+    is_sparse_matrix,
+    validate_row_indices,
+)
+
+_ROW_ALIGNED_METADATA_KEY = "_row_aligned_metadata_keys"
+_TARGET_METADATA_KEYS = frozenset({"target_type", "label_names", "target_names"})
+_STRUCTURAL_METADATA_KEYS = frozenset(
+    {
+        _ROW_ALIGNED_METADATA_KEY,
+        "columns",
+        "composition",
+        "edge_index",
+        "embedding_source",
+        "entity_ids",
+        "entity_type",
+        "frame_rate",
+        "group_name",
+        "groups",
+        "input_columns",
+        "input_fields",
+        "label_catalog",
+        "label_hierarchy",
+        "label_view",
+        "modalities",
+        "modality_detail",
+        "node_ids",
+        "pair_ids",
+        "parent_row_positions",
+        "parent_ids",
+        "parent_n_samples",
+        "precomputed_embeddings",
+        "relational_embeddings",
+        "relational_unit",
+        "sample_indices",
+        "sampling_rate",
+        "segmentation_embeddings",
+        "source",
+        "subset",
+        "target_view",
+        "target_views",
+        "triplet_ids",
+        "unit_annotation_task_family",
+        "unit_annotation_unit_type",
+        "unit_annotations",
+        "unit_coordinates",
+        "unit_embeddings",
+        "unit_ids",
+        "unit_positions",
+        "unit_provenance",
+        "unit_spans",
+        "unit_type",
+    }
+    | _TARGET_METADATA_KEYS
+)
 
 
 @dataclass
@@ -110,7 +167,7 @@ class BenchmarkDataset:
             modality=modality,
             identity=identity,
             metadata=_metadata_with_target_metadata(
-                metadata,
+                _merge_user_metadata({}, metadata, reserved=_TARGET_METADATA_KEYS),
                 label_names=label_names,
                 target_type=target_type,
                 target_names=target_names,
@@ -178,7 +235,7 @@ class BenchmarkDataset:
             "columns": list(df.columns),
             "input_columns": input_cols,
         }
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=resolved_label_names,
@@ -225,7 +282,7 @@ class BenchmarkDataset:
         """
 
         merged_metadata = {"source": "image_paths"}
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
@@ -266,7 +323,7 @@ class BenchmarkDataset:
         """
 
         merged_metadata = {"source": "audio_paths"}
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
@@ -308,12 +365,21 @@ class BenchmarkDataset:
             Validated audio dataset.
         """
 
+        resolved_sampling_rate = _strict_positive_integer(sampling_rate, "sampling_rate")
         label_array = coerce_label_input(labels)
+        waveforms = [
+            _validated_numeric_sample(
+                waveform,
+                "audio waveform",
+                allowed_ranks=(1, 2),
+            )
+            for waveform in list(audio)
+        ]
         merged_metadata = {
             "source": "audio_arrays",
-            "sampling_rate": int(sampling_rate),
+            "sampling_rate": resolved_sampling_rate,
         }
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
@@ -322,8 +388,8 @@ class BenchmarkDataset:
         )
         dataset = cls(
             X={
-                "array": _coerce_object_sequence(audio),
-                "sampling_rate": np.full(len(label_array), int(sampling_rate), dtype=int),
+                "array": _coerce_object_sequence(waveforms),
+                "sampling_rate": np.full(len(label_array), resolved_sampling_rate, dtype=int),
             },
             y=label_array,
             modality="audio",
@@ -357,7 +423,7 @@ class BenchmarkDataset:
         """
 
         merged_metadata = {"source": "video_paths"}
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
@@ -400,16 +466,28 @@ class BenchmarkDataset:
         """
 
         label_array = coerce_label_input(labels)
+        clips = [
+            _validated_numeric_sample(
+                clip,
+                "video frame array",
+                allowed_ranks=(4,),
+            )
+            for clip in list(frames)
+        ]
         merged_metadata: Dict[str, Any] = {"source": "video_arrays"}
-        payload: Dict[str, Any] = {"frames": _coerce_object_sequence(frames)}
+        payload: Dict[str, Any] = {"frames": _coerce_object_sequence(clips)}
         if frame_rate is not None:
-            if np.isscalar(frame_rate):
-                resolved_rate = float(cast(Any, frame_rate))
+            rate_array = np.asarray(frame_rate)
+            if rate_array.ndim == 0:
+                resolved_rate = _strict_positive_real(rate_array.item(), "frame_rate")
                 payload["frame_rate"] = np.full(len(label_array), resolved_rate, dtype=float)
                 merged_metadata["frame_rate"] = resolved_rate
             else:
-                payload["frame_rate"] = np.asarray(frame_rate, dtype=float)
-        merged_metadata.update(metadata or {})
+                payload["frame_rate"] = _validated_frame_rates(
+                    rate_array,
+                    len(label_array),
+                )
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
@@ -456,21 +534,53 @@ class BenchmarkDataset:
             Validated time-series dataset.
         """
 
+        series_array = _validated_numeric_sample(
+            series,
+            "time-series values",
+            allowed_ranks=(2, 3),
+        )
         merged_metadata = {"source": "time_series"}
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
             target_type=target_type,
             target_names=target_names,
         )
-        payload: Dict[str, Any] = {"series": np.asarray(series)}
+        payload: Dict[str, Any] = {"series": series_array}
         if observed_mask is not None:
-            payload["observed_mask"] = np.asarray(observed_mask)
+            mask = _validated_numeric_sample(
+                observed_mask,
+                "observed_mask",
+                allowed_ranks=(series_array.ndim,),
+                allow_bool=True,
+            )
+            if mask.shape != series_array.shape:
+                raise ValueError("observed_mask must have the same shape as series.")
+            if not np.all((mask == 0) | (mask == 1)):
+                raise ValueError("observed_mask must contain only binary 0/1 values.")
+            payload["observed_mask"] = mask
         if time_features is not None:
-            payload["time_features"] = np.asarray(time_features)
+            features = _validated_numeric_sample(
+                time_features,
+                "time_features",
+                allowed_ranks=(2, 3),
+            )
+            if features.shape[:2] != series_array.shape[:2]:
+                raise ValueError(
+                    "time_features must align with the sample and time axes of series."
+                )
+            payload["time_features"] = features
         if timestamps is not None:
-            payload["timestamps"] = np.asarray(timestamps)
+            timestamp_values = np.asarray(timestamps)
+            if timestamp_values.ndim not in (2, 3) or any(
+                size < 1 for size in timestamp_values.shape
+            ):
+                raise ValueError("timestamps must be a non-empty 2D or 3D array aligned to series.")
+            if timestamp_values.shape[:2] != series_array.shape[:2]:
+                raise ValueError("timestamps must align with the sample and time axes of series.")
+            _validate_timestamp_values(timestamp_values)
+            payload["timestamps"] = timestamp_values
         dataset = cls(
             X=payload,
             y=coerce_label_input(labels),
@@ -539,7 +649,7 @@ class BenchmarkDataset:
             "input_fields": input_keys,
             "modalities": {key: str(modalities[key]) for key in input_keys},
         }
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
@@ -571,7 +681,7 @@ class BenchmarkDataset:
         """Create a graph dataset from aligned graph objects."""
 
         merged_metadata = {"source": "graphs"}
-        merged_metadata.update(metadata or {})
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         merged_metadata = _metadata_with_target_metadata(
             merged_metadata,
             label_names=label_names,
@@ -611,16 +721,43 @@ class BenchmarkDataset:
             Validated embedding dataset.
         """
 
-        merged_metadata = {"precomputed_embeddings": True}
-        merged_metadata.update(metadata or {})
+        matrix = ensure_numeric_matrix(embeddings, "embeddings", allow_sparse=True)
+        merged_metadata = _merge_user_metadata(
+            {"precomputed_embeddings": True},
+            metadata,
+        )
+        return cls._from_prepared_embeddings(
+            matrix,
+            labels,
+            identity=identity,
+            metadata=merged_metadata,
+            label_names=label_names,
+            target_type=target_type,
+            target_names=target_names,
+        )
+
+    @classmethod
+    def _from_prepared_embeddings(
+        cls,
+        embeddings: Any,
+        labels: Any,
+        *,
+        identity: DatasetIdentity,
+        metadata: Dict[str, Any],
+        label_names: Optional[Iterable[Any]] = None,
+        target_type: str = "auto",
+        target_names: Optional[Iterable[str]] = None,
+    ) -> "BenchmarkDataset":
+        """Build an embedding dataset from constructor-owned structural metadata."""
+
         merged_metadata = _metadata_with_target_metadata(
-            merged_metadata,
+            metadata,
             label_names=label_names,
             target_type=target_type,
             target_names=target_names,
         )
         dataset = cls(
-            X=embeddings if is_sparse_matrix(embeddings) else np.asarray(embeddings),
+            X=embeddings,
             y=coerce_label_input(labels),
             modality="embeddings",
             identity=identity,
@@ -641,13 +778,16 @@ class BenchmarkDataset:
     ) -> "BenchmarkDataset":
         """Create a grouped token dataset from precomputed segmentation features."""
 
-        merged_metadata = {
-            "precomputed_embeddings": True,
-            "segmentation_embeddings": True,
-            **(metadata or {}),
-        }
-        return cls.from_embeddings(
-            embeddings,
+        matrix = ensure_numeric_matrix(embeddings, "segmentation embeddings", allow_sparse=True)
+        merged_metadata = _merge_user_metadata(
+            {
+                "precomputed_embeddings": True,
+                "segmentation_embeddings": True,
+            },
+            metadata,
+        )
+        return cls._from_prepared_embeddings(
+            matrix,
             labels,
             identity=identity,
             metadata=merged_metadata,
@@ -729,8 +869,9 @@ class BenchmarkDataset:
                 n_rows=None,
                 name="edge_index",
             ).tolist()
-        merged_metadata.update(metadata or {})
-        return cls.from_embeddings(
+        merged_metadata = _register_row_aligned_metadata(merged_metadata, "node_ids")
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
+        return cls._from_prepared_embeddings(
             matrix,
             labels,
             identity=identity,
@@ -772,8 +913,9 @@ class BenchmarkDataset:
             "modality_detail": f"{normalized_entity_type}_embeddings",
             "entity_ids": resolved_entity_ids,
         }
-        merged_metadata.update(metadata or {})
-        return cls.from_embeddings(
+        merged_metadata = _register_row_aligned_metadata(merged_metadata, "entity_ids")
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
+        return cls._from_prepared_embeddings(
             matrix,
             labels,
             identity=identity,
@@ -846,8 +988,9 @@ class BenchmarkDataset:
                 _num_samples(node_embeddings) if node_embeddings is not None else len(node_ids),
                 name="node_ids",
             )
-        merged_metadata.update(metadata or {})
-        return cls.from_embeddings(
+        merged_metadata = _register_row_aligned_metadata(merged_metadata, "edge_index")
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
+        return cls._from_prepared_embeddings(
             matrix,
             labels,
             identity=identity,
@@ -916,8 +1059,9 @@ class BenchmarkDataset:
                 else len(entity_ids),
                 name="entity_ids",
             )
-        merged_metadata.update(metadata or {})
-        return cls.from_embeddings(
+        merged_metadata = _register_row_aligned_metadata(merged_metadata, "pair_ids")
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
+        return cls._from_prepared_embeddings(
             matrix,
             labels,
             identity=identity,
@@ -989,8 +1133,9 @@ class BenchmarkDataset:
                 else len(entity_ids),
                 name="entity_ids",
             )
-        merged_metadata.update(metadata or {})
-        return cls.from_embeddings(
+        merged_metadata = _register_row_aligned_metadata(merged_metadata, "triplet_ids")
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
+        return cls._from_prepared_embeddings(
             matrix,
             labels,
             identity=identity,
@@ -1010,6 +1155,9 @@ class BenchmarkDataset:
 
         if not isinstance(self.identity, DatasetIdentity):
             raise TypeError("identity must be a DatasetIdentity.")
+        if not isinstance(self.metadata, dict):
+            raise TypeError("metadata must be a dictionary.")
+        self.metadata = dict(self.metadata)
         label_names = self.metadata.get("label_names")
         requested_target_type = self.metadata.get("target_type", "auto")
         target_names = self.metadata.get("target_names")
@@ -1028,6 +1176,18 @@ class BenchmarkDataset:
         if len(self.y) == 0:
             raise ValueError("Dataset must contain at least one sample.")
         self.metadata["target_type"] = label_metadata["target_type"]
+        if label_metadata["target_type"] != REGRESSION_TARGET:
+            declared_catalog = self.metadata.get("label_catalog")
+            declared_keys = (
+                {str(item.get("key")) for item in declared_catalog if isinstance(item, dict)}
+                if isinstance(declared_catalog, list)
+                else set()
+            )
+            observed_keys = set(label_metadata.get("class_counts", {}))
+            if not declared_catalog or not observed_keys.issubset(declared_keys):
+                self.metadata["label_catalog"] = list(label_metadata.get("label_catalog", []))
+        else:
+            self.metadata.pop("label_catalog", None)
         if label_metadata["target_type"] == "multi_label":
             self.metadata["label_names"] = list(label_metadata["label_names"])
             self.metadata.pop("target_names", None)
@@ -1037,6 +1197,7 @@ class BenchmarkDataset:
         else:
             self.metadata.pop("label_names", None)
             self.metadata.pop("target_names", None)
+        _validate_row_aligned_metadata(self.metadata, n_samples=n_samples)
         if label_metadata["target_type"] == REGRESSION_TARGET:
             if len(self.y) < 3:
                 raise ValueError("Regression datasets must contain at least 3 samples.")
@@ -1059,12 +1220,17 @@ class BenchmarkDataset:
             Mapping from original label values to sample counts.
         """
 
-        return class_counts(
+        counts = class_counts(
             self.y,
             label_names=self.metadata.get("label_names"),
             target_type=self.metadata.get("target_type", "auto"),
             target_names=self.metadata.get("target_names"),
         )
+        label_view = self.active_label_view()
+        catalog = label_view.get("label_catalog", [])
+        if label_view.get("kind") == "hierarchy" and catalog:
+            return {label_display(key, catalog): count for key, count in counts.items()}
+        return counts
 
     def with_label_hierarchy(
         self,
@@ -1113,6 +1279,7 @@ class BenchmarkDataset:
             view_metadata["key"] = f"hierarchy:{view_metadata['level']}:{view_metadata['name']}"
         metadata = dict(self.metadata)
         metadata["label_view"] = view_metadata
+        metadata["label_catalog"] = list(view_metadata.get("label_catalog", []))
         dataset = type(self)(
             X=self.X,
             y=labels,
@@ -1244,6 +1411,7 @@ class BenchmarkDataset:
         metadata["unit_annotation_unit_type"] = str(unit_type)
         if task_family is not None:
             metadata["unit_annotation_task_family"] = str(task_family)
+        metadata = _register_row_aligned_metadata(metadata, "unit_annotations")
         dataset = type(self)(
             X=self.X,
             y=coerce_label_input(self.y),
@@ -1270,7 +1438,7 @@ class BenchmarkDataset:
     def with_groups(self, groups: Any, name: str = "group") -> "BenchmarkDataset":
         """Return a dataset with aligned independence-group identifiers."""
 
-        group_array = np.asarray(groups)
+        group_array = np.asarray(groups, dtype=object)
         if group_array.ndim != 1:
             raise ValueError("groups must be one-dimensional.")
         if len(group_array) != len(self.y):
@@ -1279,13 +1447,20 @@ class BenchmarkDataset:
                 f"and {len(self.y)}."
             )
         for value in group_array:
+            normalized = value.item() if hasattr(value, "item") else value
+            if _is_missing_identifier(normalized):
+                raise ValueError("groups values must be non-missing.")
             try:
-                hash(value.item() if hasattr(value, "item") else value)
+                hash(normalized)
+                canonical_json_exact(normalized)
             except TypeError as exc:
-                raise ValueError("groups values must be hashable.") from exc
+                raise ValueError(
+                    "groups values must be hashable and have deterministic exact identities."
+                ) from exc
         metadata = dict(self.metadata)
         metadata["groups"] = group_array.tolist()
         metadata["group_name"] = str(name)
+        metadata = _register_row_aligned_metadata(metadata, "groups")
         dataset = type(self)(
             X=self.X,
             y=coerce_label_input(self.y),
@@ -1304,7 +1479,7 @@ class BenchmarkDataset:
         """Return aligned independence groups when configured."""
 
         values = self.metadata.get("groups")
-        return None if values is None else np.asarray(values)
+        return None if values is None else np.asarray(values, dtype=object)
 
     def iter_batches(
         self,
@@ -1324,8 +1499,7 @@ class BenchmarkDataset:
             ValueError: If `batch_size` is less than one.
         """
 
-        if batch_size < 1:
-            raise ValueError("batch_size must be >= 1.")
+        batch_size = _strict_positive_integer(batch_size, "batch_size")
         shard = shard or ShardSpec()
         indices = shard.indices(len(self.y))
         for start in range(0, len(indices), batch_size):
@@ -1352,22 +1526,35 @@ class BenchmarkDataset:
             ValueError: If `rate` is outside `(0, 1]`.
         """
 
-        if not 0.0 < rate <= 1.0:
+        if isinstance(rate, (bool, np.bool_)) or not isinstance(rate, Real):
+            raise TypeError("subsample rate must be a finite real number.")
+        resolved_rate = float(rate)
+        if not np.isfinite(resolved_rate) or not 0.0 < resolved_rate <= 1.0:
             raise ValueError("subsample rate must be in (0, 1].")
-        if rate >= 1.0:
+        if isinstance(random_state, (bool, np.bool_)) or not isinstance(random_state, Integral):
+            raise TypeError("random_state must be an integer.")
+        if isinstance(min_samples_per_class, (bool, np.bool_)) or not isinstance(
+            min_samples_per_class, Integral
+        ):
+            raise TypeError("min_samples_per_class must be an integer.")
+        if int(min_samples_per_class) < 1:
+            raise ValueError("min_samples_per_class must be >= 1.")
+        resolved_random_state = int(random_state)
+        resolved_min_samples = int(min_samples_per_class)
+        if resolved_rate >= 1.0:
             return np.arange(len(self.y), dtype=int)
         if self.metadata.get("target_type") == REGRESSION_TARGET:
-            n_take = min(len(self.y), max(3, int(np.floor(len(self.y) * rate))))
+            n_take = min(len(self.y), max(3, int(np.floor(len(self.y) * resolved_rate))))
             return regression_subsample_indices(
                 self.y,
                 n_take=n_take,
-                random_state=random_state,
+                random_state=resolved_random_state,
             )
         return stratified_label_indices(
             self.y,
-            rate=rate,
-            random_state=random_state,
-            min_samples_per_class=min_samples_per_class,
+            rate=resolved_rate,
+            random_state=resolved_random_state,
+            min_samples_per_class=resolved_min_samples,
             label_names=self.metadata.get("label_names"),
             target_type=self.metadata.get("target_type", "auto"),
             target_names=self.metadata.get("target_names"),
@@ -1384,7 +1571,8 @@ class BenchmarkDataset:
             Validated dataset containing only the selected samples.
         """
 
-        index_array = np.asarray(indices, dtype=int)
+        _reject_reserved_metadata(metadata, _STRUCTURAL_METADATA_KEYS, owner="subset metadata")
+        index_array = validate_row_indices(indices, len(self.y), name="subset indices")
         parent_indices = self.metadata.get("sample_indices")
         if parent_indices is None:
             sample_indices = index_array.tolist()
@@ -1395,7 +1583,6 @@ class BenchmarkDataset:
             {
                 "subset": True,
                 "parent_n_samples": int(len(self.y)),
-                "sample_indices": sample_indices,
             }
         )
         hierarchy = merged_metadata.get("label_hierarchy")
@@ -1405,22 +1592,17 @@ class BenchmarkDataset:
                 hierarchy = dict(hierarchy)
                 hierarchy["paths"] = np.asarray(paths, dtype=object)[index_array].tolist()
                 merged_metadata["label_hierarchy"] = hierarchy
-        groups = merged_metadata.get("groups")
-        if groups is not None:
-            merged_metadata["groups"] = np.asarray(groups, dtype=object)[index_array].tolist()
-        relational_unit = str(merged_metadata.get("relational_unit", ""))
-        relational_metadata_keys: Dict[str, tuple[str, ...]] = {
-            "node": ("node_ids",),
-            "entity": ("entity_ids",),
-            "edge": ("edge_index",),
-            "pair": ("pair_ids",),
-            "triplet": ("triplet_ids",),
-        }
-        aligned_metadata_keys = relational_metadata_keys.get(relational_unit, ())
-        for key in aligned_metadata_keys:
+        for key in merged_metadata.get(_ROW_ALIGNED_METADATA_KEY, []):
             values = merged_metadata.get(key)
             if values is not None:
-                merged_metadata[key] = np.asarray(values, dtype=object)[index_array].tolist()
+                merged_metadata[key] = _take_aligned_metadata(values, index_array)
+        merged_metadata["sample_indices"] = sample_indices
+        merged_metadata["parent_row_positions"] = index_array.tolist()
+        merged_metadata = _register_row_aligned_metadata(
+            merged_metadata,
+            "sample_indices",
+            "parent_row_positions",
+        )
         target_views = merged_metadata.get("target_views")
         if target_views is not None:
             subset_views = {}
@@ -1448,11 +1630,6 @@ class BenchmarkDataset:
                     identity=self.identity,
                 )
             merged_metadata["target_views"] = subset_views
-        unit_annotations = merged_metadata.get("unit_annotations")
-        if unit_annotations is not None:
-            merged_metadata["unit_annotations"] = [
-                dict(unit_annotations[int(index)]) for index in index_array.tolist()
-            ]
         merged_metadata.update(metadata or {})
         dataset = type(self)(
             X=_take_samples(self.X, index_array),
@@ -1481,7 +1658,10 @@ class BenchmarkDataset:
             target_type=self.metadata.get("target_type", "auto"),
             target_names=self.metadata.get("target_names"),
         )
+        if self.metadata.get("label_catalog") is not None:
+            labels["label_catalog"] = list(self.metadata["label_catalog"])
         report_metadata = dict(self.metadata)
+        report_metadata.pop(_ROW_ALIGNED_METADATA_KEY, None)
         groups = report_metadata.pop("groups", None)
         target_views = report_metadata.pop("target_views", None)
         unit_ids = report_metadata.pop("unit_ids", None)
@@ -1524,11 +1704,15 @@ class BenchmarkDataset:
                 "has_coordinates": unit_coordinates is not None,
                 "has_provenance": unit_provenance is not None,
                 "n_distinct_units": (
-                    int(len(set(unit_ids))) if unit_ids is not None else int(len(self.y))
+                    int(len({semantic_label_key(value) for value in unit_ids}))
+                    if unit_ids is not None
+                    else int(len(self.y))
                 ),
             }
             if parent_ids is not None:
-                summary["units"]["n_parents"] = int(len(set(parent_ids)))
+                summary["units"]["n_parents"] = int(
+                    len({semantic_label_key(value) for value in parent_ids})
+                )
         if unit_annotations is not None:
             summary["structured_units"] = {
                 "provided": True,
@@ -1543,10 +1727,11 @@ class BenchmarkDataset:
             summary["grouping"] = {
                 "provided": True,
                 "name": self.metadata.get("group_name", "group"),
-                "n_groups": int(len(set(groups))),
+                "n_groups": int(len({semantic_label_key(value) for value in groups})),
             }
         for key in (
             "label_names",
+            "label_catalog",
             "labelset_counts",
             "mean_label_cardinality",
             "label_density",
@@ -1636,10 +1821,23 @@ class EmbeddingUnitDataset(BenchmarkDataset):
             resolved = _optional_aligned_values(values, n_units=n_units, name=key)
             if resolved is not None:
                 merged_metadata[key] = resolved
-        merged_metadata.update(metadata or {})
+        row_keys = ["unit_ids"]
+        row_keys.extend(
+            key
+            for key in (
+                "parent_ids",
+                "unit_positions",
+                "unit_spans",
+                "unit_coordinates",
+                "unit_provenance",
+            )
+            if key in merged_metadata
+        )
+        merged_metadata = _register_row_aligned_metadata(merged_metadata, *row_keys)
+        merged_metadata = _merge_user_metadata(merged_metadata, metadata)
         dataset = cast(
             EmbeddingUnitDataset,
-            cls.from_embeddings(
+            cls._from_prepared_embeddings(
                 matrix,
                 labels,
                 identity=identity,
@@ -1783,11 +1981,11 @@ def _validated_local_unit_ids(
     if unit_ids is None:
         return None
     try:
-        canonical_ids = [canonical_json_exact(value) for value in unit_ids]
-    except TypeError as exc:
+        canonical_ids = _exact_identifier_keys(unit_ids, name="unit_ids")
+    except ValueError as exc:
         raise ValueError(
-            f"{unit_type} unit_ids for sample {sample_index} must contain exact-fingerprintable "
-            "values."
+            f"{unit_type} unit_ids for sample {sample_index} must contain hashable values "
+            "with deterministic exact identities."
         ) from exc
     if len(set(canonical_ids)) != len(canonical_ids):
         raise ValueError(
@@ -1811,6 +2009,76 @@ def _metadata_with_target_metadata(
     return merged
 
 
+def _merge_user_metadata(
+    base: Dict[str, Any],
+    metadata: Optional[Dict[str, Any]],
+    *,
+    reserved: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    """Merge descriptive metadata without permitting structural overrides."""
+
+    if metadata is None:
+        return dict(base)
+    if not isinstance(metadata, dict):
+        raise TypeError("metadata must be a dictionary when provided.")
+    owned = set(base) | set(reserved or ()) | set(_STRUCTURAL_METADATA_KEYS)
+    _reject_reserved_metadata(metadata, owned, owner="metadata")
+    merged = dict(base)
+    merged.update(metadata)
+    return merged
+
+
+def _reject_reserved_metadata(
+    metadata: Optional[Dict[str, Any]],
+    reserved: Iterable[str],
+    *,
+    owner: str,
+) -> None:
+    if metadata is None:
+        return
+    if not isinstance(metadata, dict):
+        raise TypeError(f"{owner} must be a dictionary when provided.")
+    conflicts = sorted(set(metadata) & set(reserved))
+    if conflicts:
+        raise ValueError(f"{owner} cannot override constructor-owned structural keys: {conflicts}.")
+
+
+def _register_row_aligned_metadata(metadata: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    merged = dict(metadata)
+    registered = list(merged.get(_ROW_ALIGNED_METADATA_KEY, []))
+    for key in keys:
+        if key not in registered:
+            registered.append(key)
+    merged[_ROW_ALIGNED_METADATA_KEY] = registered
+    return merged
+
+
+def _validate_row_aligned_metadata(metadata: Dict[str, Any], n_samples: int) -> None:
+    registered = metadata.get(_ROW_ALIGNED_METADATA_KEY, [])
+    if isinstance(registered, (str, bytes)) or not isinstance(registered, (list, tuple)):
+        raise TypeError(f"{_ROW_ALIGNED_METADATA_KEY} must be a sequence of metadata keys.")
+    if any(not isinstance(key, str) or not key for key in registered):
+        raise TypeError(f"{_ROW_ALIGNED_METADATA_KEY} entries must be non-empty strings.")
+    if len(set(registered)) != len(registered):
+        raise ValueError(f"{_ROW_ALIGNED_METADATA_KEY} must not contain duplicate keys.")
+    for key in registered:
+        if key not in metadata:
+            raise ValueError(f"Registered row-aligned metadata key {key!r} is missing.")
+        try:
+            length = len(metadata[key])
+        except TypeError as exc:
+            raise ValueError(f"Row-aligned metadata {key!r} must be a sized sequence.") from exc
+        if length != n_samples:
+            raise ValueError(
+                f"Row-aligned metadata {key!r} must have length {n_samples}; got {length}."
+            )
+
+
+def _take_aligned_metadata(values: Any, indices: np.ndarray) -> list[Any]:
+    array = np.asarray(values, dtype=object)
+    return array[indices].tolist()
+
+
 def _normalize_target_views(
     target_views: Iterable[TargetView],
     n_samples: int,
@@ -1826,12 +2094,13 @@ def _normalize_target_views(
     for view in target_views:
         if not isinstance(view, TargetView):
             raise ValueError("target_views must contain TargetView entries.")
-        if not view.name:
+        if not isinstance(view.name, str) or not view.name.strip():
             raise ValueError("TargetView.name must be a non-empty string.")
-        if view.name in resolved:
-            raise ValueError(f"Duplicate target view name {view.name!r}.")
-        resolved[view.name] = _target_view_entry(
-            name=view.name,
+        normalized_name = view.name.strip()
+        if normalized_name in resolved:
+            raise ValueError(f"Duplicate target view name {normalized_name!r}.")
+        resolved[normalized_name] = _target_view_entry(
+            name=normalized_name,
             targets=view.targets,
             target_type=view.target_type,
             label_names=view.label_names,
@@ -1848,15 +2117,15 @@ def _normalize_target_views(
         if (
             len(
                 labels_from_jsonable(
-                    resolved[view.name]["targets"],
-                    label_names=resolved[view.name].get("label_names"),
-                    target_type=resolved[view.name].get("target_type", "auto"),
-                    target_names=resolved[view.name].get("target_names"),
+                    resolved[normalized_name]["targets"],
+                    label_names=resolved[normalized_name].get("label_names"),
+                    target_type=resolved[normalized_name].get("target_type", "auto"),
+                    target_names=resolved[normalized_name].get("target_names"),
                 )
             )
             != n_samples
         ):
-            raise ValueError(f"Target view {view.name!r} must have length {n_samples}.")
+            raise ValueError(f"Target view {normalized_name!r} must have length {n_samples}.")
     if not resolved:
         raise ValueError("target_views must not be empty.")
     return resolved
@@ -1928,8 +2197,6 @@ def _target_view_entry(
 
 def _validated_unit_ids(values: Any, n_units: int) -> list[Any]:
     unit_ids = _aligned_ids(values, n_units, name="unit_ids")
-    if len(set(unit_ids)) != len(unit_ids):
-        raise ValueError("unit_ids must be unique.")
     return unit_ids
 
 
@@ -1952,7 +2219,11 @@ def _aligned_ids(values: Any, expected: int, name: str) -> list[Any]:
         raise ValueError(f"{name} must be one-dimensional.")
     if len(ids) != expected:
         raise ValueError(f"{name} must have length {expected}; got {len(ids)}.")
-    return ids.tolist()
+    normalized = ids.tolist()
+    canonical = _exact_identifier_keys(normalized, name=name)
+    if len(set(canonical)) != len(canonical):
+        raise ValueError(f"{name} must be unique under exact typed identity.")
+    return normalized
 
 
 def _normalize_edge_like_index(value: Any, n_rows: Optional[int], name: str) -> np.ndarray:
@@ -2026,21 +2297,55 @@ def _compose_triplets(
 def _positions_for_ids(values: Any, ids: Any, n_rows: int, name: str) -> np.ndarray:
     values_array = np.asarray(values, dtype=object)
     if ids is None:
-        try:
-            positions = values_array.astype(int)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"{name} must contain integer row positions when ids are not provided."
-            ) from exc
+        if any(
+            isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral)
+            for value in values_array.tolist()
+        ):
+            raise TypeError(
+                f"{name} must contain exact integer row positions when ids are not provided."
+            )
+        positions = np.asarray([int(value) for value in values_array.tolist()], dtype=int)
         if np.any(positions < 0) or np.any(positions >= n_rows):
             raise ValueError(f"{name} contain row positions outside [0, {n_rows}).")
         return positions
     id_values = _aligned_ids(ids, n_rows, name="ids")
-    lookup = {value: index for index, value in enumerate(id_values)}
-    missing = [value for value in values_array if value not in lookup]
+    lookup = {
+        canonical: index
+        for index, canonical in enumerate(_exact_identifier_keys(id_values, name="ids"))
+    }
+    requested = _exact_identifier_keys(values_array.tolist(), name=name)
+    missing = [
+        value
+        for value, canonical in zip(values_array.tolist(), requested)
+        if canonical not in lookup
+    ]
     if missing:
         raise ValueError(f"{name} contain unknown ids: {missing[:5]}.")
-    return np.asarray([lookup[value] for value in values_array], dtype=int)
+    return np.asarray([lookup[canonical] for canonical in requested], dtype=int)
+
+
+def _exact_identifier_keys(values: Iterable[Any], name: str) -> list[str]:
+    keys = []
+    for value in values:
+        normalized = value.item() if hasattr(value, "item") else value
+        if _is_missing_identifier(normalized):
+            raise ValueError(f"{name} entries must be non-missing.")
+        try:
+            hash(normalized)
+            keys.append(canonical_json_exact(normalized))
+        except TypeError as exc:
+            raise ValueError(
+                f"{name} entries must be hashable and have deterministic exact identities."
+            ) from exc
+    return keys
+
+
+def _is_missing_identifier(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (float, np.floating, complex, np.complexfloating)):
+        return bool(np.isnan(value))
+    return False
 
 
 def _compose_embedding_rows(left: Any, right: Any, composition: str, owner: str) -> Any:
@@ -2113,6 +2418,82 @@ def _coerce_object_sequence(value: Any) -> np.ndarray:
     result = np.empty(len(items), dtype=object)
     result[:] = items
     return result
+
+
+def _strict_positive_integer(value: Any, name: str) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral):
+        raise TypeError(f"{name} must be an exact positive integer.")
+    resolved = int(value)
+    if resolved < 1:
+        raise ValueError(f"{name} must be > 0.")
+    return resolved
+
+
+def _strict_positive_real(value: Any, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be a finite positive real number.")
+    resolved = float(value)
+    if not np.isfinite(resolved) or resolved <= 0.0:
+        raise ValueError(f"{name} must be finite and > 0.")
+    return resolved
+
+
+def _validated_numeric_sample(
+    value: Any,
+    name: str,
+    *,
+    allowed_ranks: tuple[int, ...],
+    allow_bool: bool = False,
+) -> np.ndarray:
+    array = np.asarray(value)
+    if array.ndim not in allowed_ranks:
+        expected = " or ".join(str(rank) for rank in allowed_ranks)
+        raise ValueError(f"{name} must have rank {expected}; got shape {array.shape}.")
+    if array.size == 0 or any(size < 1 for size in array.shape):
+        raise ValueError(f"{name} must be non-empty on every axis.")
+    boolean = np.issubdtype(array.dtype, np.bool_)
+    if (not np.issubdtype(array.dtype, np.number) and not boolean) or (boolean and not allow_bool):
+        raise TypeError(f"{name} must contain numeric values.")
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values.")
+    return array
+
+
+def _validate_timestamp_values(values: np.ndarray) -> None:
+    """Reject missing and non-finite timestamp cells without coercing their type."""
+
+    if values.dtype.kind in {"M", "m"}:
+        if bool(np.any(np.isnat(values))):
+            raise ValueError("timestamps must not contain missing or NaT values.")
+        return
+    if np.issubdtype(values.dtype, np.number):
+        if not bool(np.all(np.isfinite(values))):
+            raise ValueError("timestamps must contain only finite values.")
+        return
+    for value in values.reshape(-1).tolist():
+        if _is_missing_scalar(value):
+            raise ValueError("timestamps must not contain missing or NaT values.")
+        if isinstance(value, np.datetime64) or isinstance(value, np.timedelta64):
+            if bool(np.isnat(value)):
+                raise ValueError("timestamps must not contain missing or NaT values.")
+        elif isinstance(value, (Real, complex, np.number)) and not bool(
+            np.isfinite(cast(Any, value))
+        ):
+            raise ValueError("timestamps must contain only finite values.")
+        elif hasattr(value, "is_finite") and callable(value.is_finite):
+            if not bool(value.is_finite()):
+                raise ValueError("timestamps must contain only finite values.")
+
+
+def _validated_frame_rates(value: np.ndarray, n_samples: int) -> np.ndarray:
+    if value.ndim != 1 or len(value) != n_samples:
+        raise ValueError(f"frame_rate must be scalar or have length {n_samples}.")
+    if not np.issubdtype(value.dtype, np.number) or np.issubdtype(value.dtype, np.bool_):
+        raise TypeError("frame_rate values must be finite positive real numbers.")
+    rates = value.astype(float, copy=False)
+    if not np.all(np.isfinite(rates)) or np.any(rates <= 0.0):
+        raise ValueError("frame_rate values must be finite and > 0.")
+    return rates
 
 
 def _normalize_multimodal_field(value: Any, n_samples: int, field_name: str) -> Any:

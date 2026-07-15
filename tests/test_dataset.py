@@ -1,3 +1,5 @@
+from enum import Enum
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,6 +16,21 @@ COARSE_TARGETS = [
     "mammal",
     "mammal",
 ]
+
+
+class _UnsupportedLabel:
+    def __init__(self, value):
+        self.value = value
+
+    def __hash__(self):
+        return hash(self.value)
+
+    def __eq__(self, other):
+        return isinstance(other, _UnsupportedLabel) and self.value == other.value
+
+
+class _StringLabel(str, Enum):
+    RED = "red"
 
 
 def test_from_arrays_validates_lengths():
@@ -44,6 +61,34 @@ def test_from_arrays_rejects_missing_labels():
             modality="tabular",
             identity=DatasetIdentity.ephemeral(),
         )
+
+
+def test_from_arrays_rejects_unsupported_hashable_label_objects_early():
+    with pytest.raises(ValueError, match="deterministic semantic values"):
+        BenchmarkDataset.from_arrays(
+            np.zeros((4, 2)),
+            [
+                _UnsupportedLabel("a"),
+                _UnsupportedLabel("a"),
+                _UnsupportedLabel("b"),
+                _UnsupportedLabel("b"),
+            ],
+            modality="tabular",
+            identity=DatasetIdentity.ephemeral(),
+        )
+
+
+def test_string_enum_labels_remain_distinct_from_plain_strings():
+    dataset = BenchmarkDataset.from_arrays(
+        np.zeros((4, 2)),
+        ["red", "red", _StringLabel.RED, _StringLabel.RED],
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    assert dataset.summary()["n_classes"] == 2
+    catalog = dataset.metadata["label_catalog"]
+    assert len({item["key"] for item in catalog}) == 2
 
 
 def test_from_graphs_preserves_modality_and_metadata():
@@ -469,6 +514,37 @@ def test_from_audio_arrays_preserves_sampling_rate():
     assert dataset.X["sampling_rate"].tolist() == [16_000] * 4
 
 
+@pytest.mark.parametrize("sampling_rate", [True, 16_000.5, 0, -1])
+def test_from_audio_arrays_requires_exact_positive_sampling_rate(sampling_rate):
+    waveforms = [np.ones(4, dtype=float) for _ in range(4)]
+    with pytest.raises((TypeError, ValueError), match="sampling_rate"):
+        BenchmarkDataset.from_audio_arrays(
+            waveforms,
+            ["a", "a", "b", "b"],
+            sampling_rate=sampling_rate,
+            identity=DatasetIdentity.ephemeral(),
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        np.ones((1, 2, 3), dtype=float),
+        np.empty((0,), dtype=float),
+        np.asarray([0.0, np.nan]),
+        np.asarray(["not", "numeric"]),
+    ],
+)
+def test_from_audio_arrays_rejects_malformed_waveforms(invalid):
+    with pytest.raises((TypeError, ValueError), match="audio waveform"):
+        BenchmarkDataset.from_audio_arrays(
+            [invalid, np.ones(2), np.ones(2), np.ones(2)],
+            ["a", "a", "b", "b"],
+            sampling_rate=16_000,
+            identity=DatasetIdentity.ephemeral(),
+        )
+
+
 def test_from_audio_paths_sets_audio_modality():
     dataset = BenchmarkDataset.from_audio_paths(
         ["a.wav", "b.wav", "c.wav", "d.wav"],
@@ -514,6 +590,37 @@ def test_from_video_arrays_preserves_frame_rate():
     assert dataset.X["frame_rate"].tolist() == [24.0] * 4
 
 
+@pytest.mark.parametrize("frame_rate", [True, 0.0, -1.0, np.nan, [24.0, 24.0]])
+def test_from_video_arrays_rejects_invalid_frame_rates(frame_rate):
+    clips = [np.ones((2, 2, 2, 3), dtype=float) for _ in range(4)]
+    with pytest.raises((TypeError, ValueError), match="frame_rate"):
+        BenchmarkDataset.from_video_arrays(
+            clips,
+            ["a", "a", "b", "b"],
+            frame_rate=frame_rate,
+            identity=DatasetIdentity.ephemeral(),
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        np.ones((2, 2, 3), dtype=float),
+        np.empty((0, 2, 2, 3), dtype=float),
+        np.full((1, 1, 1, 1), np.inf),
+        np.full((1, 1, 1, 1), "bad"),
+    ],
+)
+def test_from_video_arrays_rejects_malformed_clips(invalid):
+    valid = np.ones((2, 2, 2, 3), dtype=float)
+    with pytest.raises((TypeError, ValueError), match="video frame array"):
+        BenchmarkDataset.from_video_arrays(
+            [invalid, valid, valid, valid],
+            ["a", "a", "b", "b"],
+            identity=DatasetIdentity.ephemeral(),
+        )
+
+
 def test_from_time_series_preserves_structured_inputs():
     series = np.arange(24, dtype=float).reshape(4, 3, 2)
     observed_mask = np.ones((4, 3, 2), dtype=float)
@@ -532,6 +639,114 @@ def test_from_time_series_preserves_structured_inputs():
     assert dataset.X["series"].shape == (4, 3, 2)
     assert dataset.X["observed_mask"].shape == (4, 3, 2)
     assert dataset.X["time_features"].shape == (4, 3, 2)
+
+
+def test_from_time_series_rejects_malformed_values_and_misaligned_fields():
+    labels = ["a", "a", "b", "b"]
+    identity = DatasetIdentity.ephemeral()
+    with pytest.raises(ValueError, match="rank"):
+        BenchmarkDataset.from_time_series(np.ones(4), labels, identity=identity)
+    with pytest.raises(ValueError, match="finite"):
+        BenchmarkDataset.from_time_series(np.full((4, 3), np.nan), labels, identity=identity)
+    series = np.ones((4, 3, 2), dtype=float)
+    with pytest.raises(ValueError, match="observed_mask"):
+        BenchmarkDataset.from_time_series(
+            series,
+            labels,
+            observed_mask=np.ones((4, 3)),
+            identity=identity,
+        )
+    with pytest.raises(ValueError, match="sample and time axes"):
+        BenchmarkDataset.from_time_series(
+            series,
+            labels,
+            time_features=np.ones((4, 2, 1)),
+            identity=identity,
+        )
+    with pytest.raises(ValueError, match="sample and time axes"):
+        BenchmarkDataset.from_time_series(
+            series,
+            labels,
+            timestamps=np.ones((3, 3)),
+            identity=identity,
+        )
+
+
+@pytest.mark.parametrize(
+    "observed_mask",
+    [
+        np.full((4, 3, 2), 0.5),
+        np.full((4, 3, 2), -1),
+        np.full((4, 3, 2), 2),
+    ],
+)
+def test_from_time_series_rejects_nonbinary_observed_masks(observed_mask):
+    with pytest.raises(ValueError, match="binary"):
+        BenchmarkDataset.from_time_series(
+            np.ones((4, 3, 2)),
+            ["a", "a", "b", "b"],
+            observed_mask=observed_mask,
+            identity=DatasetIdentity.ephemeral(),
+        )
+
+
+@pytest.mark.parametrize(
+    "timestamps",
+    [
+        np.asarray([[0.0, 1.0, np.nan]] * 4),
+        np.asarray([[0.0, 1.0, np.inf]] * 4),
+        np.asarray(
+            [[np.datetime64("2025-01-01"), np.datetime64("NaT"), np.datetime64("2025-01-03")]] * 4
+        ),
+        np.asarray([["2025-01-01", None, "2025-01-03"]] * 4, dtype=object),
+        np.asarray([[pd.Timestamp("2025-01-01"), pd.NaT, pd.Timestamp("2025-01-03")]] * 4),
+    ],
+)
+def test_from_time_series_rejects_missing_nonfinite_and_nat_timestamps(timestamps):
+    with pytest.raises(ValueError, match="timestamps"):
+        BenchmarkDataset.from_time_series(
+            np.ones((4, 3)),
+            ["a", "a", "b", "b"],
+            timestamps=timestamps,
+            identity=DatasetIdentity.ephemeral(),
+        )
+
+
+@pytest.mark.parametrize("batch_size", [True, 1.5, "2"])
+def test_dataset_iter_batches_requires_exact_nonboolean_integer(batch_size):
+    dataset = BenchmarkDataset.from_arrays(
+        np.eye(4),
+        ["a", "a", "b", "b"],
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    with pytest.raises(TypeError, match="batch_size"):
+        list(dataset.iter_batches(batch_size=batch_size))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"rate": True}, TypeError),
+        ({"rate": "0.5"}, TypeError),
+        ({"rate": np.inf}, ValueError),
+        ({"rate": 0.5, "random_state": True}, TypeError),
+        ({"rate": 0.5, "min_samples_per_class": True}, TypeError),
+        ({"rate": 0.5, "min_samples_per_class": 1.5}, TypeError),
+        ({"rate": 0.5, "min_samples_per_class": 0}, ValueError),
+    ],
+)
+def test_stratified_subsample_requires_exact_typed_options(kwargs, error):
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(16).reshape(8, 2),
+        ["a"] * 4 + ["b"] * 4,
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    with pytest.raises(error):
+        dataset.stratified_subsample_indices(**kwargs)
 
 
 def test_from_multimodal_preserves_fields_and_modalities():
@@ -705,6 +920,8 @@ def test_nested_subset_preserves_original_sample_indices():
     second = first.subset([0, 2, 3, 5])
 
     assert second.metadata["sample_indices"] == [1, 3, 7, 9]
+    assert first.metadata["parent_row_positions"] == [1, 2, 3, 7, 8, 9]
+    assert second.metadata["parent_row_positions"] == [0, 2, 3, 5]
 
 
 def test_structured_dataset_subset_and_batches_align_fields():

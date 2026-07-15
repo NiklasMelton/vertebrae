@@ -2,6 +2,7 @@
 
 import inspect
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -14,6 +15,11 @@ from vertebrae.utils.labels import (
     display_label,
     metric_labels,
     target_summary,
+)
+from vertebrae.utils.semantic_labels import (
+    semantic_label_catalog,
+    semantic_label_key,
+    semantic_label_keys,
 )
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import (
@@ -75,6 +81,10 @@ def resolve_kmeans_k(
     """Resolve MiniBatchKMeans k values per class."""
 
     counts = class_counts(y, label_names=label_names)
+    original_by_key: Dict[str, Any] = {}
+    source_labels = label_names if label_names is not None else np.asarray(y, dtype=object).tolist()
+    for original in source_labels:
+        original_by_key.setdefault(semantic_label_key(original), original)
     warnings: List[str] = []
     k_per_class: Dict[Any, int] = {}
 
@@ -85,10 +95,14 @@ def resolve_kmeans_k(
                 f"{display_label(label)} because it has no samples in this scoring target."
             )
             continue
-        if isinstance(config.k, int):
-            requested = config.k
+        if isinstance(config.k, Integral) and not isinstance(config.k, bool):
+            requested = int(config.k)
         elif isinstance(config.k, dict):
-            requested = _lookup_class_k(config.k, label)
+            requested = _lookup_class_k(
+                config.k,
+                label,
+                original_label=original_by_key.get(str(label), label),
+            )
         else:
             requested = auto_k_for_class(
                 count,
@@ -137,6 +151,7 @@ class OverlapIndexScorer:
         label_names: Optional[Any] = None,
         target_type: str = "auto",
         target_names: Optional[Any] = None,
+        label_catalog: Optional[Any] = None,
     ) -> OverlapScoreResult:
         """Score dense or sparse embeddings with OverlapIndex-family backends."""
 
@@ -147,6 +162,10 @@ class OverlapIndexScorer:
             target_type=target_type,
             target_names=target_names,
         )
+        if label_metadata["target_type"] != REGRESSION_TARGET:
+            label_metadata["label_catalog"] = list(
+                label_catalog or label_metadata.get("label_catalog") or []
+            )
         if embeddings.shape[0] != len(labels):
             raise ValueError(
                 "embeddings and labels must have the same length; "
@@ -165,6 +184,9 @@ class OverlapIndexScorer:
     ) -> OverlapScoreResult:
         config = _coerce_classification_config(self.config)
         warnings: List[str] = []
+        original_labels = labels
+        if label_metadata["target_type"] != MULTI_LABEL_TARGET:
+            labels = np.asarray(semantic_label_keys(labels.tolist()), dtype=object)
         sparse_input = is_sparse_matrix(embeddings)
         if sparse_input:
             embeddings = sparse_to_dense(
@@ -180,7 +202,7 @@ class OverlapIndexScorer:
             embeddings = l2_normalize_rows(embeddings)
 
         k_per_class, k_warnings = resolve_kmeans_k(
-            labels,
+            original_labels,
             config,
             return_warnings=True,
             label_names=label_metadata.get("label_names"),
@@ -197,10 +219,20 @@ class OverlapIndexScorer:
             # mapping by those expanded integer labels.
             label_names = tuple(label_metadata.get("label_names") or ())
             backend_k = {
-                index: k_per_class[label]
+                index: k_per_class[semantic_label_key(label)]
                 for index, label in enumerate(label_names)
-                if label in k_per_class
+                if semantic_label_key(label) in k_per_class
             }
+
+        backend_excluded_classes = config.exclude_classes
+        if config.exclude_classes is not None:
+            if label_metadata["target_type"] == MULTI_LABEL_TARGET:
+                backend_excluded_classes = _multilabel_excluded_indices(
+                    config.exclude_classes,
+                    tuple(label_metadata.get("label_names") or ()),
+                )
+            else:
+                backend_excluded_classes = _semantic_excluded_classes(config.exclude_classes)
 
         OverlapIndex = _load_overlap_index()
         index = _instantiate_with_supported_kwargs(
@@ -210,7 +242,7 @@ class OverlapIndexScorer:
                 "kmeans_k": backend_k,
                 "kmeans_kwargs": kmeans_kwargs,
                 "offline_chunk_size": config.offline_chunk_size,
-                "exclude_classes": config.exclude_classes,
+                "exclude_classes": backend_excluded_classes,
             },
         )
         with _capture_runtime_warnings(warnings):
@@ -218,15 +250,22 @@ class OverlapIndexScorer:
         macro_score = _extract_macro_score(index, raw_score)
         weighted_score = _extract_optional_score(getattr(index, "weighted_index", None))
         summary = target_summary(
-            labels,
+            original_labels,
             label_names=label_metadata.get("label_names"),
             target_type=label_metadata["target_type"],
         )
+        catalog = list(label_metadata.get("label_catalog") or [])
+        if not catalog:
+            if label_metadata["target_type"] == MULTI_LABEL_TARGET:
+                catalog = semantic_label_catalog(label_metadata.get("label_names") or ())
+            else:
+                catalog = semantic_label_catalog(original_labels.tolist())
+        summary["label_catalog"] = catalog
         excluded_classes = _normalized_excluded_classes(config.exclude_classes)
+        excluded_class_keys = semantic_label_keys(excluded_classes)
         observed_classes = list(summary["class_counts"])
-        included_classes = [
-            label for label in observed_classes if not _label_is_excluded(label, excluded_classes)
-        ]
+        excluded_keys = set(excluded_class_keys)
+        included_classes = [label for label in observed_classes if label not in excluded_keys]
         aggregate_valid = bool(included_classes)
         per_class_scores = getattr(index, "singleton_index", {})
         pairwise_scores = getattr(index, "pairwise_index", {})
@@ -249,8 +288,13 @@ class OverlapIndexScorer:
             "scoring_input_format": "dense",
             "target_type": label_metadata["target_type"],
             "label_names": label_metadata.get("label_names"),
+            "label_catalog": catalog,
+            "label_display_by_key": {
+                item["key"]: item.get("report_display", item.get("display", item["key"]))
+                for item in catalog
+            },
             "target_summary": summary,
-            "exclude_classes": make_json_safe(excluded_classes),
+            "exclude_classes": excluded_class_keys,
             "aggregation_classes": make_json_safe(included_classes),
             "aggregate_valid": aggregate_valid,
         }
@@ -379,7 +423,12 @@ class OverlapIndexScorer:
         )
 
 
-def _lookup_class_k(configured: Dict[Any, int], label: Any) -> int:
+def _lookup_class_k(
+    configured: Dict[Any, int],
+    label: Any,
+    *,
+    original_label: Any = None,
+) -> int:
     if label in configured:
         return int(configured[label])
     label_value = label.item() if hasattr(label, "item") else label
@@ -388,6 +437,10 @@ def _lookup_class_k(configured: Dict[Any, int], label: Any) -> int:
     label_str = str(label_value)
     if label_str in configured:
         return int(configured[label_str])
+    expected_key = semantic_label_key(original_label)
+    for configured_label, value in configured.items():
+        if semantic_label_key(configured_label) == expected_key:
+            return int(value)
     raise ValueError(f"Missing k value for class {display_label(label)}.")
 
 
@@ -401,7 +454,7 @@ def _restore_multilabel_names(
         if isinstance(value, str) and value.isdigit():
             value = int(value)
         if isinstance(value, int) and 0 <= value < len(label_names):
-            return label_names[value]
+            return semantic_label_key(label_names[value])
         return value
 
     restored_per_class = {restore(label): score for label, score in per_class_scores.items()}
@@ -530,15 +583,36 @@ def _normalized_excluded_classes(value: Any) -> List[Any]:
         except TypeError:
             values = [value]
     unique: List[Any] = []
+    keys = set()
     for item in values:
-        if not any(item == existing for existing in unique):
+        key = semantic_label_key(item)
+        if key not in keys:
             unique.append(item)
+            keys.add(key)
     return unique
 
 
-def _label_is_excluded(label: Any, excluded: List[Any]) -> bool:
-    label_value = label.item() if hasattr(label, "item") else label
-    return any(label_value == item for item in excluded)
+def _semantic_excluded_classes(value: Any) -> Any:
+    if isinstance(value, (str, bytes)):
+        return semantic_label_key(value)
+    try:
+        values = list(value)
+    except TypeError:
+        return semantic_label_key(value)
+    return semantic_label_keys(values)
+
+
+def _multilabel_excluded_indices(value: Any, label_names: Tuple[Any, ...]) -> List[int]:
+    excluded = _normalized_excluded_classes(value)
+    excluded_keys = {semantic_label_key(item) for item in excluded}
+    positions = {semantic_label_key(label): index for index, label in enumerate(label_names)}
+    unknown = excluded_keys - set(positions)
+    if unknown:
+        missing = [item for item in excluded if semantic_label_key(item) in unknown]
+        raise ValueError(
+            "exclude_classes contains labels absent from the multi-label target: " f"{missing!r}."
+        )
+    return [positions[key] for key in positions if key in excluded_keys]
 
 
 class _capture_runtime_warnings:

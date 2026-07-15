@@ -104,14 +104,12 @@ class BenchmarkResult:
             Sorted extractor results.
         """
 
-        return sorted(
-            self.extractor_results,
-            key=lambda item: (
-                bool(_primary_metric(item).metadata.get("aggregate_valid", True)),
-                _rankable_score(item),
-            ),
-            reverse=True,
-        )
+        valid = [
+            item
+            for item in self.extractor_results
+            if bool(_primary_metric(item).metadata.get("aggregate_valid", True))
+        ]
+        return sorted(valid, key=_rankable_score, reverse=True)
 
     def quality_cohort(self, tolerance: Optional[float] = None) -> List[ExtractorResult]:
         """Return candidates within an absolute primary-score tolerance of the best."""
@@ -162,6 +160,7 @@ class BenchmarkResult:
                     "primary_metric": item.primary_metric_name,
                     "primary_score": item.primary_score,
                     "primary_higher_is_better": _primary_metric(item).higher_is_better,
+                    "aggregate_valid": True,
                     "overlap_score": item.overlap.score if item.overlap else None,
                     "overlap_macro": item.overlap.macro_score if item.overlap else None,
                     "overlap_weighted": item.overlap.weighted_score if item.overlap else None,

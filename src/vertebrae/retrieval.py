@@ -9,6 +9,7 @@ from vertebrae.compression.paired import compress_embedding_pair
 from vertebrae.config import (
     EmbeddingCompressionConfig,
     EmbeddingConfig,
+    MemoryConfig,
     ResourceProfilingConfig,
     RetrievalConfig,
 )
@@ -20,10 +21,10 @@ from vertebrae.profiling import (
     resource_profile_columns,
     with_embedding_footprint,
 )
+from vertebrae.reports._markdown import markdown_table_row, markdown_text
 from vertebrae.scoring.retrieval import RetrievalScorer, RetrievalScoreResult
 from vertebrae.utils.embedding_batches import encode_endpoint_batches, endpoint_n_rows
 from vertebrae.utils.serialization import make_json_safe
-from vertebrae.utils.validation import ensure_numeric_matrix
 
 
 @dataclass
@@ -116,6 +117,7 @@ class RetrievalBenchmark:
         query_branch: Optional[str] = None,
         gallery_branch: Optional[str] = None,
         embedding_config: Optional[EmbeddingConfig] = None,
+        memory_config: Optional[MemoryConfig] = None,
         resource_profiling_config: Optional[ResourceProfilingConfig] = None,
     ) -> None:
         if compression_config is not None and compression_configs is not None:
@@ -129,6 +131,7 @@ class RetrievalBenchmark:
         self.query_branch = query_branch
         self.gallery_branch = gallery_branch
         self.embedding_config = embedding_config or EmbeddingConfig()
+        self.memory_config = memory_config or MemoryConfig()
         self.resource_profiling_config = resource_profiling_config or ResourceProfilingConfig()
         if (query_branch is None) != (gallery_branch is None):
             raise ValueError("query_branch and gallery_branch must be provided together.")
@@ -137,6 +140,11 @@ class RetrievalBenchmark:
         self.dataset.validated()
         if not self.extractors:
             raise ValueError("RetrievalBenchmark requires at least one extractor.")
+        query_ids = list(self.dataset.query_id_values())
+        gallery_ids = list(self.dataset.gallery_id_values())
+        relevance = self.dataset.normalized_relevance()
+        exclusions = self.dataset.normalized_exclusions()
+        query_modality, gallery_modality = self.dataset.protocol_modalities()
         results: List[RetrievalExtractorResult] = []
         for extractor in self.extractors:
             extract_start = perf_counter()
@@ -144,17 +152,17 @@ class RetrievalBenchmark:
                 self._fit_standard_extractor(extractor)
             query_embeddings, query_profile = self._encode_profiled(
                 extractor,
-                self.dataset.queries,
+                self.dataset.query_values(),
                 self.query_branch,
-                self.dataset.query_modality,
+                query_modality,
                 side="query",
                 process_first_inference=True,
             )
             gallery_embeddings, gallery_profile = self._encode_profiled(
                 extractor,
-                self.dataset.gallery,
+                self.dataset.gallery_values(),
                 self.gallery_branch,
-                self.dataset.gallery_modality,
+                gallery_modality,
                 side="gallery",
                 process_first_inference=False,
             )
@@ -168,17 +176,17 @@ class RetrievalBenchmark:
                 forward = scorer.score(
                     query_compressed,
                     gallery_compressed,
-                    self.dataset.relevance,
-                    query_ids=list(self.dataset.query_ids),
-                    gallery_ids=list(self.dataset.gallery_ids),
-                    exclusions=set(self.dataset.exclusions or ()),
+                    relevance,
+                    query_ids=query_ids,
+                    gallery_ids=gallery_ids,
+                    exclusions=exclusions,
                 )
                 reverse = None
                 if self.config.bidirectional:
                     reverse_relevance, reverse_exclusions = _transpose_relations(
-                        self.dataset.relevance,
-                        set(self.dataset.exclusions or ()),
-                        len(self.dataset.gallery_ids),
+                        relevance,
+                        exclusions,
+                        len(gallery_ids),
                     )
                     if any(
                         not any(
@@ -195,8 +203,8 @@ class RetrievalBenchmark:
                         gallery_compressed,
                         query_compressed,
                         reverse_relevance,
-                        query_ids=list(self.dataset.gallery_ids),
-                        gallery_ids=list(self.dataset.query_ids),
+                        query_ids=gallery_ids,
+                        gallery_ids=query_ids,
                         exclusions=reverse_exclusions,
                     )
                 primary = (
@@ -249,6 +257,7 @@ class RetrievalBenchmark:
                 "retrieval_config": asdict(self.config),
                 "compression_configs": [asdict(config) for config in self.compression_configs],
                 "embedding_config": asdict(self.embedding_config),
+                "memory_config": asdict(self.memory_config),
                 "resource_profiling_config": asdict(self.resource_profiling_config),
             },
         )
@@ -280,34 +289,15 @@ class RetrievalBenchmark:
                 "measurement_scope": "local_endpoint",
             },
         )
-        if streaming:
-            embeddings = encode_endpoint_batches(
-                values,
-                batch_size=self.embedding_config.batch_size,
-                encode=lambda batch: self._encode(extractor, batch, branch, modality),
-                owner=f"Retriever '{extractor.name}' {side} embeddings",
-                profiler=profiler if self.resource_profiling_config.enabled else None,
-                call_type=f"encode_retrieval_{side}",
-            )
-        else:
-
-            def call() -> Any:
-                return self._encode(extractor, values, branch, modality)
-
-            embeddings = (
-                profiler.measure_call(
-                    call,
-                    samples=endpoint_n_rows(values),
-                    call_type=f"encode_retrieval_{side}",
-                )
-                if self.resource_profiling_config.enabled
-                else call()
-            )
-            embeddings = ensure_numeric_matrix(
-                embeddings,
-                f"Retriever '{extractor.name}' {side} embeddings",
-                allow_sparse=True,
-            )
+        embeddings = encode_endpoint_batches(
+            values,
+            batch_size=(self.embedding_config.batch_size if streaming else endpoint_n_rows(values)),
+            encode=lambda batch: self._encode(extractor, batch, branch, modality),
+            owner=f"Retriever '{extractor.name}' {side} embeddings",
+            profiler=profiler if self.resource_profiling_config.enabled else None,
+            call_type=f"encode_retrieval_{side}",
+            memory_config=self.memory_config,
+        )
         profile = profiler.finish() if self.resource_profiling_config.enabled else None
         return embeddings, profile
 
@@ -328,7 +318,7 @@ class RetrievalBenchmark:
 
     def _fit_standard_extractor(self, extractor: Any) -> None:
         try:
-            extractor.fit(self.dataset.gallery, y=None)
+            extractor.fit(self.dataset.gallery_values(), y=None)
         except TypeError as exc:
             raise TypeError(
                 "Standard retrieval extractors must support unsupervised fit(X, y=None) or "
@@ -380,7 +370,7 @@ def render_retrieval_markdown_report(result: RetrievalBenchmarkResult) -> str:
     data = result.to_dict()
     lines = ["# vertebrae retrieval report", "", "## Dataset summary", ""]
     for key, value in data["dataset_summary"].items():
-        lines.append(f"- {key}: {value}")
+        lines.append(f"- {markdown_text(key)}: {markdown_text(value)}")
     primary_metric = (
         result.ranked_results()[0].forward.primary_metric if result.extractor_results else "score"
     )
@@ -389,7 +379,9 @@ def render_retrieval_markdown_report(result: RetrievalBenchmarkResult) -> str:
             "",
             "## Ranking",
             "",
-            f"| rank | extractor | primary score | {primary_metric} | mrr | map |",
+            markdown_table_row(
+                ["rank", "extractor", "primary score", primary_metric, "mrr", "map"]
+            ),
             "| --- | --- | ---: | ---: | ---: | ---: |",
         ]
     )
@@ -399,13 +391,23 @@ def render_retrieval_markdown_report(result: RetrievalBenchmarkResult) -> str:
         mrr = metrics.get("mrr", float("nan"))
         mean_average_precision = metrics.get("map", float("nan"))
         lines.append(
-            f"| {rank} | {item.name} | {item.primary_score:.4f} | {primary:.4f} | "
-            f"{mrr:.4f} | {mean_average_precision:.4f} |"
+            markdown_table_row(
+                [
+                    rank,
+                    item.name,
+                    f"{item.primary_score:.4f}",
+                    f"{primary:.4f}",
+                    f"{mrr:.4f}",
+                    f"{mean_average_precision:.4f}",
+                ]
+            )
         )
         lines.append("")
-        lines.append(f"Forward metrics for `{item.name}`: {metrics}")
+        lines.append(f"Forward metrics for {markdown_text(item.name)}: {markdown_text(metrics)}")
         if item.reverse:
-            lines.append(f"Reverse metrics: {item.reverse.metrics}")
+            lines.append(f"Reverse metrics: {markdown_text(item.reverse.metrics)}")
+        for warning in item.warnings:
+            lines.append(f"Warning: {markdown_text(warning)}")
     cohort = [item for item in result.quality_cohort() if item.resource_profiles]
     if cohort:
         lines.extend(
@@ -419,7 +421,7 @@ def render_retrieval_markdown_report(result: RetrievalBenchmarkResult) -> str:
             ]
         )
         for item in cohort:
-            lines.extend([f"### {item.name}", ""])
+            lines.extend([f"### {markdown_text(item.name)}", ""])
             for endpoint in ("query", "gallery"):
                 profile = item.resource_profiles.get(endpoint)
                 if profile is not None:
@@ -429,45 +431,52 @@ def render_retrieval_markdown_report(result: RetrievalBenchmarkResult) -> str:
 
 def _endpoint_resource_markdown(endpoint: str, profile: ResourceProfileLike) -> List[str]:
     columns = resource_profile_columns(profile)
+    safe_endpoint = markdown_text(endpoint)
     lines = [
-        f"- {endpoint} scope: {columns.get('resource_profile_scope')}",
-        f"- {endpoint} logical embedding bytes: {columns.get('embedding_logical_bytes')}",
-        f"- {endpoint} persisted embedding bytes: {columns.get('embedding_persisted_bytes')}",
+        f"- {safe_endpoint} scope: {markdown_text(columns.get('resource_profile_scope'))}",
+        f"- {safe_endpoint} logical embedding bytes: "
+        f"{markdown_text(columns.get('embedding_logical_bytes'))}",
+        f"- {safe_endpoint} persisted embedding bytes: "
+        f"{markdown_text(columns.get('embedding_persisted_bytes'))}",
     ]
     if columns.get("resource_profile_scope") == "distributed_shards":
         lines.extend(
             [
-                f"- {endpoint} worker-first median seconds: "
-                f"{columns.get('worker_first_call_median_seconds')}",
-                f"- {endpoint} worker-first p95 seconds: "
-                f"{columns.get('worker_first_call_p95_seconds')}",
-                f"- {endpoint} aggregate compute throughput (samples/s): "
-                f"{columns.get('aggregate_compute_throughput_samples_per_second')}",
-                f"- {endpoint} maximum worker RSS bytes: "
-                f"{columns.get('max_worker_peak_rss_bytes')}",
-                f"- {endpoint} maximum worker device bytes: "
-                f"{columns.get('max_worker_peak_device_allocated_bytes')}",
-                f"- {endpoint} model in-memory bytes: "
-                f"{profile.model.in_memory_bytes if profile.model else None}",
-                f"- {endpoint} checkpoint bytes: "
-                f"{profile.model.checkpoint_bytes if profile.model else None}",
+                f"- {safe_endpoint} worker-first median seconds: "
+                f"{markdown_text(columns.get('worker_first_call_median_seconds'))}",
+                f"- {safe_endpoint} worker-first p95 seconds: "
+                f"{markdown_text(columns.get('worker_first_call_p95_seconds'))}",
+                f"- {safe_endpoint} aggregate compute throughput (samples/s): "
+                f"{markdown_text(columns.get('aggregate_compute_throughput_samples_per_second'))}",
+                f"- {safe_endpoint} maximum worker RSS bytes: "
+                f"{markdown_text(columns.get('max_worker_peak_rss_bytes'))}",
+                f"- {safe_endpoint} maximum worker device bytes: "
+                f"{markdown_text(columns.get('max_worker_peak_device_allocated_bytes'))}",
+                f"- {safe_endpoint} model in-memory bytes: "
+                f"{markdown_text(profile.model.in_memory_bytes if profile.model else None)}",
+                f"- {safe_endpoint} checkpoint bytes: "
+                f"{markdown_text(profile.model.checkpoint_bytes if profile.model else None)}",
             ]
         )
     else:
+        modality_branch = markdown_text(f"{columns.get('modality')}/{columns.get('branch')}")
         lines.extend(
             [
-                f"- {endpoint} first call seconds: {columns.get('first_call_seconds')}",
-                f"- {endpoint} warm median seconds: {columns.get('warm_median_seconds')}",
-                f"- {endpoint} throughput (samples/s): "
-                f"{columns.get('throughput_samples_per_second')}",
-                f"- {endpoint} batches: {columns.get('batch_sizes')}",
-                f"- {endpoint} cache: {columns.get('cache_status')}",
-                f"- {endpoint} synchronization: {columns.get('synchronization_status')}",
-                f"- {endpoint} modality/branch: {columns.get('modality')}/"
-                f"{columns.get('branch')}",
-                f"- {endpoint} measurement scope: {columns.get('measurement_scope')}",
-                f"- {endpoint} contained process-first measured inference: "
-                f"{columns.get('process_first_inference')}",
+                f"- {safe_endpoint} first call seconds: "
+                f"{markdown_text(columns.get('first_call_seconds'))}",
+                f"- {safe_endpoint} warm median seconds: "
+                f"{markdown_text(columns.get('warm_median_seconds'))}",
+                f"- {safe_endpoint} throughput (samples/s): "
+                f"{markdown_text(columns.get('throughput_samples_per_second'))}",
+                f"- {safe_endpoint} batches: {markdown_text(columns.get('batch_sizes'))}",
+                f"- {safe_endpoint} cache: {markdown_text(columns.get('cache_status'))}",
+                f"- {safe_endpoint} synchronization: "
+                f"{markdown_text(columns.get('synchronization_status'))}",
+                f"- {safe_endpoint} modality/branch: {modality_branch}",
+                f"- {safe_endpoint} measurement scope: "
+                f"{markdown_text(columns.get('measurement_scope'))}",
+                f"- {safe_endpoint} contained process-first measured inference: "
+                f"{markdown_text(columns.get('process_first_inference'))}",
             ]
         )
     return lines + [""]

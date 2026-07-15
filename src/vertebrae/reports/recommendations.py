@@ -58,8 +58,11 @@ def recommendations_for_benchmark(
 
     if not extractor_results:
         return ["No extractors were evaluated."]
+    valid_results = [item for item in extractor_results if _aggregate_valid(item)]
+    if not valid_results:
+        return ["Ranking unavailable because no valid aggregate remains under this protocol."]
     ranked = sorted(
-        extractor_results,
+        valid_results,
         key=lambda item: (
             item.primary_score
             if item.metrics.get(item.primary_metric_name, None) is None
@@ -127,6 +130,11 @@ def _rankable_primary_score(item: Any) -> float:
         if metric is None or metric.higher_is_better
         else -float(item.primary_score)
     )
+
+
+def _aggregate_valid(item: Any) -> bool:
+    metric = item.metrics.get(item.primary_metric_name)
+    return metric is None or bool(metric.metadata.get("aggregate_valid", True))
 
 
 def _stability_width(stability: Optional[Dict[str, Any]]) -> float:

@@ -7,6 +7,12 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checka
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    importable_callable_path,
+    portable_callable_identity,
+    validate_cache_identity,
+)
+from vertebrae.utils.semantic_labels import semantic_label_key
 from vertebrae.utils.serialization import make_json_safe
 
 
@@ -82,12 +88,23 @@ class CallableMetric:
     config: Dict[str, Any] = field(default_factory=dict)
     higher_is_better: bool = True
     callable_path: Optional[str] = None
+    cache_identity: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("Metric names must be non-empty strings.")
         if not callable(self.metric_fn):
             raise TypeError("metric_fn must be callable.")
+        self.cache_identity = validate_cache_identity(self.cache_identity)
+        if self.callable_path is not None:
+            if not isinstance(self.callable_path, str) or not self.callable_path.strip():
+                raise ValueError("callable_path must be a non-empty string when provided.")
+            self.callable_path = self.callable_path.strip()
+            resolved = load_metric_callable(self.callable_path)
+            expected = getattr(self.metric_fn, "__func__", self.metric_fn)
+            actual = getattr(resolved, "__func__", resolved)
+            if actual is not expected:
+                raise ValueError("callable_path must resolve to the exact metric_fn callable.")
 
     def score(
         self,
@@ -110,7 +127,8 @@ class CallableMetric:
     def recipe(self) -> Dict[str, Any]:
         """Return enough metadata to reconstruct importable metrics on workers."""
 
-        path = self.callable_path or _callable_path(self.metric_fn)
+        callable_identity = portable_callable_identity(self.metric_fn)
+        path = self.callable_path or importable_callable_path(self.metric_fn)
         return {
             "name": self.name,
             "kind": "callable",
@@ -118,6 +136,9 @@ class CallableMetric:
             "config": make_json_safe(self.config),
             "higher_is_better": self.higher_is_better,
             "portable": path is not None,
+            "callable_identity": callable_identity,
+            "cache_identity": self.cache_identity,
+            "cache_safe": self.cache_identity is not None or callable_identity is not None,
         }
 
     @classmethod
@@ -128,6 +149,7 @@ class CallableMetric:
         name: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         higher_is_better: bool = True,
+        cache_identity: Optional[str] = None,
     ) -> "CallableMetric":
         """Build a portable callable metric from ``module:attribute`` syntax."""
 
@@ -138,6 +160,7 @@ class CallableMetric:
             config=dict(config or {}),
             higher_is_better=higher_is_better,
             callable_path=path,
+            cache_identity=cache_identity,
         )
 
 
@@ -147,6 +170,13 @@ class OverlapMetric:
 
     config: Any = None
     name: str = "overlap"
+
+    def with_config(self, config: Any) -> "OverlapMetric":
+        """Return a resolved metric without mutating a caller-owned metric object."""
+
+        if self.config is not None:
+            return self
+        return OverlapMetric(config=config, name=self.name)
 
     def score(
         self,
@@ -169,6 +199,10 @@ class OverlapMetric:
             label_names=metadata.get("label_names"),
             target_type=metadata.get("target_type", "auto"),
             target_names=metadata.get("target_names"),
+            label_catalog=(
+                metadata.get("label_catalog")
+                or (metadata.get("label_view") or {}).get("label_catalog")
+            ),
         )
         return MetricResult(
             name=self.name,
@@ -195,7 +229,13 @@ class OverlapMetric:
         )
 
     def recipe(self) -> Dict[str, Any]:
-        return {"name": self.name, "kind": "overlap_index", "config": make_json_safe(self.config)}
+        from vertebrae.config import overlap_scoring_config_recipe
+
+        return {
+            "name": self.name,
+            "kind": "overlap_index",
+            "config": overlap_scoring_config_recipe(self.config),
+        }
 
 
 @dataclass
@@ -224,13 +264,19 @@ class LabelRetrievalMetric:
                 "RetrievalDataset for multi-label or regression relevance."
             )
         label_values = list(labels)
+        try:
+            label_keys = [semantic_label_key(label) for label in label_values]
+        except TypeError as exc:
+            raise ValueError(
+                "LabelRetrievalMetric labels must have stable semantic identities."
+            ) from exc
         relevance = {
             index: {
                 other: 1.0
-                for other, candidate in enumerate(label_values)
+                for other, candidate in enumerate(label_keys)
                 if candidate == label and other != index
             }
-            for index, label in enumerate(label_values)
+            for index, label in enumerate(label_keys)
         }
         scorer = RetrievalScorer(self.config or RetrievalConfig())
         result = scorer.score(

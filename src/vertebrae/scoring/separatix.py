@@ -12,6 +12,7 @@ from vertebrae.config import (
     SeparatixConfig,
 )
 from vertebrae.utils.labels import REGRESSION_TARGET, metric_labels, target_summary
+from vertebrae.utils.semantic_labels import semantic_label_key
 from vertebrae.utils.serialization import make_json_safe
 from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix, l2_normalize_rows
 
@@ -321,14 +322,16 @@ def _probe_comparison(
     if not primary_metric or "linear" not in probes:
         return None
     metric_name = primary_metric["name"]
+    higher_is_better = _probe_metric_higher_is_better(str(metric_name))
     linear = probes.get("linear", {}) or {}
     nonlinear_candidates = [
         name
         for name in _NONLINEAR_PROBES
         if _is_number((probes.get(name, {}) or {}).get(metric_name))
     ]
+    selector = max if higher_is_better else min
     nonlinear_name = (
-        max(nonlinear_candidates, key=lambda name: float(probes[name][metric_name]))
+        selector(nonlinear_candidates, key=lambda name: float(probes[name][metric_name]))
         if nonlinear_candidates
         else None
     )
@@ -339,21 +342,35 @@ def _probe_comparison(
         return None
     linear_value = float(linear[metric_name])
     nonlinear_value = float(nonlinear[metric_name])
-    delta = nonlinear_value - linear_value
+    raw_delta = nonlinear_value - linear_value
+    improvement = raw_delta if higher_is_better else -raw_delta
     return {
         "linear_probe": "linear",
         "nonlinear_probe": nonlinear_name,
         "metric": metric_name,
         "linear_value": linear_value,
         "nonlinear_value": nonlinear_value,
-        "delta": delta,
-        "favored_family": "nonlinear" if delta > 0 else "linear" if delta < 0 else "tie",
+        "higher_is_better": higher_is_better,
+        "raw_delta": raw_delta,
+        "delta": improvement,
+        "favored_family": (
+            "nonlinear" if improvement > 0 else "linear" if improvement < 0 else "tie"
+        ),
         "confidence": None,
     }
 
 
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(value)
+
+
+def _probe_metric_higher_is_better(metric_name: str) -> bool:
+    return metric_name.lower() not in {
+        "mae",
+        "rmse",
+        "mean_absolute_error",
+        "root_mean_squared_error",
+    }
 
 
 def _load_separatix() -> Any:
@@ -379,11 +396,28 @@ def _l2_normalize_for_separatix(value: Any) -> Any:
 def _validate_groups(groups: Optional[Any], n_samples: int) -> Optional[np.ndarray]:
     if groups is None:
         return None
-    array = np.asarray(groups)
+    array = np.asarray(groups, dtype=object)
     if array.ndim != 1:
         raise ValueError("groups must be one-dimensional.")
     if len(array) != n_samples:
         raise ValueError(
             f"groups and labels must have the same length; got {len(array)} and {n_samples}."
         )
-    return array
+    keys = []
+    for value in array.tolist():
+        normalized = value.item() if hasattr(value, "item") else value
+        if normalized is None or (
+            isinstance(normalized, (float, complex, np.floating, np.complexfloating))
+            and not bool(np.isfinite(normalized))
+        ):
+            raise ValueError("groups values must be non-missing and finite.")
+        if hasattr(normalized, "is_finite") and callable(normalized.is_finite):
+            if not bool(normalized.is_finite()):
+                raise ValueError("groups values must be non-missing and finite.")
+        try:
+            keys.append(semantic_label_key(normalized))
+        except TypeError as exc:
+            raise ValueError(
+                "groups values must have deterministic exact semantic identities."
+            ) from exc
+    return np.asarray(keys, dtype=object)

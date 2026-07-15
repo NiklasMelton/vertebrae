@@ -70,6 +70,21 @@ class RetrievalScorer:
             for excluded_query, excluded_gallery in exclusions
         ):
             raise ValueError("Exclusions contain an invalid query or gallery index.")
+        queries_without_positives = [
+            query_index
+            for query_index, values in relevance.items()
+            if not any((query_index, gallery_index) not in exclusions for gallery_index in values)
+        ]
+        if queries_without_positives:
+            display_ids = [
+                query_ids[index] if query_ids is not None else index
+                for index in queries_without_positives[:10]
+            ]
+            suffix = ", ..." if len(queries_without_positives) > len(display_ids) else ""
+            raise ValueError(
+                "Every query must retain at least one eligible positive relevance after "
+                f"exclusions; missing for {display_ids!r}{suffix}."
+            )
         comparisons = int(n_queries) * int(n_gallery)
         if (
             self.config.max_pairwise_comparisons is not None
@@ -122,8 +137,7 @@ class RetrievalScorer:
             for q_index, row, query_diagnostics, warning in batch_results:
                 if warning is not None:
                     query_id = query_ids[q_index] if query_ids else q_index
-                    warnings.append(f"Query {query_id!r} {warning}")
-                    continue
+                    raise ValueError(f"Query {query_id!r} {warning}")
                 metric_rows.append(row)
                 positive_sims.extend(query_diagnostics["positive_scores"])
                 nearest_negative = query_diagnostics["nearest_negative"]
@@ -322,11 +336,39 @@ def _query_metrics_from_ranks(
         row[f"recall@{k}"] = found / float(n_positive)
         row[f"hit_rate@{k}"] = float(found > 0)
         in_top_k = ranks <= k
-        dcg = float(np.sum((np.power(2.0, grades[in_top_k]) - 1.0) / np.log2(ranks[in_top_k] + 1)))
+        max_grade = float(np.max(grades))
+        max_log_gain = float(_log_relevance_gain(np.asarray([max_grade]))[0])
+        retrieved_gains = np.exp(_log_relevance_gain(grades[in_top_k]) - max_log_gain)
+        dcg = float(np.sum(retrieved_gains / np.log2(ranks[in_top_k] + 1)))
         ideal = np.sort(grades)[::-1][:k]
-        idcg = float(np.sum((np.power(2.0, ideal) - 1.0) / np.log2(np.arange(2, len(ideal) + 2))))
-        row[f"ndcg@{k}"] = dcg / idcg if idcg else 0.0
+        ideal_gains = np.exp(_log_relevance_gain(ideal) - max_log_gain)
+        idcg = float(np.sum(ideal_gains / np.log2(np.arange(2, len(ideal) + 2))))
+        ndcg = dcg / idcg if idcg else 0.0
+        row[f"ndcg@{k}"] = float(min(1.0, max(0.0, ndcg)))
     return row
+
+
+def _log_relevance_gain(grades: np.ndarray) -> np.ndarray:
+    """Compute ``log(2**grade - 1)`` without cancellation or overflow."""
+
+    values = np.asarray(grades, dtype=np.float64)
+    if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError("NDCG relevance grades must be finite and positive.")
+    scaled = values * np.log(2.0)
+    result = np.empty_like(values)
+    small = scaled < 1e-4
+    large = scaled > 50.0
+    middle = ~(small | large)
+    # expm1(x) = x * (1 + x/2 + x**2/6 + ...). Keeping x factored
+    # avoids underflow for the smallest positive float grades.
+    result[small] = (
+        np.log(values[small])
+        + np.log(np.log(2.0))
+        + np.log1p(scaled[small] / 2.0 + scaled[small] ** 2 / 6.0)
+    )
+    result[middle] = np.log(np.expm1(scaled[middle]))
+    result[large] = scaled[large] + np.log1p(-np.exp(-scaled[large]))
+    return result
 
 
 def _to_dense(value: Any) -> np.ndarray:

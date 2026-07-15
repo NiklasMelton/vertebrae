@@ -1,3 +1,7 @@
+from datetime import date
+from decimal import Decimal
+from uuid import UUID
+
 import numpy as np
 import pytest
 
@@ -6,6 +10,7 @@ from vertebrae.reports.markdown_report import render_markdown_report
 from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.metrics import OverlapMetric
 from vertebrae.scoring.overlap import OverlapIndexScorer
+from vertebrae.utils.semantic_labels import semantic_label_key
 
 
 def test_overlap_scorer_uses_minibatch_kmeans_backend(fake_overlapindex):
@@ -60,6 +65,35 @@ def test_overlap_scorer_passes_multilabel_indicator_targets(fake_overlapindex):
     ]
 
 
+def test_overlap_scorer_translates_multilabel_exclusions_to_backend_columns(
+    fake_overlapindex,
+):
+    embeddings = np.eye(6)
+    labels = [
+        ("red", "round"),
+        ("red",),
+        ("round",),
+        ("red", "sweet"),
+        ("round", "sweet"),
+        ("sweet",),
+    ]
+
+    result = OverlapIndexScorer(
+        OverlapScoringConfig(
+            k=1,
+            min_samples_per_cluster=1,
+            exclude_classes=["round"],
+        )
+    ).score(embeddings, labels)
+
+    assert fake_overlapindex.calls[-1]["exclude_classes"] == [1]
+    assert result.metadata["aggregation_classes"] == ["red", "sweet"]
+    with pytest.raises(ValueError, match="absent from the multi-label target"):
+        OverlapIndexScorer(OverlapScoringConfig(k=1, exclude_classes=["missing"])).score(
+            embeddings, labels
+        )
+
+
 def test_overlap_scorer_passes_reporting_exclusions(fake_overlapindex):
     Z = np.eye(6)
     y = np.array(["background", "background", "cat", "cat", "dog", "dog"])
@@ -76,6 +110,34 @@ def test_overlap_scorer_passes_reporting_exclusions(fake_overlapindex):
     assert result.metadata["exclude_classes"] == ["background"]
     assert result.metadata["aggregation_classes"] == ["cat", "dog"]
     assert result.metadata["aggregate_valid"] is True
+
+
+def test_overlap_scorer_serializes_typed_exclusions_as_semantic_keys(fake_overlapindex):
+    decimal_label = Decimal("1.25")
+    date_label = date(2026, 7, 15)
+    uuid_label = UUID("12345678-1234-5678-1234-567812345678")
+    labels = np.empty(6, dtype=object)
+    labels[:] = [decimal_label, decimal_label, date_label, date_label, uuid_label, uuid_label]
+
+    config = OverlapScoringConfig(
+        k={decimal_label: 1, date_label: 1, uuid_label: 1},
+        min_samples_per_cluster=1,
+        exclude_classes=[decimal_label, date_label],
+    )
+    result = OverlapIndexScorer(config).score(np.eye(6), labels)
+
+    assert result.metadata["exclude_classes"] == [
+        semantic_label_key(decimal_label),
+        semantic_label_key(date_label),
+    ]
+    assert result.metadata["aggregation_classes"] == [semantic_label_key(uuid_label)]
+    recipe = OverlapMetric(config).recipe()
+    assert recipe["config"]["exclude_classes"] == result.metadata["exclude_classes"]
+    assert recipe["config"]["k"] == {
+        semantic_label_key(decimal_label): 1,
+        semantic_label_key(date_label): 1,
+        semantic_label_key(uuid_label): 1,
+    }
 
 
 def test_overlap_scorer_supports_explicit_regression_targets(fake_overlapindex):
