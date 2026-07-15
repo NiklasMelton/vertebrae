@@ -22,6 +22,7 @@ from vertebrae.utils.labels import (
     normalize_label_paths,
     normalize_level_names,
     normalize_targets,
+    regression_subsample_indices,
     stratified_label_indices,
     target_summary,
 )
@@ -1337,10 +1338,10 @@ class BenchmarkDataset:
         random_state: int = 42,
         min_samples_per_class: int = 2,
     ) -> np.ndarray:
-        """Select class-stratified sample indices without replacement.
+        """Select target-aware sample indices without replacement.
 
         Args:
-            rate: Fraction of each class to keep. Must be in `(0, 1]`.
+            rate: Requested fraction of samples to keep. Must be in `(0, 1]`.
             random_state: Random seed for reproducible selection.
             min_samples_per_class: Minimum retained samples per class when possible.
 
@@ -1356,9 +1357,10 @@ class BenchmarkDataset:
         if rate >= 1.0:
             return np.arange(len(self.y), dtype=int)
         if self.metadata.get("target_type") == REGRESSION_TARGET:
-            return _random_subsample_indices(
-                n_samples=len(self.y),
-                rate=rate,
+            n_take = min(len(self.y), max(3, int(np.floor(len(self.y) * rate))))
+            return regression_subsample_indices(
+                self.y,
+                n_take=n_take,
                 random_state=random_state,
             )
         return stratified_label_indices(
@@ -2066,17 +2068,6 @@ def _concat_matrices(left: Any, right: Any) -> Any:
 
         return sparse.hstack([left, right], format="csr")
     return np.concatenate([np.asarray(left), np.asarray(right)], axis=1)
-
-
-def _random_subsample_indices(
-    n_samples: int,
-    rate: float,
-    random_state: int,
-) -> np.ndarray:
-    n_take = max(2, int(np.floor(n_samples * rate)))
-    n_take = min(n_samples, n_take)
-    rng = np.random.default_rng(random_state)
-    return np.sort(rng.choice(np.arange(n_samples), size=n_take, replace=False))
 
 
 def _num_samples(X: Any) -> int:

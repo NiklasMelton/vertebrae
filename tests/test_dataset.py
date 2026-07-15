@@ -666,6 +666,33 @@ def test_multilabel_stratified_subsample_indices_preserve_label_counts():
     assert subset.metadata["sample_indices"] == indices.tolist()
 
 
+def test_regression_subsample_indices_expand_tiny_rate_and_preserve_variation():
+    targets = np.column_stack(
+        [
+            np.ones(10),
+            np.asarray([0.0] * 9 + [1.0]),
+            np.ones(10) * 4.0,
+        ]
+    )
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(20).reshape(10, 2),
+        targets,
+        modality="tabular",
+        target_type="regression",
+        target_names=["constant_a", "signal", "constant_b"],
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    first = dataset.stratified_subsample_indices(rate=0.01, random_state=7)
+    second = dataset.stratified_subsample_indices(rate=0.01, random_state=7)
+    subset = dataset.subset(first)
+
+    assert len(first) == 3
+    assert np.array_equal(first, second)
+    assert np.any(np.var(subset.y, axis=0) > 0.0)
+    assert subset.summary()["nonconstant_targets"] == ["signal"]
+
+
 def test_nested_subset_preserves_original_sample_indices():
     dataset = BenchmarkDataset.from_arrays(
         np.arange(24).reshape(12, 2),

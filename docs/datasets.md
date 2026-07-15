@@ -610,10 +610,14 @@ for batch in dataset.iter_batches(batch_size=128):
     print(batch.indices, batch.X)
 ```
 
-The dataset object also exposes `stratified_subsample_indices(...)` for
-class-preserving sampling without replacement. That method is used by memory-aware
-and stability-related workflows when the full dataset should not be embedded or
-scored in one pass.
+The dataset object also exposes `stratified_subsample_indices(...)` for target-aware
+sampling without replacement. Categorical datasets preserve classes or active
+labels. Regression datasets retain at least three rows and anchor the selection on
+two rows that differ in a non-constant target, including for multi-target data. A
+very small requested rate can therefore produce a larger effective rate so the
+result remains a valid regression dataset. Sampling is deterministic for a fixed
+random seed. Stability analysis shares the same target-preserving anchor selection
+while retaining its stricter feasibility checks for the configured fraction.
 
 ## Working with precomputed embeddings
 

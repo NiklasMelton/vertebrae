@@ -16,6 +16,7 @@ from vertebrae.utils.labels import (
     REGRESSION_TARGET,
     display_label,
     normalize_targets,
+    regression_subsample_indices,
     stratified_label_indices,
 )
 from vertebrae.utils.validation import ensure_numeric_matrix
@@ -158,10 +159,10 @@ def _subsample_indices(
             target_type=label_metadata["target_type"],
             target_names=label_metadata.get("target_names"),
         )
-    return _regression_subsample_indices(
+    return regression_subsample_indices(
         labels,
         n_take=math.floor(len(labels) * config.subsample_fraction),
-        sampling_seed=sampling_seed,
+        random_state=sampling_seed,
     )
 
 
@@ -253,27 +254,3 @@ def _validate_subsample_target(
             f"all original {unit}; found {invalid}. Increase subsample_fraction or "
             "use mode='prototype'."
         )
-
-
-def _regression_subsample_indices(
-    labels: np.ndarray,
-    n_take: int,
-    sampling_seed: int,
-) -> np.ndarray:
-    """Select a deterministic random subset containing a non-constant target."""
-
-    values = np.asarray(labels, dtype=float)
-    matrix = values.reshape(-1, 1) if values.ndim == 1 else values
-    nonconstant_columns = np.flatnonzero(np.var(matrix, axis=0) > 0.0)
-    if not len(nonconstant_columns):
-        raise ValueError("Regression stability requires at least one non-constant target.")
-
-    rng = np.random.default_rng(sampling_seed)
-    column = int(rng.choice(nonconstant_columns))
-    first = int(rng.integers(0, len(matrix)))
-    distinct = np.flatnonzero(matrix[:, column] != matrix[first, column])
-    second = int(rng.choice(distinct))
-    anchors = np.asarray([first, second], dtype=int)
-    remaining = np.setdiff1d(np.arange(len(matrix), dtype=int), anchors, assume_unique=False)
-    fill = rng.choice(remaining, size=n_take - len(anchors), replace=False)
-    return np.sort(np.concatenate([anchors, np.asarray(fill, dtype=int)]))

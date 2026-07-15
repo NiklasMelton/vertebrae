@@ -153,7 +153,7 @@ It is target-aware by definition:
 
 - single-label targets are sampled per class;
 - multi-label targets are sampled to preserve every active label;
-- regression targets use constrained random samples containing at least one
+- regression targets use target-preserving samples containing at least one
   non-constant target.
 
 Categorical repeats retain at least two occurrences of every original class or
