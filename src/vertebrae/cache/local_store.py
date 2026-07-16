@@ -89,9 +89,9 @@ class LocalArtifactStore:
                 manifest_path = path / ARRAY_MANIFEST_FILENAME
                 if not manifest_path.exists():
                     return False
-                legacy_manifest, target = self._resolve_manifest_target(path)
+                standalone_manifest, target = self._resolve_manifest_target(path)
                 return target is not None and (
-                    int(target.stat().st_size) == legacy_manifest.size_bytes
+                    int(target.stat().st_size) == standalone_manifest.size_bytes
                 )
         except FileNotFoundError:
             return False
@@ -235,14 +235,14 @@ class LocalArtifactStore:
                 manifest = artifact_manifest.array
                 target = path / manifest.filename
             else:
-                legacy_manifest, legacy_target = self._resolve_manifest_target(path)
-                if legacy_target is None:
+                standalone_manifest, standalone_target = self._resolve_manifest_target(path)
+                if standalone_target is None:
                     raise FileNotFoundError(
                         f"Array manifest for key {key} references missing file "
-                        f"{legacy_manifest.filename}."
+                        f"{standalone_manifest.filename}."
                     )
-                manifest = legacy_manifest
-                target = legacy_target
+                manifest = standalone_manifest
+                target = standalone_target
             if not target.exists():
                 raise FileNotFoundError(
                     f"Array manifest for key {key} references missing file {manifest.filename}."
@@ -261,14 +261,14 @@ class LocalArtifactStore:
                 manifest = artifact_manifest.array
                 target = path / manifest.filename
             else:
-                legacy_manifest, legacy_target = self._resolve_manifest_target(path)
-                if legacy_target is None:
+                standalone_manifest, standalone_target = self._resolve_manifest_target(path)
+                if standalone_target is None:
                     raise FileNotFoundError(
                         f"Array manifest for key {key} references missing file "
-                        f"{legacy_manifest.filename}."
+                        f"{standalone_manifest.filename}."
                     )
-                manifest = legacy_manifest
-                target = legacy_target
+                manifest = standalone_manifest
+                target = standalone_target
             if not target.exists():
                 raise FileNotFoundError(
                     f"Array manifest for key {key} references missing file {manifest.filename}."

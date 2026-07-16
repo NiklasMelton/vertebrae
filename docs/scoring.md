@@ -185,8 +185,8 @@ Scoring seeds and sampling seeds use independent deterministic streams. Subsampl
 results record `sampling_seeds`, `effective_sample_counts`, and
 `effective_subsample_fractions` so the sampling plan can be reproduced and audited.
 `StabilityConfig.stratified` has been removed: categorical subsampling cannot opt
-out of target preservation. Because `vertebrae` is unreleased alpha software, old
-serialized configurations containing that field are intentionally unsupported.
+out of target preservation. Serialized configurations containing that field are
+intentionally unsupported.
 
 `vertebrae` reports these as stability summaries and stability intervals. They are
 not formal confidence intervals unless a different statistical protocol is added

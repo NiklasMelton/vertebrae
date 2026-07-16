@@ -785,7 +785,7 @@ object contains those weights. Importable callable identities include referenced
 modules, helper callables, and exact global configuration; optional backend versions
 also participate in extractor recipes. Raw-cache
 eligibility propagates to compression and every derived artifact: disabling raw
-caching or using an unsafe identity cannot produce a reusable derived cache. Legacy
+caching or using an unsafe identity cannot produce a reusable derived cache. Superseded
 cache identity and array/composite manifest schemas are intentionally not read;
 standalone JSON and label store APIs remain current.
 

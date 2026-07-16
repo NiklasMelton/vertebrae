@@ -262,10 +262,10 @@ per-extractor details show the full descriptive context. When Separatix MLP prob
 are enabled, their trigger, status, reason, and comparison payload remain separate
 from the ordinary baseline probe summary.
 
-`probe_summary` is required in the current alpha result contract. Serialized
+`probe_summary` is required in the current result contract. Serialized
 artifacts created before this field was introduced are not backward compatible and
 are not reconstructed from the raw Separatix report. The raw report remains
-available for detailed evidence and reproducibility, not as a legacy result schema.
+available for detailed evidence and reproducibility, not as an alternate result schema.
 
 ## What recommendations mean
 

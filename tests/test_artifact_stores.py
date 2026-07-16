@@ -213,7 +213,7 @@ def test_local_array_stat_uses_actual_file_size(tmp_path):
         store.stat_array("missing")
 
 
-def test_local_array_manifest_controls_rewrites_and_invalidates_legacy_arrays(tmp_path):
+def test_local_array_manifest_controls_rewrites_and_rejects_uncommitted_arrays(tmp_path):
     store = LocalArtifactStore(str(tmp_path))
     key = "arrays/rewrite"
 
@@ -245,12 +245,12 @@ def test_local_array_manifest_controls_rewrites_and_invalidates_legacy_arrays(tm
     assert sparse.issparse(store.get_array(key))
     assert np.array_equal(store.get_array(key).toarray(), np.full((3, 2), 9))
 
-    legacy = tmp_path / "arrays/legacy"
-    legacy.mkdir(parents=True)
-    np.save(legacy / "embeddings.npy", np.eye(2))
-    assert store.exists("arrays/legacy") is False
+    obsolete_layout = tmp_path / "arrays/obsolete-layout"
+    obsolete_layout.mkdir(parents=True)
+    np.save(obsolete_layout / "embeddings.npy", np.eye(2))
+    assert store.exists("arrays/obsolete-layout") is False
     with pytest.raises(FileNotFoundError, match="manifest"):
-        store.get_array("arrays/legacy")
+        store.get_array("arrays/obsolete-layout")
 
 
 def test_local_array_manifest_detects_corruption_and_missing_targets(tmp_path):
@@ -759,7 +759,7 @@ def test_remote_composite_interleaved_writer_cleanup_preserves_staged_generation
 
 
 @pytest.mark.parametrize("provider", ["s3", "gcs"])
-def test_remote_readers_retry_generation_switches_and_legacy_transitions(provider, monkeypatch):
+def test_remote_readers_retry_generation_switches_and_plain_api_transitions(provider, monkeypatch):
     writer, reader, _ = _fake_remote_store_pair(provider)
 
     array_key = "composite/read-switch-array"
@@ -808,12 +808,12 @@ def test_remote_readers_retry_generation_switches_and_legacy_transitions(provide
     assert labels_metadata["generation"] == 1
     monkeypatch.setattr(reader, "_load_remote_json", original_load_json)
 
-    json_key = "composite/legacy-json-switch"
+    json_key = "composite/plain-json-switch"
     writer.put_json(json_key, {"generation": 0})
     original_get_bytes = reader._get_bytes
     json_switched = False
 
-    def get_legacy_json_then_switch(name):
+    def get_plain_json_then_switch(name):
         nonlocal json_switched
         payload = original_get_bytes(name)
         if name.endswith(f"/{json_key}/metadata.json") and not json_switched:
@@ -821,28 +821,28 @@ def test_remote_readers_retry_generation_switches_and_legacy_transitions(provide
             writer.put_artifact(json_key, np.eye(2), {"generation": 1})
         return payload
 
-    monkeypatch.setattr(reader, "_get_bytes", get_legacy_json_then_switch)
+    monkeypatch.setattr(reader, "_get_bytes", get_plain_json_then_switch)
     assert reader.get_json(json_key)["generation"] == 1
     monkeypatch.setattr(reader, "_get_bytes", original_get_bytes)
 
-    legacy_labels_key = "composite/legacy-labels-switch"
-    writer.put_labels(legacy_labels_key, np.zeros(3, dtype=int))
+    plain_labels_key = "composite/plain-labels-switch"
+    writer.put_labels(plain_labels_key, np.zeros(3, dtype=int))
     labels_transitioned = False
 
-    def get_legacy_labels_then_switch(name):
+    def get_plain_labels_then_switch(name):
         nonlocal labels_transitioned
         payload = original_get_bytes(name)
-        if name.endswith(f"/{legacy_labels_key}/labels.json") and not labels_transitioned:
+        if name.endswith(f"/{plain_labels_key}/labels.json") and not labels_transitioned:
             labels_transitioned = True
             writer.put_labels_artifact(
-                legacy_labels_key,
+                plain_labels_key,
                 np.ones(3, dtype=int),
                 {"generation": 1, "target_type": "single_label"},
             )
         return payload
 
-    monkeypatch.setattr(reader, "_get_bytes", get_legacy_labels_then_switch)
-    assert np.all(reader.get_labels(legacy_labels_key) == semantic_label_key(1))
+    monkeypatch.setattr(reader, "_get_bytes", get_plain_labels_then_switch)
+    assert np.all(reader.get_labels(plain_labels_key) == semantic_label_key(1))
 
 
 @pytest.mark.parametrize(

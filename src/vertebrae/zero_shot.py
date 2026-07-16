@@ -521,7 +521,7 @@ def _resolve_candidates(
         else:
             if not sample_branch or not text_branch:
                 raise ValueError(
-                    "Legacy raw extractors require both sample_branch and text_branch; "
+                    "Direct extractor entries require both sample_branch and text_branch; "
                     "use ZeroShotCandidate for per-extractor branches."
                 )
             candidates.append(ZeroShotCandidate(item, sample_branch, text_branch))
