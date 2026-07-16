@@ -27,8 +27,8 @@ NFKD-normalized lowercase ASCII display form, but identity comes from the full d
 of the exact, unnormalized UTF-8 output name retained in the manifest.
 
 This key layout intentionally does not read pre-layout named-output, structured, or
-segmentation caches. The package is pre-release, so no legacy fallback or migration is
-provided; rerunning materialization creates canonical artifacts. Some human-readable
+segmentation caches. No fallback or migration is provided; rerunning materialization
+creates canonical artifacts. Some human-readable
 namespace prefixes for single-output, retrieval, zero-shot, label, group, scoring, and
 compression artifacts remain familiar, but their authoritative component fingerprints
 use identity schema v2 and therefore intentionally produce new keys.

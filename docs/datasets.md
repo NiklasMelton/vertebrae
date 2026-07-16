@@ -488,12 +488,12 @@ footprint is admitted before allocation; disk spill cannot bypass that check. Di
 spill accounts both staged and final embeddings and metadata against one shared peak
 budget and fails before retaining or allocating a row that would exceed it.
 
-### Alpha migration note
+### Unit ID contract
 
 Materialized `unit_ids` are now generated global identifiers rather than the
 annotation values copied verbatim. Code that needs the caller-supplied ID
 should read `local_unit_id` from unit provenance. This direct contract change
-follows the package's pre-release compatibility policy.
+keeps generated identifiers globally unique while preserving caller-supplied IDs.
 
 ## Validation rules
 
