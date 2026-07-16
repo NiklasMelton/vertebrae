@@ -1,7 +1,8 @@
 # embedding compression
 
 `vertebrae` can apply an optional embedding-compression step after feature
-extraction and before OverlapIndex scoring, stability analysis, and probes.
+extraction and before OverlapIndex scoring, stability analysis, Separatix
+diagnostics.
 This is useful when you want to:
 
 - compare raw embeddings against compressed variants,
@@ -10,20 +11,24 @@ This is useful when you want to:
 - study matryoshka-style prefix truncation,
 - measure the effect of lossy precision reduction such as `float16` or `int8`.
 
-Compression runs on the embedding artifact, not inside the extractor itself. The
-raw embedding cache stays reusable, and each compression recipe gets its own
-derived artifact key and report metadata.
+Compression runs after extraction rather than inside the extractor. When the raw
+embedding is cache-eligible, it remains independently reusable and each compression
+recipe receives its own derived artifact key and report metadata. Derived eligibility
+is never broader than source eligibility: `CacheConfig(enabled=False)`, hosted
+cache opt-out, or `cache_status="bypassed_unsafe_identity"` also prevents compressed
+results from being reused. The compression may still run for the current evaluation;
+it simply is not published as a reusable cache artifact.
 
 ## Configuration
 
 Use `EmbeddingCompressionConfig` with `Evaluator` or `Benchmark`:
 
 ```python
-from vertebrae import BenchmarkDataset, EmbeddingCompressionConfig, Evaluator
-from vertebrae.config import CacheConfig, ProbeConfig, StabilityConfig
+from vertebrae import BenchmarkDataset, EmbeddingCompressionConfig, Evaluator, DatasetIdentity
+from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 
-dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y)
+dataset = BenchmarkDataset.from_embeddings(embeddings=Z, labels=y, identity=DatasetIdentity.declared("example-dataset", "1"))
 
 compression = EmbeddingCompressionConfig(
     enabled=True,
@@ -36,13 +41,17 @@ result = Evaluator(
     extractor=PrecomputedExtractor(name="baseline"),
     compression_config=compression,
     stability_config=StabilityConfig(enabled=False),
-    probe_config=ProbeConfig(enabled=False),
     cache_config=CacheConfig(cache_dir=".vertebrae_cache"),
 ).run()
 ```
 
 To compare multiple compression variants in one run, pass
 `compression_configs=[...]` to `Benchmark`.
+
+For dimensional compression methods, `dtype` may be set to a real floating-point
+NumPy dtype such as `float16`, `float32`, or `float64`. Integer, complex, boolean,
+object, text, datetime, and structured dtypes are rejected. Use quantization's
+`precision="int8"` or `precision="uint8"` when evaluating integer encoding.
 
 ## Supported methods
 
@@ -55,7 +64,8 @@ Disables compression and preserves the current workflow.
 Dense PCA for low- to medium-dimensional dense embeddings.
 
 - Requires dense input.
-- Supports `n_components` or `preserve_variance`.
+- Requires exactly one of `n_components` or `preserve_variance`.
+- `preserve_variance` must be strictly between `0` and `1`.
 - Supports `whiten=True`.
 
 ### `incremental_pca`
@@ -93,12 +103,23 @@ Keeps the first `n_components` dimensions without fitting a model.
 
 - Accepts dense and sparse input.
 - Requires `n_components`.
+- Honors `dtype` after truncation while preserving sparse storage.
+- Sparse `float16` output is rejected because SciPy does not support it
+  consistently across versions; use sparse `float32` or `quantize` with
+  `precision="float16"` instead.
 - Use `assume_matryoshka=True` when the embedding source is intentionally
   dimension-ordered, such as matryoshka-trained or shortened embeddings.
 
 When `assume_matryoshka=False`, `vertebrae` records a warning so reports make it
 clear this is being treated as a prefix-based diagnostic rather than a claimed
 model-native shortening path.
+
+For every dimensional method, a requested `n_components` greater than or equal to
+the current embedding width is recorded as a skipped compression and leaves values,
+sparsity, dimensions, and dtype unchanged. A requested `dtype` is applied only when
+compression is actually performed. It is never used to cast a skipped or disabled
+compression result. PCA and incremental PCA also reject a reducing dimension that
+exceeds the number of samples on the side used to fit the transform.
 
 ### `quantize`
 
@@ -107,9 +128,14 @@ still be scored by OverlapIndex.
 
 Supported precisions:
 
-- `float16`: direct cast for dense or sparse embeddings.
+- `float16`: direct cast for dense embeddings; sparse values are rounded through
+  `float16` and returned as a sparse `float32` scoring matrix.
 - `int8`: dense scalar quantize/dequantize round trip using symmetric per-dimension scaling.
 - `uint8`: dense scalar quantize/dequantize round trip using affine per-dimension min/max scaling.
+
+The integer precisions and sparse `float16` record the encoded dtype and estimated
+encoded size in metadata, then return `float32` embeddings for scoring. They do
+not return unsupported or integer matrices to the scoring pipeline.
 
 Binary and packed-bit quantization are intentionally not included here because
 they are more appropriate for retrieval or ANN index evaluation than for
@@ -146,6 +172,9 @@ vertebrae compress \
   --n-components 256 \
   --assume-matryoshka
 ```
+
+For PCA, pass either `--n-components` or `--preserve-variance`; the CLI rejects
+commands that provide both.
 
 Example quantization run:
 

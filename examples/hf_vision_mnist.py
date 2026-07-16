@@ -10,13 +10,13 @@ Install optional dependencies with:
 """
 
 import numpy as np
-from _common import CACHE_DIR, ensure_output_dir, print_ranking
+from _common import ensure_output_dir, print_ranking
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import HFVisionExtractor, SklearnExtractor
 
 DATASET_ID = "ylecun/mnist"
@@ -24,20 +24,16 @@ MODEL_SPECS = (
     {
         "name": "deit_tiny_imagenet_cls",
         "model_id": "facebook/deit-tiny-patch16-224",
-        "pooling": "cls",
+        "outputs": [{"name": "cls", "pooling": "cls"}],
         "image_mode": "rgb",
     },
     {
-        "name": "mnist_vit_trained_final_cls",
+        "name": "mnist_vit_trained",
         "model_id": "farleyknight-org-username/vit-base-mnist",
-        "pooling": "cls",
-        "image_mode": "rgb",
-    },
-    {
-        "name": "mnist_vit_trained_mid_cls",
-        "model_id": "farleyknight-org-username/vit-base-mnist",
-        "pooling": "cls",
-        "hidden_layer": 6,
+        "outputs": [
+            {"name": "final_cls", "pooling": "cls"},
+            {"name": "mid_cls", "pooling": "cls", "hidden_layer": 6},
+        ],
         "image_mode": "rgb",
     },
 )
@@ -66,6 +62,7 @@ def main() -> None:
             "source": DATASET_ID,
             "model_ids": [spec["model_id"] for spec in MODEL_SPECS],
         },
+        identity=DatasetIdentity.ephemeral(),
     )
 
     try:
@@ -73,8 +70,8 @@ def main() -> None:
             dataset=dataset,
             scoring_config=OverlapScoringConfig(k=2, min_samples_per_cluster=6),
             stability_config=StabilityConfig(repeats=3, random_state=29),
-            probe_config=ProbeConfig(methods=("nearest_centroid", "knn")),
-            cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
+            # The model specs intentionally use unpinned remote names.
+            cache_config=CacheConfig(enabled=False),
         )
         for spec in MODEL_SPECS:
             benchmark.add_extractor(
@@ -82,8 +79,9 @@ def main() -> None:
                     name=spec["name"],
                     model_id=spec["model_id"],
                     processor_id=spec.get("processor_id"),
-                    pooling=spec["pooling"],
-                    hidden_layer=spec.get("hidden_layer"),
+                    pooling=spec["outputs"][0]["pooling"],
+                    hidden_layer=spec["outputs"][0].get("hidden_layer"),
+                    outputs=spec["outputs"],
                     image_mode=spec["image_mode"],
                     batch_size=8,
                 )

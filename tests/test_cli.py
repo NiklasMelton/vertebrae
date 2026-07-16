@@ -1,13 +1,199 @@
 import json
 import pickle
+import runpy
+import shlex
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from vertebrae import BenchmarkDataset
+from vertebrae import BenchmarkDataset, DatasetIdentity, ResourceProfilingConfig, UnitAnnotation
 from vertebrae.cache.local_store import LocalArtifactStore
-from vertebrae.cli import main
-from vertebrae.extractors import PrecomputedExtractor
+from vertebrae.cli import build_parser, main
+from vertebrae.datasets import RetrievalDataset
+from vertebrae.extractors import (
+    CallableStructuredExtractor,
+    MultiOutputExtractor,
+    PrecomputedExtractor,
+    StructuredOutputSpec,
+)
+from vertebrae.extractors.base import EmbeddingOutputSpec
+
+
+class _RetrievalFitOnceExtractor:
+    name = "retrieval_fit_once"
+    modality = "embeddings"
+    extractor_type = "test"
+    streaming_safe = True
+    already_fitted = False
+
+    def __init__(self):
+        self.fit_calls = 0
+        self.fit_values = None
+        self.center = None
+
+    def fit(self, X, y=None):
+        del y
+        self.fit_calls += 1
+        self.fit_values = np.asarray(X).copy()
+        self.center = np.asarray(X).mean(axis=0)
+        return self
+
+    def transform(self, X):
+        if self.center is None:
+            raise RuntimeError("extractor must be fitted")
+        return np.asarray(X) - self.center
+
+    def recipe(self):
+        return {
+            "name": self.name,
+            "extractor_type": self.extractor_type,
+            "fitted": self.center is not None,
+            "cache_safe": True,
+        }
+
+
+class _UnsafeScaleExtractor:
+    name = "unsafe_scale"
+    modality = "embeddings"
+    extractor_type = "test"
+    streaming_safe = True
+
+    def __init__(self, scale):
+        self.scale = scale
+        self.fit_calls = 0
+
+    def fit(self, X, y=None):
+        del X, y
+        self.fit_calls += 1
+        return self
+
+    def transform(self, X):
+        return np.asarray(X, dtype=float) * self.scale
+
+    def recipe(self):
+        return {
+            "name": self.name,
+            "extractor_type": self.extractor_type,
+            "cache_safe": False,
+            "callable_identity": None,
+        }
+
+
+def test_cli_compress_rejects_conflicting_pca_dimension_flags(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "compress",
+                "--cache-dir",
+                ".vertebrae_cache",
+                "--embedding-key",
+                "embeddings/example",
+                "--method",
+                "pca",
+                "--n-components",
+                "2",
+                "--preserve-variance",
+                "0.9",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+def test_every_cli_pickle_option_warns_that_only_trusted_inputs_are_safe(capsys):
+    parser = build_parser()
+    subparser_action = next(
+        action for action in parser._actions if getattr(action, "choices", None)
+    )
+    checked = []
+    for command, command_parser in subparser_action.choices.items():
+        pickle_options = [
+            option
+            for action in command_parser._actions
+            for option in action.option_strings
+            if option.endswith("-pickle")
+        ]
+        if not pickle_options:
+            continue
+        with pytest.raises(SystemExit) as exc_info:
+            main([command, "--help"])
+        assert exc_info.value.code == 0
+        help_text = capsys.readouterr().out
+        assert "TRUSTED INPUT ONLY" in " ".join(help_text.split())
+        assert all(option in help_text for option in pickle_options)
+        checked.extend(pickle_options)
+
+    assert "--output-pickle" in checked
+    assert "--dataset-pickle" in checked
+    assert "--extractor-pickle" in checked
+
+
+def _multi_output_transform(batch):
+    values = np.asarray(batch)
+    return {
+        "left": values[:, :2],
+        "right": values[:, 1:3],
+    }
+
+
+def _multimodal_multi_output_transform(batch):
+    return {
+        "image_branch": np.asarray([[len(item)] for item in batch["image"]], dtype=float),
+        "fused": np.asarray(
+            [[len(image), len(text)] for image, text in zip(batch["image"], batch["caption"])],
+            dtype=float,
+        ),
+    }
+
+
+_STRUCTURED_SINGLE_VALUES = {
+    "a": np.asarray([[1.0, 0.0], [0.9, 0.1]]),
+    "b": np.asarray([[1.0, 0.0], [0.9, 0.1]]),
+    "c": np.asarray([[0.1, 0.9], [0.0, 1.0]]),
+    "d": np.asarray([[0.1, 0.9], [0.0, 1.0]]),
+}
+
+_STRUCTURED_SPECIAL_VALUES = {
+    "a": np.asarray([[100.0, 0.0], [1.0, 0.0], [0.9, 0.1], [200.0, 0.0]]),
+    "b": np.asarray([[100.0, 0.0], [1.0, 0.0], [0.9, 0.1], [200.0, 0.0]]),
+    "c": np.asarray([[100.0, 0.0], [0.1, 0.9], [0.0, 1.0], [200.0, 0.0]]),
+    "d": np.asarray([[100.0, 0.0], [0.1, 0.9], [0.0, 1.0], [200.0, 0.0]]),
+}
+
+_STRUCTURED_MULTI_VALUES = {
+    "tokens": {
+        "a": np.asarray([[1.0, 0.0], [0.9, 0.1]]),
+        "b": np.asarray([[1.0, 0.0], [0.9, 0.1]]),
+        "c": np.asarray([[0.1, 0.9], [0.0, 1.0]]),
+        "d": np.asarray([[0.1, 0.9], [0.0, 1.0]]),
+    },
+    "subwords": {
+        "a": np.asarray([[0.8, 0.2], [0.7, 0.3]]),
+        "b": np.asarray([[0.8, 0.2], [0.7, 0.3]]),
+        "c": np.asarray([[0.3, 0.7], [0.2, 0.8]]),
+        "d": np.asarray([[0.3, 0.7], [0.2, 0.8]]),
+    },
+}
+
+
+def _structured_single_transform(batch):
+    items = np.asarray(batch, dtype=object).tolist()
+    return [_STRUCTURED_SINGLE_VALUES[str(item)] for item in items]
+
+
+def _structured_special_transform(batch):
+    items = np.asarray(batch, dtype=object).tolist()
+    return [_STRUCTURED_SPECIAL_VALUES[str(item)] for item in items]
+
+
+def _structured_multi_transform(batch):
+    items = np.asarray(batch, dtype=object).tolist()
+    return {
+        name: [values[str(item)] for item in items]
+        for name, values in _STRUCTURED_MULTI_VALUES.items()
+    }
 
 
 def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex):
@@ -36,6 +222,10 @@ def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex
         == 0
     )
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan["artifact_type"] == "embedding_shard_plan"
+    assert plan["schema_version"] == 2
+    assert plan["dataset_identity_key"]
+    assert plan["fitted_recipe_hash"]
     assert plan["total_shards"] == 2
     assert len(plan["shard_jobs"]) == 2
 
@@ -47,7 +237,7 @@ def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex
                     "--dataset-pickle",
                     str(dataset_path),
                     "--extractor-pickle",
-                    str(extractor_path),
+                    plan["extractor_pickle"],
                     "--cache-dir",
                     str(cache_dir),
                     "--total-shards",
@@ -107,8 +297,8 @@ def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex
         == 0
     )
     score = json.loads(capsys.readouterr().out)
-    assert score["artifact_type"] == "overlap_score"
-    assert score["score"]["macro_score"] == 0.8
+    assert score["artifact_type"] == "metric_evaluation"
+    assert score["metrics"]["overlap"]["diagnostics"]["macro_score"] == 0.8
 
     repeat_plan_path = tmp_path / "score_repeats.json"
     assert (
@@ -176,9 +366,888 @@ def test_cli_plan_embed_merge_score_workflow(tmp_path, capsys, fake_overlapindex
     assert result_md.exists()
 
 
+def test_cli_fit_extractor_publishes_bundle_required_by_embed_shard(tmp_path, capsys):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    bundle_path = tmp_path / "fitted-extractor.pkl"
+
+    assert (
+        main(
+            [
+                "fit-extractor",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--output-pickle",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["artifact_type"] == "vertebrae_fitted_extractor_v1"
+    assert payload["output_pickle"] == str(bundle_path)
+    assert bundle_path.exists()
+
+    with pytest.raises(TypeError, match="fit-extractor"):
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(tmp_path / "cache"),
+                "--total-shards",
+                "1",
+                "--shard-index",
+                "0",
+            ]
+        )
+
+
+def test_cli_auto_fitted_bundle_does_not_reuse_unsafe_source_state(tmp_path, capsys):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24, dtype=float).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.from_content(),
+    )
+    dataset_path = tmp_path / "unsafe-bundle-dataset.pkl"
+    extractor_path = tmp_path / "unsafe-bundle-extractor.pkl"
+    with dataset_path.open("wb") as file:
+        pickle.dump(dataset, file)
+
+    def plan(scale, name):
+        with extractor_path.open("wb") as file:
+            pickle.dump(_UnsafeScaleExtractor(scale), file)
+        plan_path = tmp_path / f"{name}.json"
+        assert (
+            main(
+                [
+                    "plan",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--cache-dir",
+                    str(tmp_path / "cache"),
+                    "--total-shards",
+                    "2",
+                    "--output-json",
+                    str(plan_path),
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+        return json.loads(plan_path.read_text(encoding="utf-8"))
+
+    first = plan(1.0, "first")
+    second = plan(7.0, "second")
+
+    assert first["cache_status"] == "bypassed_unsafe_identity"
+    assert second["cache_status"] == "bypassed_unsafe_identity"
+    assert first["extractor_pickle"] != second["extractor_pickle"]
+    with Path(first["extractor_pickle"]).open("rb") as file:
+        first_fitted = pickle.load(file)["extractor"]
+    with Path(second["extractor_pickle"]).open("rb") as file:
+        second_fitted = pickle.load(file)["extractor"]
+    assert first_fitted.fit_calls == second_fitted.fit_calls == 1
+    assert first_fitted.scale == 1.0
+    assert second_fitted.scale == 7.0
+    assert second_fitted.transform([[1.0]]).tolist() == [[7.0]]
+
+
+def test_cli_embed_shard_rejects_bundle_from_another_plan_before_writing(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24, dtype=float).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.from_content(),
+    )
+    dataset_path = tmp_path / "bound-plan-dataset.pkl"
+    extractor_path = tmp_path / "bound-plan-extractor.pkl"
+    cache_dir = tmp_path / "cache"
+    with dataset_path.open("wb") as file:
+        pickle.dump(dataset, file)
+
+    plans = []
+    for scale in (1.0, 7.0):
+        with extractor_path.open("wb") as file:
+            pickle.dump(_UnsafeScaleExtractor(scale), file)
+        plan_path = tmp_path / f"bound-plan-{int(scale)}.json"
+        assert (
+            main(
+                [
+                    "plan",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--cache-dir",
+                    str(cache_dir),
+                    "--total-shards",
+                    "2",
+                    "--output-json",
+                    str(plan_path),
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+        plans.append((plan_path, json.loads(plan_path.read_text(encoding="utf-8"))))
+
+    first_path, first = plans[0]
+    second = plans[1][1]
+    assert first["fitted_recipe_hash"] == second["fitted_recipe_hash"]
+    assert first["extractor_pickle"] != second["extractor_pickle"]
+
+    with pytest.raises(ValueError, match="bundle bound to --plan-json"):
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                second["extractor_pickle"],
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(first_path),
+                "--shard-index",
+                "0",
+            ]
+        )
+    assert not cache_dir.exists()
+
+    first_bundle_path = Path(first["extractor_pickle"])
+    first_bundle_bytes = first_bundle_path.read_bytes()
+    replacement_bytes = Path(second["extractor_pickle"]).read_bytes()
+    first_bundle_path.write_bytes(replacement_bytes)
+    with pytest.raises(ValueError, match="bundle content does not match"):
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(first_bundle_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(first_path),
+                "--shard-index",
+                "0",
+            ]
+        )
+    assert not cache_dir.exists()
+
+    first_bundle_path.write_bytes(first_bundle_bytes)
+    replacement_path = tmp_path / "replacement-fitted-bundle.pkl"
+    replacement_path.write_bytes(replacement_bytes)
+    import vertebrae.cli as cli_module
+
+    original_sha256_stream = cli_module._sha256_stream
+
+    def replace_bundle_after_hash(file, chunk_size=4 * 1024 * 1024):
+        digest = original_sha256_stream(file, chunk_size)
+        replacement_path.replace(first_bundle_path)
+        return digest
+
+    monkeypatch.setattr(cli_module, "_sha256_stream", replace_bundle_after_hash)
+    assert (
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(first_bundle_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(first_path),
+                "--shard-index",
+                "0",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    shard = LocalArtifactStore(str(cache_dir)).get_array(first["shard_jobs"][0]["output_key"])
+    assert np.array_equal(shard, np.asarray(dataset.X)[::2])
+
+
+@pytest.mark.parametrize(
+    ("tamper", "message"),
+    [
+        ("schema", "schema_version=2"),
+        ("dataset", "different dataset identity"),
+        ("base", "noncanonical embedding base key"),
+        ("shard", "noncanonical shard output key"),
+        ("output_override", "cannot be combined with --plan-json"),
+    ],
+)
+def test_cli_embed_shard_rejects_tampered_plan_before_writing(
+    tmp_path,
+    tamper,
+    message,
+):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "2",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    extra_args = []
+    if tamper == "schema":
+        plan["schema_version"] = 1
+    elif tamper == "dataset":
+        plan["dataset_identity_key"] = "0" * 64
+    elif tamper == "base":
+        plan["base_key"] = f'{plan["base_key"]}-tampered'
+        plan["output_key"] = plan["base_key"]
+        for item in plan["shard_jobs"]:
+            item["output_key"] = (
+                f'{plan["base_key"]}/shards/'
+                f'{item["shard_index"]:05d}-of-{item["total_shards"]:05d}'
+            )
+    elif tamper == "shard":
+        plan["shard_jobs"][0]["output_key"] += "-tampered"
+    else:
+        extra_args = ["--output-key", plan["shard_jobs"][0]["output_key"]]
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                plan["extractor_pickle"],
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+                "--shard-index",
+                "0",
+                *extra_args,
+            ]
+        )
+    assert not cache_dir.exists()
+
+
+def test_cli_auto_fitted_bundle_reuses_stable_source_identity(tmp_path, capsys):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    bundle_paths = []
+    for index in range(2):
+        plan_path = tmp_path / f"stable-{index}.json"
+        assert (
+            main(
+                [
+                    "plan",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--cache-dir",
+                    str(tmp_path / "cache"),
+                    "--total-shards",
+                    "2",
+                    "--output-json",
+                    str(plan_path),
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+        bundle_paths.append(json.loads(plan_path.read_text())["extractor_pickle"])
+
+    assert bundle_paths[0] == bundle_paths[1]
+
+
+def test_cli_retrieval_auto_fitted_bundle_does_not_reuse_unsafe_source_state(
+    tmp_path,
+    capsys,
+):
+    dataset = RetrievalDataset.from_embeddings(
+        np.eye(4),
+        np.eye(4),
+        [(index, index, 1.0) for index in range(4)],
+        identity=DatasetIdentity.from_content(),
+    )
+    dataset_path = tmp_path / "unsafe-retrieval-dataset.pkl"
+    extractor_path = tmp_path / "unsafe-retrieval-extractor.pkl"
+    with dataset_path.open("wb") as file:
+        pickle.dump(dataset, file)
+
+    def plan(scale, name):
+        with extractor_path.open("wb") as file:
+            pickle.dump(_UnsafeScaleExtractor(scale), file)
+        plan_path = tmp_path / f"unsafe-retrieval-{name}.json"
+        assert (
+            main(
+                [
+                    "plan-retrieval",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    str(extractor_path),
+                    "--cache-dir",
+                    str(tmp_path / "cache"),
+                    "--total-shards",
+                    "2",
+                    "--output-json",
+                    str(plan_path),
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+        return json.loads(plan_path.read_text(encoding="utf-8"))
+
+    first = plan(1.0, "first")
+    second = plan(7.0, "second")
+
+    assert first["extractor_pickle"] != second["extractor_pickle"]
+    assert first["endpoints"]["query"]["cache_status"] == "bypassed_unsafe_identity"
+    assert second["endpoints"]["query"]["cache_status"] == "bypassed_unsafe_identity"
+    with Path(first["extractor_pickle"]).open("rb") as file:
+        first_fitted = pickle.load(file)["extractor"]
+    with Path(second["extractor_pickle"]).open("rb") as file:
+        second_fitted = pickle.load(file)["extractor"]
+    assert first_fitted.fit_calls == second_fitted.fit_calls == 1
+    assert first_fitted.scale == 1.0
+    assert second_fitted.scale == 7.0
+    assert second_fitted.transform([[1.0]]).tolist() == [[7.0]]
+
+
+def test_embedding_plan_keys_use_fitted_bundle_recipe(tmp_path, capsys):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24, dtype=float).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
+    )
+    dataset_path = tmp_path / "fitted-key-dataset.pkl"
+    extractor_path = tmp_path / "fitted-key-extractor.pkl"
+    bundle_path = tmp_path / "fitted-key-bundle.pkl"
+    plan_path = tmp_path / "fitted-key-plan.json"
+    with dataset_path.open("wb") as file:
+        pickle.dump(dataset, file)
+    with extractor_path.open("wb") as file:
+        pickle.dump(_RetrievalFitOnceExtractor(), file)
+
+    assert (
+        main(
+            [
+                "fit-extractor",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--output-pickle",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+    fit_payload = json.loads(capsys.readouterr().out)
+    assert fit_payload["source_recipe_hash"] != fit_payload["fitted_recipe_hash"]
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(bundle_path),
+                "--cache-dir",
+                str(tmp_path / "cache"),
+                "--total-shards",
+                "2",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    plan = json.loads(plan_path.read_text())
+
+    assert plan["base_key"].split("/")[-1] == fit_payload["fitted_recipe_hash"]
+
+    assert (
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(bundle_path),
+                "--cache-dir",
+                str(tmp_path / "cache"),
+                "--total-shards",
+                "1",
+                "--shard-index",
+                "0",
+            ]
+        )
+        == 0
+    )
+
+
+def test_cli_plan_caps_oversharding(tmp_path):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--total-shards",
+                "100",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text())
+
+    assert plan["requested_total_shards"] == 100
+    assert plan["total_shards"] == 8
+    assert len(plan["shard_jobs"]) == 8
+
+
+def test_cli_diagnose_complexity_and_benchmark_from_artifacts(
+    tmp_path,
+    capsys,
+    fake_overlapindex,
+):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+    assert (
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                plan["extractor_pickle"],
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--shard-index",
+                "0",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    merged = json.loads(capsys.readouterr().out)
+
+    assert (
+        main(
+            [
+                "write-labels",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    score = json.loads(capsys.readouterr().out)
+
+    assert (
+        main(
+            [
+                "diagnose-complexity",
+                "--cache-dir",
+                str(cache_dir),
+                "--embedding-key",
+                merged["output_key"],
+                "--labels-key",
+                plan["labels_key"],
+                "--score-key",
+                score["output_key"],
+            ]
+        )
+        == 0
+    )
+    diagnostic = json.loads(capsys.readouterr().out)
+    assert diagnostic["artifact_type"] == "separatix_diagnostic"
+    assert diagnostic["diagnostic"]["ran"] is True
+
+    assert (
+        main(
+            [
+                "benchmark-from-artifacts",
+                "--cache-dir",
+                str(cache_dir),
+                "--score-key",
+                score["output_key"],
+                "--separatix-key",
+                diagnostic["output_key"],
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["extractor_results"][0]["separatix"]["recommendation"] == (
+        "smooth_nonlinear_recommended"
+    )
+    assert payload["extractor_results"][0]["separatix"]["probe_summary"]["status"] == ("executed")
+
+
+def test_cli_materialize_structured_single_output_bundle_supports_scoring(tmp_path, capsys):
+    dataset_path, extractor_path = _write_pickled_structured_inputs(tmp_path, multi_output=False)
+    cache_dir = tmp_path / "cache"
+    bundle_path = tmp_path / "structured_bundle.json"
+
+    assert (
+        main(
+            [
+                "materialize-structured",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--output-json",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    output = bundle["outputs"][0]
+
+    store = LocalArtifactStore(str(cache_dir))
+    assert bundle["artifact_type"] == "structured_embedding_bundle"
+    assert store.get_array(output["output_key"]).shape == (8, 2)
+    assert store.get_labels(output["labels_key"]).tolist() == [
+        "entity",
+        "context",
+        "entity",
+        "context",
+        "action",
+        "modifier",
+        "action",
+        "modifier",
+    ]
+
+    assert (
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+    score = json.loads(capsys.readouterr().out)
+    assert score["embedding_key"] == output["output_key"]
+    assert score["labels_key"] == output["labels_key"]
+
+
+def test_cli_materialize_structured_multi_output_bundle_requires_selection(tmp_path, capsys):
+    dataset_path, extractor_path = _write_pickled_structured_inputs(tmp_path, multi_output=True)
+    cache_dir = tmp_path / "cache"
+    bundle_path = tmp_path / "structured_bundle.json"
+
+    assert (
+        main(
+            [
+                "materialize-structured",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--output-json",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    output = bundle["outputs"][0]
+
+    with pytest.raises(ValueError, match="multiple embedding outputs"):
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(bundle_path),
+            ]
+        )
+
+    assert (
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(bundle_path),
+                "--embedding-key",
+                output["output_key"],
+            ]
+        )
+        == 0
+    )
+    score = json.loads(capsys.readouterr().out)
+    assert score["labels_key"] == output["labels_key"]
+
+    assert (
+        main(
+            [
+                "score-repeats",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(bundle_path),
+                "--embedding-key",
+                output["output_key"],
+                "--seed",
+                "3",
+                "--seed",
+                "5",
+            ]
+        )
+        == 0
+    )
+    repeat_plan = json.loads(capsys.readouterr().out)
+    assert repeat_plan["embedding_key"] == output["output_key"]
+    assert repeat_plan["labels_key"] == output["labels_key"]
+
+
+def test_cli_materialize_structured_bundle_supports_complexity_diagnostics(
+    tmp_path,
+    capsys,
+    fake_overlapindex,
+):
+    dataset_path, extractor_path = _write_pickled_structured_inputs(tmp_path, multi_output=True)
+    cache_dir = tmp_path / "cache"
+    bundle_path = tmp_path / "structured_bundle.json"
+
+    assert (
+        main(
+            [
+                "materialize-structured",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--output-json",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    output = bundle["outputs"][1]
+
+    assert (
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(bundle_path),
+                "--embedding-key",
+                output["output_key"],
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "diagnose-complexity",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(bundle_path),
+                "--embedding-key",
+                output["output_key"],
+            ]
+        )
+        == 0
+    )
+    diagnostic = json.loads(capsys.readouterr().out)
+    assert diagnostic["labels_key"] == output["labels_key"]
+    assert diagnostic["groups_key"] == output["groups_key"]
+    assert diagnostic["artifact_type"] == "separatix_diagnostic"
+
+
+def test_cli_materialize_structured_accepts_standard_aligner_recipe(tmp_path):
+    dataset_path, _ = _write_pickled_structured_inputs(tmp_path, multi_output=False)
+    cache_dir = tmp_path / "cache"
+    extractor = CallableStructuredExtractor(
+        name="structured_special",
+        transform_fn=_structured_special_transform,
+        output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+        modality="text",
+    )
+    extractor_path = tmp_path / "structured_special_extractor.pkl"
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+
+    bundle_path = tmp_path / "structured_bundle.json"
+    assert (
+        main(
+            [
+                "materialize-structured",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--aligner",
+                'tokens=drop_special_rows:{"leading":1,"trailing":1}',
+                "--output-json",
+                str(bundle_path),
+            ]
+        )
+        == 0
+    )
+
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    output = bundle["outputs"][0]
+    store = LocalArtifactStore(str(cache_dir))
+    manifest = store.get_json(output["output_key"])
+    provenance = store.get_json(output["provenance_key"])["rows"]
+
+    assert store.get_array(output["output_key"]).shape == (8, 2)
+    assert store.get_array(output["output_key"])[0].tolist() == [1.0, 0.0]
+    assert manifest["structured"]["alignment_mode"] == "explicit"
+    assert manifest["structured"]["alignment_recipe"]["name"] == "drop_special_rows"
+    assert manifest["structured"]["alignment_recipe"]["recipe_data"] == {
+        "policy": "drop_special_rows",
+        "leading": 1,
+        "trailing": 1,
+    }
+    assert provenance[0]["embedding_index"] == 1
+    assert provenance[0]["alignment_metadata"]["selected_embedding_indices"] == [1, 2]
+
+
+def test_cli_materialize_structured_rejects_invalid_aligner_specs(tmp_path):
+    dataset_path, extractor_path = _write_pickled_structured_inputs(tmp_path, multi_output=False)
+    cache_dir = tmp_path / "cache"
+
+    with pytest.raises(ValueError, match="Unknown structured aligner helper"):
+        main(
+            [
+                "materialize-structured",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--aligner",
+                "tokens=unknown_helper:{}",
+            ]
+        )
+
+
 def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     script_path = tmp_path / "vertebrae_embed.sbatch"
+    profiling_path = tmp_path / "resource-profile.pkl"
+    with profiling_path.open("wb") as file:
+        pickle.dump(ResourceProfilingConfig(enabled=True), file)
 
     assert (
         main(
@@ -194,6 +1263,8 @@ def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
                 "3",
                 "--batch-size",
                 "4",
+                "--resource-profiling-config-pickle",
+                str(profiling_path),
                 "--script-output",
                 str(script_path),
                 "--job-name",
@@ -216,10 +1287,326 @@ def test_cli_slurm_array_generates_embed_and_merge_commands(tmp_path):
     script = script_path.read_text(encoding="utf-8")
     assert "#SBATCH --job-name=vt-test" in script
     assert "#SBATCH --array=0-2" in script
+    assert f"--resource-profiling-config-pickle {profiling_path}" in script
     assert "#SBATCH --partition=gpu" in script
     assert "python -m vertebrae.cli embed-shard" in script
-    assert "--shard-index ${SLURM_ARRAY_TASK_ID}" in script
+    assert '--shard-index "${SLURM_ARRAY_TASK_ID}"' in script
+    assert "--plan-json" in script
+    assert "SHARD_OUTPUT_KEY" not in script
     assert "merge-embeddings" in script
+    fit_script = tmp_path / "vertebrae_embed.fit.sbatch"
+    submit_script = tmp_path / "vertebrae_embed.submit.sh"
+    fit_text = fit_script.read_text()
+    assert "python -m vertebrae.cli fit-extractor" in fit_text
+    assert "python -m vertebrae.cli plan" in fit_text
+    assert fit_text.index("fit-extractor") < fit_text.index("vertebrae.cli plan")
+    assert "#SBATCH --array" not in fit_text
+    submission = submit_script.read_text()
+    assert "sbatch --parsable" in submission
+    assert '--dependency="afterok:${FIT_JOB_ID}"' in submission
+    assert not list(tmp_path.glob("*.vertebrae-fitted-*.pkl"))
+
+
+def test_cli_slurm_array_quotes_worker_arguments_and_rejects_directive_injection(tmp_path):
+    unusual = tmp_path / "inputs with spaces 'quoted';$(not-a-command)"
+    unusual.mkdir()
+    dataset_path, extractor_path = _write_pickled_inputs(unusual)
+    script_path = tmp_path / "quoted.sbatch"
+    cache_dir = tmp_path / "cache with spaces"
+
+    assert (
+        main(
+            [
+                "slurm-array",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "2",
+                "--script-output",
+                str(script_path),
+                "--python-executable",
+                "/opt/python tools/py'thon;$HOME",
+            ]
+        )
+        == 0
+    )
+    script = script_path.read_text()
+    assert shlex.quote(str(dataset_path)) in script
+    assert shlex.quote(str(cache_dir)) in script
+    assert shlex.quote("/opt/python tools/py'thon;$HOME") in script
+
+    with pytest.raises(ValueError, match="SLURM job_name"):
+        main(
+            [
+                "slurm-array",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--total-shards",
+                "1",
+                "--script-output",
+                str(tmp_path / "invalid.sbatch"),
+                "--job-name",
+                "valid\n#SBATCH --output=stolen",
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "match"),
+    [
+        ("--time", "abc", "SLURM time"),
+        ("--time", "01:99:00", "SLURM time"),
+        ("--time", "00:00:00", "greater than zero"),
+        ("--mem", "nope", "SLURM mem"),
+        ("--mem", "0G", "SLURM mem"),
+        ("--job-name", "", "SLURM job_name"),
+        ("--partition", "", "SLURM partition"),
+    ],
+)
+def test_cli_slurm_array_rejects_semantically_invalid_directives(tmp_path, option, value, match):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    with pytest.raises(ValueError, match=match):
+        main(
+            [
+                "slurm-array",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--total-shards",
+                "1",
+                "--script-output",
+                str(tmp_path / "invalid.sbatch"),
+                option,
+                value,
+            ]
+        )
+
+
+@pytest.mark.parametrize(
+    ("option", "match"),
+    [("--total-shards", "total_shards"), ("--batch-size", "batch_size")],
+)
+def test_cli_slurm_array_rejects_nonpositive_counts(tmp_path, option, match):
+    dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
+    with pytest.raises(ValueError, match=match):
+        main(
+            [
+                "slurm-array",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--total-shards",
+                "1",
+                "--script-output",
+                str(tmp_path / "invalid.sbatch"),
+                option,
+                "0",
+            ]
+        )
+
+
+def test_cli_plan_embed_merge_multi_output_workflow(tmp_path, capsys, fake_overlapindex):
+    dataset_path, extractor_path = _write_pickled_multi_output_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "2",
+                "--batch-size",
+                "2",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert [output["name"] for output in plan["outputs"]] == ["left", "right"]
+
+    for shard_index in range(2):
+        assert (
+            main(
+                [
+                    "embed-shard",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    plan["extractor_pickle"],
+                    "--cache-dir",
+                    str(cache_dir),
+                    "--total-shards",
+                    "2",
+                    "--shard-index",
+                    str(shard_index),
+                    "--batch-size",
+                    "2",
+                ]
+            )
+            == 0
+        )
+        manifest = json.loads(capsys.readouterr().out)
+        assert manifest["artifact_type"] == "multi_output_embedding_shard"
+
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    merged_manifest = json.loads(capsys.readouterr().out)
+    assert merged_manifest["artifact_type"] == "multi_output_embedding"
+    left = LocalArtifactStore(str(cache_dir)).get_array(merged_manifest["outputs"][0]["output_key"])
+    right = LocalArtifactStore(str(cache_dir)).get_array(
+        merged_manifest["outputs"][1]["output_key"]
+    )
+    assert np.array_equal(left, np.arange(24).reshape(8, 3)[:, :2])
+    assert np.array_equal(right, np.arange(24).reshape(8, 3)[:, 1:3])
+
+    assert (
+        main(
+            [
+                "write-labels",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+                "--embedding-key",
+                plan["outputs"][0]["output_key"],
+            ]
+        )
+        == 0
+    )
+    score = json.loads(capsys.readouterr().out)
+    assert score["embedding_key"] == plan["outputs"][0]["output_key"]
+
+    with pytest.raises(ValueError, match="multiple embedding outputs"):
+        main(
+            [
+                "score",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+
+
+def test_cli_plan_multimodal_multi_output_workflow(tmp_path, capsys):
+    dataset_path, extractor_path = _write_pickled_multimodal_multi_output_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "2",
+                "--batch-size",
+                "1",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert [output["name"] for output in plan["outputs"]] == ["image_branch", "fused"]
+
+    for shard_index in range(2):
+        assert (
+            main(
+                [
+                    "embed-shard",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    plan["extractor_pickle"],
+                    "--cache-dir",
+                    str(cache_dir),
+                    "--total-shards",
+                    "2",
+                    "--shard-index",
+                    str(shard_index),
+                    "--batch-size",
+                    "1",
+                ]
+            )
+            == 0
+        )
+        manifest = json.loads(capsys.readouterr().out)
+        assert manifest["artifact_type"] == "multi_output_embedding_shard"
+
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    merged = json.loads(capsys.readouterr().out)
+    store = LocalArtifactStore(str(cache_dir))
+    assert store.get_array(merged["outputs"][0]["output_key"]).tolist() == [
+        [5.0],
+        [5.0],
+        [5.0],
+        [5.0],
+    ]
+    assert store.get_array(merged["outputs"][1]["output_key"]).tolist() == [
+        [5.0, 3.0],
+        [5.0, 3.0],
+        [5.0, 5.0],
+        [5.0, 4.0],
+    ]
 
 
 def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
@@ -245,6 +1632,7 @@ def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
         )
         == 0
     )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
     assert (
         main(
@@ -253,7 +1641,7 @@ def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
                 "--dataset-pickle",
                 str(dataset_path),
                 "--extractor-pickle",
-                str(extractor_path),
+                plan["extractor_pickle"],
                 "--cache-dir",
                 str(cache_dir),
                 "--total-shards",
@@ -303,6 +1691,84 @@ def test_cli_compress_supports_prefix_truncate(tmp_path, capsys):
     assert payload["compression_metadata"]["compressed_dim"] == 2
 
 
+def test_cli_scores_multilabel_dataset_from_artifacts(tmp_path, capsys, fake_overlapindex):
+    dataset_path, extractor_path = _write_pickled_multilabel_inputs(tmp_path)
+    cache_dir = tmp_path / "cache"
+    plan_path = tmp_path / "plan.json"
+
+    assert (
+        main(
+            [
+                "plan",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert (
+        main(
+            [
+                "embed-shard",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                plan["extractor_pickle"],
+                "--cache-dir",
+                str(cache_dir),
+                "--total-shards",
+                "1",
+                "--shard-index",
+                "0",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "merge-embeddings",
+                "--cache-dir",
+                str(cache_dir),
+                "--plan-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "write-labels",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--cache-dir",
+                str(cache_dir),
+            ]
+        )
+        == 0
+    )
+    label_manifest = json.loads(capsys.readouterr().out)
+
+    assert main(["score", "--cache-dir", str(cache_dir), "--plan-json", str(plan_path)]) == 0
+    score = json.loads(capsys.readouterr().out)
+
+    assert label_manifest["target_type"] == "multi_label"
+    assert score["metrics"]["overlap"]["metadata"]["target_type"] == "multi_label"
+    assert fake_overlapindex.calls[-1]["fit_y_shape"] == [12, 3]
+
+
 def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
     dataset_path, extractor_path = _write_pickled_inputs(tmp_path)
     plan_path = tmp_path / "plan.json"
@@ -327,6 +1793,9 @@ def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
         )
         == 0
     )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["groups_key"] = "groups/example"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
     assert (
         main(
             [
@@ -351,8 +1820,82 @@ def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
     script = script_path.read_text(encoding="utf-8")
     assert "#SBATCH --array=0-2" in script
     assert "python -m vertebrae.cli score" in script
-    assert "--seed ${SEED}" in script
+    assert '--seed "${SEED}"' in script
+    assert "--groups-key groups/example" in script
     assert "collect-scores" in script
+
+
+def test_cli_score_and_repeats_resolve_explicit_and_planned_groups(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "output_key": "embeddings/example",
+                "labels_key": "labels/example",
+                "groups_key": "groups/planned",
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = []
+
+    def fake_score(job, _store):
+        captured.append(job)
+        return {
+            "artifact_type": "metric_evaluation",
+            "output_key": job.output_key,
+            "metadata": {"path": Path("models/example"), "tags": {"b", "a"}},
+        }
+
+    def fake_scores(jobs, _store, _backend):
+        captured.extend(jobs)
+        return [{"output_key": job.output_key} for job in jobs]
+
+    monkeypatch.setattr("vertebrae.cli.score_embedding_artifact", fake_score)
+    monkeypatch.setattr("vertebrae.cli.score_embedding_artifacts", fake_scores)
+
+    assert main(["score", "--plan-json", str(plan_path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert captured[-1].groups_key == "groups/planned"
+    assert payload["metadata"]["path"] == "models/example"
+    assert payload["metadata"]["tags"] == ["a", "b"]
+
+    assert (
+        main(
+            [
+                "score",
+                "--plan-json",
+                str(plan_path),
+                "--groups-key",
+                "groups/explicit",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert captured[-1].groups_key == "groups/explicit"
+
+    assert (
+        main(
+            [
+                "score-repeats",
+                "--plan-json",
+                str(plan_path),
+                "--seed",
+                "3",
+                "--seed",
+                "5",
+            ]
+        )
+        == 0
+    )
+    repeat_plan = json.loads(capsys.readouterr().out)
+    assert repeat_plan["groups_key"] == "groups/planned"
+    assert [job.groups_key for job in captured[-2:]] == ["groups/planned"] * 2
 
 
 def test_cli_run_embedding_shards_local_backend(tmp_path, capsys):
@@ -462,14 +2005,264 @@ def test_cli_score_repeats_dask_missing_dependency(tmp_path):
         )
 
 
+def test_structured_example_runs_without_network_access(
+    tmp_path,
+    monkeypatch,
+    fake_overlapindex,
+):
+    examples_dir = Path(__file__).resolve().parents[1] / "examples"
+    output_dir = tmp_path / "example_output"
+    monkeypatch.setenv("VERTABRAE_EXAMPLE_OUTPUT_DIR", str(output_dir))
+    monkeypatch.syspath_prepend(str(examples_dir))
+    monkeypatch.chdir(examples_dir)
+
+    runpy.run_path(str(examples_dir / "structured_outputs.py"), run_name="__main__")
+
+    assert (output_dir / "structured_ocr_layout.json").exists()
+    assert (output_dir / "structured_asr_tokens.json").exists()
+    assert (output_dir / "structured_pose_keypoints.json").exists()
+
+
+def test_depth_and_latent_slot_examples_run_without_network_access(
+    tmp_path,
+    monkeypatch,
+    fake_overlapindex,
+):
+    examples_dir = Path(__file__).resolve().parents[1] / "examples"
+    output_dir = tmp_path / "example_output"
+    monkeypatch.setenv("VERTABRAE_EXAMPLE_OUTPUT_DIR", str(output_dir))
+    monkeypatch.syspath_prepend(str(examples_dir))
+    monkeypatch.chdir(examples_dir)
+
+    runpy.run_path(str(examples_dir / "structured_depth.py"), run_name="__main__")
+    runpy.run_path(str(examples_dir / "structured_latent_slots.py"), run_name="__main__")
+
+    assert (output_dir / "structured_depth.json").exists()
+    assert (output_dir / "structured_latent_slots.json").exists()
+
+
+def test_cli_retrieval_plan_fits_standard_extractor_once_for_all_shards(
+    tmp_path,
+    capsys,
+):
+    queries = np.arange(12, dtype=float).reshape(4, 3)
+    gallery = np.arange(12, 24, dtype=float).reshape(4, 3)
+    dataset = RetrievalDataset.from_embeddings(
+        queries,
+        gallery,
+        [(index, index, 1.0) for index in range(4)],
+        identity=DatasetIdentity.ephemeral(),
+    )
+    dataset_path = tmp_path / "retrieval-dataset.pkl"
+    extractor_path = tmp_path / "retrieval-extractor.pkl"
+    plan_path = tmp_path / "retrieval-plan.json"
+    with dataset_path.open("wb") as file:
+        pickle.dump(dataset, file)
+    with extractor_path.open("wb") as file:
+        pickle.dump(_RetrievalFitOnceExtractor(), file)
+
+    assert (
+        main(
+            [
+                "plan-retrieval",
+                "--dataset-pickle",
+                str(dataset_path),
+                "--extractor-pickle",
+                str(extractor_path),
+                "--cache-dir",
+                str(tmp_path / "cache"),
+                "--total-shards",
+                "2",
+                "--output-json",
+                str(plan_path),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    plan = json.loads(plan_path.read_text())
+    with Path(plan["extractor_pickle"]).open("rb") as file:
+        bundle = pickle.load(file)
+    fitted = bundle["extractor"]
+    assert fitted.fit_calls == 1
+    assert np.array_equal(fitted.fit_values, gallery)
+
+    for side in ("query", "gallery"):
+        assert (
+            main(
+                [
+                    "embed-retrieval-shard",
+                    "--dataset-pickle",
+                    str(dataset_path),
+                    "--extractor-pickle",
+                    plan["extractor_pickle"],
+                    "--cache-dir",
+                    str(tmp_path / "cache"),
+                    "--plan-json",
+                    str(plan_path),
+                    "--side",
+                    side,
+                    "--shard-index",
+                    "0",
+                ]
+            )
+            == 0
+        )
+        capsys.readouterr()
+
+    with Path(plan["extractor_pickle"]).open("rb") as file:
+        assert pickle.load(file)["extractor"].fit_calls == 1
+
+
 def _write_pickled_inputs(tmp_path):
     dataset = BenchmarkDataset.from_embeddings(
         np.arange(24).reshape(8, 3),
         ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
     )
     extractor = PrecomputedExtractor()
     dataset_path = tmp_path / "dataset.pkl"
     extractor_path = tmp_path / "extractor.pkl"
+    with dataset_path.open("wb") as f:
+        pickle.dump(dataset, f)
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+    return dataset_path, extractor_path
+
+
+def _write_pickled_multi_output_inputs(tmp_path):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = MultiOutputExtractor(
+        name="multi",
+        output_specs=[EmbeddingOutputSpec("left"), EmbeddingOutputSpec("right")],
+        transform_many_fn=_multi_output_transform,
+        modality="tabular",
+        streaming_safe=True,
+    )
+    dataset_path = tmp_path / "dataset.pkl"
+    extractor_path = tmp_path / "extractor.pkl"
+    with dataset_path.open("wb") as f:
+        pickle.dump(dataset, f)
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+    return dataset_path, extractor_path
+
+
+def _write_pickled_multilabel_inputs(tmp_path):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(36).reshape(12, 3),
+        [
+            ("red", "round"),
+            ("red",),
+            ("round",),
+            ("red", "sweet"),
+            ("round", "sweet"),
+            ("sweet",),
+            ("red", "round"),
+            ("red",),
+            ("round",),
+            ("red", "sweet"),
+            ("round", "sweet"),
+            ("sweet",),
+        ],
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = PrecomputedExtractor()
+    dataset_path = tmp_path / "multilabel_dataset.pkl"
+    extractor_path = tmp_path / "multilabel_extractor.pkl"
+    with dataset_path.open("wb") as f:
+        pickle.dump(dataset, f)
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+    return dataset_path, extractor_path
+
+
+def _write_pickled_multimodal_multi_output_inputs(tmp_path):
+    dataset = BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": ["a.png", "b.png", "c.png", "d.png"],
+            "caption": ["one", "two", "three", "four"],
+        },
+        labels=["a", "a", "b", "b"],
+        modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = MultiOutputExtractor(
+        name="fusion",
+        output_specs=[EmbeddingOutputSpec("image_branch"), EmbeddingOutputSpec("fused")],
+        transform_many_fn=_multimodal_multi_output_transform,
+        modality="multimodal",
+        streaming_safe=True,
+    )
+    dataset_path = tmp_path / "multimodal_dataset.pkl"
+    extractor_path = tmp_path / "multimodal_extractor.pkl"
+    with dataset_path.open("wb") as f:
+        pickle.dump(dataset, f)
+    with extractor_path.open("wb") as f:
+        pickle.dump(extractor, f)
+    return dataset_path, extractor_path
+
+
+def _write_pickled_structured_inputs(tmp_path, multi_output):
+    dataset = BenchmarkDataset.from_arrays(
+        np.asarray(["a", "b", "c", "d"], dtype=object),
+        ["doc_a", "doc_a", "doc_b", "doc_b"],
+        modality="text",
+        identity=DatasetIdentity.ephemeral(),
+    ).with_unit_annotations(
+        [
+            UnitAnnotation(
+                labels=["entity", "context"],
+                unit_ids=["a:0", "a:1"],
+                spans=[[0, 2], [3, 8]],
+                provenance=[{"page": 0}, {"page": 0}],
+            ),
+            UnitAnnotation(
+                labels=["entity", "context"],
+                unit_ids=["b:0", "b:1"],
+                spans=[[0, 2], [3, 8]],
+                provenance=[{"page": 0}, {"page": 0}],
+            ),
+            UnitAnnotation(
+                labels=["action", "modifier"],
+                unit_ids=["c:0", "c:1"],
+                spans=[[0, 2], [3, 8]],
+                provenance=[{"page": 1}, {"page": 1}],
+            ),
+            UnitAnnotation(
+                labels=["action", "modifier"],
+                unit_ids=["d:0", "d:1"],
+                spans=[[0, 2], [3, 8]],
+                provenance=[{"page": 1}, {"page": 1}],
+            ),
+        ],
+        unit_type="token",
+    )
+    if multi_output:
+        extractor = CallableStructuredExtractor(
+            name="structured_multi",
+            transform_fn=_structured_multi_transform,
+            output_specs=[
+                StructuredOutputSpec(name="tokens", unit_type="token"),
+                StructuredOutputSpec(name="subwords", unit_type="token"),
+            ],
+            modality="text",
+        )
+        dataset_path = tmp_path / "structured_multi_dataset.pkl"
+        extractor_path = tmp_path / "structured_multi_extractor.pkl"
+    else:
+        extractor = CallableStructuredExtractor(
+            name="structured_single",
+            transform_fn=_structured_single_transform,
+            output_specs=[StructuredOutputSpec(name="tokens", unit_type="token")],
+            modality="text",
+        )
+        dataset_path = tmp_path / "structured_dataset.pkl"
+        extractor_path = tmp_path / "structured_extractor.pkl"
     with dataset_path.open("wb") as f:
         pickle.dump(dataset, f)
     with extractor_path.open("wb") as f:

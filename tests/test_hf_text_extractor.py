@@ -96,6 +96,12 @@ class FakeTorch:
     def arange(n, device=None):
         return FakeTensor(np.arange(n))
 
+    @staticmethod
+    def as_tensor(value, device=None):
+        tensor = FakeTensor(value)
+        tensor.device = device or "cpu"
+        return tensor
+
 
 class FakeTokenizer:
     calls = []
@@ -107,10 +113,21 @@ class FakeTokenizer:
         for idx, _text in enumerate(batch):
             active = min(seq_len, idx + 2)
             masks.append([1] * active + [0] * (seq_len - active))
-        return {
+        encoded = {
             "input_ids": FakeTensor(np.zeros((len(batch), seq_len), dtype=int)),
             "attention_mask": FakeTensor(np.asarray(masks, dtype=int)),
         }
+        if kwargs.get("return_special_tokens_mask"):
+            special_masks = []
+            for mask in masks:
+                active = int(sum(mask))
+                special = [0] * seq_len
+                if active:
+                    special[0] = 1
+                    special[active - 1] = 1
+                special_masks.append(special)
+            encoded["special_tokens_mask"] = FakeTensor(np.asarray(special_masks, dtype=int))
+        return encoded
 
 
 class FakeModel:
@@ -225,3 +242,55 @@ def test_hf_text_missing_optional_dependencies(monkeypatch):
 
     with pytest.raises(ImportError, match="optional Hugging Face"):
         extractor.transform(["hello"])
+
+
+def test_hf_text_supports_structured_token_outputs(fake_hf_modules):
+    extractor = HFTextExtractor(
+        "hf",
+        "fake-model",
+        structured_outputs=[{"name": "tokens", "hidden_layer": 2}],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured(["one", "two"])[0]
+
+    assert output.name == "tokens"
+    assert output.unit_type == "token"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (0, 3)
+    assert output.embeddings[1].shape == (1, 3)
+
+
+def test_hf_text_last_token_pooling_supports_left_padding(fake_hf_modules):
+    class LeftPaddingTokenizer(FakeTokenizer):
+        def __call__(self, batch, **kwargs):
+            return {
+                "input_ids": FakeTensor(np.zeros((len(batch), 4), dtype=int)),
+                "attention_mask": FakeTensor(np.asarray([[0, 0, 1, 1], [0, 1, 1, 1]], dtype=int)),
+            }
+
+    extractor = HFTextExtractor("hf", "fake-model", pooling="last_token")
+    extractor._tokenizer = LeftPaddingTokenizer()
+    extractor._model = FakeModel()
+    extractor._torch = FakeTorch
+
+    output = extractor.transform(["one", "two"])
+
+    assert output.tolist() == [[9.0, 10.0, 11.0], [21.0, 22.0, 23.0]]
+
+
+@pytest.mark.parametrize("batch_size", [True, 0, 1.5])
+def test_hf_text_validates_batch_size(batch_size):
+    with pytest.raises((TypeError, ValueError), match="batch_size"):
+        HFTextExtractor("hf", "fake-model", batch_size=batch_size)
+
+
+def test_hf_text_cache_identity_requires_pinned_revision_or_explicit_identity():
+    unpinned = HFTextExtractor("hf", "remote-model")
+    pinned = HFTextExtractor("hf", "remote-model", revision="a" * 40)
+    explicit = HFTextExtractor("hf", "remote-model", cache_identity="model-v1")
+
+    assert unpinned.recipe()["cache_safe"] is False
+    assert pinned.recipe()["cache_safe"] is True
+    assert pinned.recipe()["pinned_revision"] == "a" * 40
+    assert explicit.recipe()["cache_safe"] is True

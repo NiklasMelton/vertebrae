@@ -1,0 +1,38 @@
+name: Device Smoke Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      pytest_args:
+        description: Pytest selector. Defaults to CPU-only; use '-k cuda' or '-k mps' on capable runners.
+        required: false
+        default: "-k cpu"
+
+permissions:
+  contents: read
+
+jobs:
+  device-smoke:
+    name: Device smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: python -m pip install --upgrade pip poetry
+
+      - name: Install Torch dependencies
+        run: poetry install --no-interaction --with dev --extras torch
+
+      - name: Run device smoke tests
+        env:
+          VERTABRAE_RUN_DEVICE_SMOKE: "1"
+        run: poetry run pytest -m devicesmoke ${{ inputs.pytest_args }}

@@ -1,0 +1,48 @@
+name: Public Model Smoke Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      pytest_args:
+        description: Extra pytest args, for example '-k text'
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  public-model-smoke:
+    name: Public model smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache Hugging Face assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-public-model-smoke-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            hf-public-model-smoke-${{ runner.os }}-
+
+      - name: Install Poetry
+        run: python -m pip install --upgrade pip poetry
+
+      - name: Install Hugging Face dependencies
+        run: poetry install --no-interaction --with dev --extras hf
+
+      - name: Run public model smoke tests
+        env:
+          VERTABRAE_RUN_PUBLIC_MODELS: "1"
+          HF_HUB_DISABLE_TELEMETRY: "1"
+          TOKENIZERS_PARALLELISM: "false"
+        run: poetry run pytest -m publicmodels ${{ inputs.pytest_args }}

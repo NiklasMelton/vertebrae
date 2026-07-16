@@ -1,0 +1,59 @@
+name: Cloud Emulator Smoke Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      pytest_args:
+        description: Extra pytest args, for example '-k s3'
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-emulator-smoke:
+    name: S3/GCS emulator smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: python -m pip install --upgrade pip poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --with dev --extras "s3 gcs"
+
+      - name: Install emulator test dependencies
+        run: poetry run python -m pip install "moto[s3]>=5,<6"
+
+      - name: Start fake GCS server
+        run: |
+          docker run -d --name fake-gcs-server \
+            -p 4443:4443 \
+            fsouza/fake-gcs-server:1.52 \
+            -scheme http \
+            -port 4443 \
+            -backend memory
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:4443/storage/v1/b >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs fake-gcs-server
+          exit 1
+
+      - name: Run cloud emulator smoke tests
+        env:
+          VERTABRAE_RUN_CLOUD_EMULATORS: "1"
+          STORAGE_EMULATOR_HOST: "http://127.0.0.1:4443"
+        run: poetry run pytest -m cloudemulators ${{ inputs.pytest_args }}

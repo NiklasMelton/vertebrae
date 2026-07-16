@@ -8,8 +8,8 @@ Requires optional dependencies:
 import numpy as np
 from _common import ensure_output_dir, make_separated_blobs, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import TorchExtractor
 
 
@@ -44,6 +44,7 @@ def main() -> None:
         labels,
         modality="tabular",
         metadata={"example": "torch_local_model"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     checkpoint_path = output_dir / "torch_local_model_state_dict.pt"
@@ -66,6 +67,7 @@ def main() -> None:
         collate_fn=collate_fn,
         output_fn=output_fn,
         device="cpu",
+        checkpoint_paths=[str(checkpoint_path)],
         recipe_data={"checkpoint": str(checkpoint_path), "input_dim": X.shape[1]},
     )
 
@@ -74,7 +76,6 @@ def main() -> None:
         extractor=extractor,
         scoring_config=OverlapScoringConfig(k=3, min_samples_per_cluster=4),
         stability_config=StabilityConfig(repeats=3, random_state=13),
-        probe_config=ProbeConfig(enabled=False),
         cache_config=CacheConfig(enabled=False),
     ).run()
 

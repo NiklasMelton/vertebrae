@@ -1,0 +1,313 @@
+"""Optional torchvision vision backbone extractor."""
+
+from typing import Any, Callable, Dict, List, Optional, Sequence
+
+import numpy as np
+
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
+from vertebrae.extractors._utils import (
+    callable_name,
+    coerce_image,
+    iter_chunks,
+    materialize_named_outputs,
+    materialize_named_structured_outputs,
+    maybe_move_to_device,
+    optional_dependency_versions,
+    resolve_output_specs,
+    resolve_structured_output_specs,
+    snapshot_mapping,
+    spec_to_recipe,
+    stack_batch,
+    structured_spec_to_recipe,
+    validate_batch_size,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
+)
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
+from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
+
+
+class TorchvisionVisionExtractor:
+    """Wrap a torchvision image backbone as a vertebrae extractor."""
+
+    def __init__(
+        self,
+        name: str,
+        model_name: str,
+        weights: Any = None,
+        batch_size: int = 16,
+        preprocess_fn: Optional[Callable[[Any], Any]] = None,
+        output_fn: Optional[Callable[[Any], Any]] = None,
+        outputs: Optional[Sequence[Dict[str, Any]]] = None,
+        structured_outputs: Optional[Sequence[Dict[str, Any]]] = None,
+        image_mode: str = "auto",
+        alpha_mode: str = "drop",
+        device: Optional[str] = None,
+        model_kwargs: Optional[Dict[str, Any]] = None,
+        checkpoint_paths: Optional[Sequence[str]] = None,
+        cache_identity: Optional[str] = None,
+    ) -> None:
+        batch_size = validate_batch_size(batch_size)
+        if preprocess_fn is not None and not callable(preprocess_fn):
+            raise TypeError("preprocess_fn must be callable when provided.")
+        if output_fn is not None and not callable(output_fn):
+            raise TypeError("output_fn must be callable when provided.")
+        self.name = validate_extractor_name(name)
+        self.model_name = validate_nonblank_string(model_name, "model_name")
+        self.weights = weights
+        self.batch_size = batch_size
+        self.preprocess_fn = preprocess_fn
+        self.output_fn = output_fn
+        self._output_specs = resolve_output_specs(outputs)
+        self._structured_output_specs = resolve_structured_output_specs(structured_outputs)
+        self.image_mode = validate_choice(
+            image_mode, "image_mode", {"auto", "rgb", "grayscale", "preserve"}
+        )
+        self.alpha_mode = validate_choice(
+            alpha_mode,
+            "alpha_mode",
+            {"drop", "white_background", "black_background"},
+        )
+        self.device = validate_optional_nonblank_string(device, "device")
+        self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
+        self.modality = "image"
+        self.extractor_type = "torchvision"
+        self.streaming_safe = True
+        self._torch: Any = None
+        self._image_module: Any = None
+        self._model: Any = None
+        self._resolved_preprocess: Optional[Callable[[Any], Any]] = None
+        self.cache_identity = validate_cache_identity(cache_identity)
+
+    def fit(self, X: Any, y: Any = None) -> "TorchvisionVisionExtractor":
+        return self
+
+    def transform(self, X: Any) -> np.ndarray:
+        outputs = self.transform_many(X)
+        if len(outputs) != 1:
+            raise ValueError(
+                "TorchvisionVisionExtractor.transform() is only available when exactly one "
+                "output is configured. Use Benchmark/Evaluator or transform_many()."
+            )
+        return outputs[0].embeddings
+
+    def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
+        return self.transform(X)
+
+    def output_specs(self) -> List[EmbeddingOutputSpec]:
+        return list(self._output_specs)
+
+    def transform_many(self, X: Any) -> List[EmbeddingOutput]:
+        torch_module, image_module, model, preprocess_fn = self._load_model()
+        images = list(X)
+        model.eval()
+        collected: Dict[str, List[np.ndarray]] = {spec.name: [] for spec in self._output_specs}
+        with torch_module.no_grad():
+            for chunk in iter_chunks(images, self.batch_size):
+                batch = [
+                    preprocess_fn(
+                        coerce_image(
+                            item,
+                            image_module=image_module,
+                            image_mode=self.image_mode,
+                            alpha_mode=self.alpha_mode,
+                        )
+                    )
+                    for item in chunk
+                ]
+                stacked = stack_batch(batch, torch_module=torch_module)
+                stacked = maybe_move_to_device(
+                    stacked,
+                    device=self._device(torch_module),
+                    torch_module=torch_module,
+                )
+                raw_output = model(stacked)
+                projected = self.output_fn(raw_output) if self.output_fn is not None else raw_output
+                outputs = materialize_named_outputs(
+                    projected,
+                    self._output_specs,
+                    owner=f"TorchvisionVisionExtractor '{self.name}'",
+                    allow_sparse=False,
+                    fallback_output=raw_output,
+                )
+                for output in outputs:
+                    collected[output.name].append(output.embeddings.astype(np.float32, copy=False))
+        return [
+            EmbeddingOutput(
+                name=spec.name,
+                embeddings=np.vstack(collected[spec.name]).astype(np.float32, copy=False),
+                recipe=spec_to_recipe(spec),
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._output_specs
+        ]
+
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if not self._structured_output_specs:
+            raise ValueError(
+                "TorchvisionVisionExtractor was not configured with structured_outputs."
+            )
+        torch_module, image_module, model, preprocess_fn = self._load_model()
+        images = list(X)
+        model.eval()
+        collected: Dict[str, List[np.ndarray]] = {
+            spec.name: [] for spec in self._structured_output_specs
+        }
+        with torch_module.no_grad():
+            for chunk in iter_chunks(images, self.batch_size):
+                batch = [
+                    preprocess_fn(
+                        coerce_image(
+                            item,
+                            image_module=image_module,
+                            image_mode=self.image_mode,
+                            alpha_mode=self.alpha_mode,
+                        )
+                    )
+                    for item in chunk
+                ]
+                stacked = stack_batch(batch, torch_module=torch_module)
+                stacked = maybe_move_to_device(
+                    stacked,
+                    device=self._device(torch_module),
+                    torch_module=torch_module,
+                )
+                raw_output = model(stacked)
+                projected = self.output_fn(raw_output) if self.output_fn is not None else raw_output
+                outputs = materialize_named_structured_outputs(
+                    projected,
+                    self._structured_output_specs,
+                    owner=f"TorchvisionVisionExtractor '{self.name}'",
+                    raw_output=raw_output,
+                    expected_parents=len(chunk),
+                )
+                for output in outputs:
+                    collected[output.name].extend(
+                        np.asarray(item, dtype=np.float32) for item in output.embeddings
+                    )
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=collected[spec.name],
+                unit_type=spec.unit_type,
+                recipe=structured_spec_to_recipe(spec),
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
+    def recipe(self) -> Dict[str, Any]:
+        recipe = {
+            "name": self.name,
+            "extractor_type": self.extractor_type,
+            "modality": self.modality,
+            "model_name": self.model_name,
+            "weights": str(self.weights) if self.weights is not None else None,
+            "batch_size": self.batch_size,
+            "preprocess_fn": (
+                callable_name(self.preprocess_fn)
+                if self.preprocess_fn is not None
+                else "<torchvision-default>"
+            ),
+            "output_fn": callable_name(self.output_fn) if self.output_fn is not None else None,
+            "outputs": [spec_to_recipe(spec) for spec in self._output_specs],
+            "image_mode": self.image_mode,
+            "alpha_mode": self.alpha_mode,
+            "device": self.device,
+            "model_kwargs": self.model_kwargs,
+            "dependency_versions": optional_dependency_versions("Pillow", "torch", "torchvision"),
+            "streaming_safe": self.streaming_safe,
+        }
+        if self._structured_output_specs:
+            recipe["structured_outputs"] = [
+                structured_spec_to_recipe(spec) for spec in self._structured_output_specs
+            ]
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=(
+                    ("preprocess_fn", self.preprocess_fn),
+                    ("output_fn", self.output_fn),
+                ),
+                paths=self.checkpoint_paths,
+                state_required=True,
+                paths_authoritative=False,
+            )
+        )
+        return recipe
+
+    def get_resource_profile_adapter(self) -> Any:
+        from vertebrae.profiling import TorchResourceProfileAdapter
+
+        return TorchResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            model_getter=lambda: self._model,
+            device_resolver=self._device,
+        )
+
+    def _device(self, torch_module: Any) -> str:
+        if self.device is not None:
+            return self.device
+        return "cuda" if torch_module.cuda.is_available() else "cpu"
+
+    def _load_model(self) -> Any:
+        if self._model is None:
+            try:
+                import torch
+                from PIL import Image
+                from torchvision import models
+            except ImportError as exc:
+                raise ImportError(
+                    "TorchvisionVisionExtractor requires optional torchvision dependencies. "
+                    "Install with `poetry install -E torchvision`."
+                ) from exc
+            constructor = getattr(models, self.model_name, None)
+            if constructor is None:
+                raise ValueError(f"Unknown torchvision model '{self.model_name}'.")
+            model = constructor(weights=self.weights, **self.model_kwargs)
+            if hasattr(model, "to"):
+                moved = model.to(self._device(torch))
+                if moved is not None:
+                    model = moved
+            preprocess_fn = self.preprocess_fn
+            if preprocess_fn is None:
+                preprocess_fn = (
+                    self.weights.transforms()
+                    if self.weights is not None
+                    else lambda image: _default_tensor_preprocess(image, torch)
+                )
+            self._torch = torch
+            self._image_module = Image
+            self._model = model
+            self._resolved_preprocess = preprocess_fn
+        return self._torch, self._image_module, self._model, self._resolved_preprocess
+
+
+def _default_tensor_preprocess(image: Any, torch_module: Any) -> Any:
+    """Match torchvision's basic ToTensor layout/dtype when no weights are supplied."""
+
+    array = np.asarray(image)
+    if array.ndim == 2:
+        array = array[:, :, np.newaxis]
+    if array.ndim != 3 or array.shape[-1] not in {1, 3, 4}:
+        raise ValueError(
+            "TorchvisionVisionExtractor default preprocessing expects an HWC image with "
+            "1, 3, or 4 channels. Provide preprocess_fn for other layouts."
+        )
+    array = np.moveaxis(array, -1, 0).astype(np.float32, copy=False)
+    if np.issubdtype(np.asarray(image).dtype, np.integer):
+        array = array / 255.0
+    converter = getattr(torch_module, "as_tensor", None)
+    if not callable(converter):
+        raise TypeError("The installed torch module does not expose as_tensor().")
+    return converter(np.ascontiguousarray(array))

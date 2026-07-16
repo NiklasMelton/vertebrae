@@ -68,6 +68,7 @@ class FakeProcessor:
 
 class FakeVisionModel:
     last_call_kwargs = None
+    call_count = 0
 
     def to(self, device):
         return self
@@ -77,6 +78,7 @@ class FakeVisionModel:
 
     def __call__(self, **encoded):
         self.__class__.last_call_kwargs = encoded
+        self.__class__.call_count += 1
         batch = encoded["pixel_values"].shape[0]
         hidden = np.arange(batch * 5 * 6, dtype=float).reshape(batch, 5, 6)
         hidden_states = tuple(FakeTensor(hidden + layer * 100) for layer in range(4))
@@ -129,6 +131,7 @@ class FakeImageModule:
 
 @pytest.fixture
 def fake_vision_modules(monkeypatch):
+    FakeVisionModel.call_count = 0
     monkeypatch.setitem(sys.modules, "torch", FakeTorch)
     monkeypatch.setitem(sys.modules, "PIL", types.SimpleNamespace(Image=FakeImageModule))
     monkeypatch.setitem(
@@ -205,6 +208,49 @@ def test_hf_vision_selects_hidden_layer(fake_vision_modules):
     assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
 
 
+def test_hf_vision_transform_many_shares_model_forward(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        outputs=[
+            {"name": "final_cls", "pooling": "cls"},
+            {"name": "mid_cls", "pooling": "cls", "hidden_layer": 2},
+        ],
+        batch_size=2,
+    )
+
+    outputs = extractor.transform_many([np.zeros((4, 4, 3), dtype=np.uint8)] * 3)
+
+    assert [output.name for output in outputs] == ["final_cls", "mid_cls"]
+    assert all(output.embeddings.shape == (3, 6) for output in outputs)
+    assert FakeVisionModel.call_count == 2
+    assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
+
+
+def test_hf_vision_exposes_explicit_patch_grid(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        spatial_outputs=[
+            {
+                "name": "patches",
+                "grid_shape": [2, 2],
+                "special_tokens": 1,
+                "hidden_layer": 2,
+            }
+        ],
+        batch_size=2,
+    )
+
+    output = extractor.transform_spatial([np.zeros((4, 4, 3), dtype=np.uint8)] * 2)[0]
+
+    assert output.name == "patches"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (5, 6)
+    assert FakeVisionModel.call_count == 1
+    assert FakeVisionModel.last_call_kwargs["output_hidden_states"] is True
+
+
 def test_hf_vision_rejects_pooler_with_hidden_layer(fake_vision_modules):
     extractor = HFVisionExtractor(
         "vit",
@@ -215,6 +261,34 @@ def test_hf_vision_rejects_pooler_with_hidden_layer(fake_vision_modules):
 
     with pytest.raises(ValueError, match="pooler"):
         extractor.transform([np.zeros((4, 4, 3), dtype=np.uint8)])
+
+
+def test_hf_vision_supports_structured_region_outputs(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        structured_outputs=[{"name": "regions", "hidden_layer": 2, "special_tokens": 1}],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured([np.zeros((4, 4, 3), dtype=np.uint8)] * 2)[0]
+
+    assert output.name == "regions"
+    assert output.unit_type == "region"
+    assert len(output.embeddings) == 2
+    assert output.embeddings[0].shape == (4, 6)
+
+
+def test_hf_vision_structured_output_preserves_hidden_layer_zero(fake_vision_modules):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        structured_outputs=[{"name": "regions", "hidden_layer": 0, "special_tokens": 1}],
+    )
+
+    output = extractor.transform_structured([np.zeros((4, 4, 3), dtype=np.uint8)])[0]
+
+    assert output.embeddings[0][0].tolist() == [6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
 
 
 def test_hf_vision_rejects_out_of_range_hidden_layer(fake_vision_modules):
@@ -243,6 +317,50 @@ def test_hf_vision_rgb_mode_converts_supported_numpy_shapes():
 
     assert [output.mode for output in outputs] == ["RGB", "RGB", "RGB", "RGB"]
     assert [output.size for output in outputs] == [(2, 2), (2, 2), (2, 2), (2, 2)]
+
+
+def test_hf_vision_scales_unit_float_images_to_uint8():
+    image_module = pytest.importorskip("PIL.Image")
+    unit_float = np.asarray([[[0.0, 0.5, 1.0]]], dtype=np.float32)
+
+    output = _coerce_image(
+        unit_float,
+        image_module,
+        image_mode="rgb",
+        alpha_mode="drop",
+    )
+
+    assert output.mode == "RGB"
+    assert np.asarray(output).dtype == np.uint8
+    assert np.asarray(output).tolist() == [[[0, 128, 255]]]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        np.nan,
+        np.inf,
+        -0.01,
+        1.01,
+    ],
+)
+def test_hf_vision_rejects_invalid_float_image_values(value):
+    image_module = pytest.importorskip("PIL.Image")
+    array = np.zeros((1, 1, 3), dtype=np.float32)
+    array[0, 0, 0] = value
+
+    with pytest.raises(ValueError, match=r"finite|\[0, 1\]"):
+        _coerce_image(array, image_module, image_mode="rgb", alpha_mode="drop")
+
+
+@pytest.mark.parametrize("value", [-1, 256])
+def test_hf_vision_rejects_out_of_range_integer_image_values(value):
+    image_module = pytest.importorskip("PIL.Image")
+    array = np.zeros((1, 1, 3), dtype=np.int16)
+    array[0, 0, 0] = value
+
+    with pytest.raises(ValueError, match=r"\[0, 255\]"):
+        _coerce_image(array, image_module, image_mode="rgb", alpha_mode="drop")
 
 
 def test_hf_vision_grayscale_mode_converts_supported_numpy_shapes():
@@ -282,6 +400,32 @@ def test_hf_vision_alpha_modes_are_deterministic():
     assert np.asarray(dropped).tolist() == [[[255, 0, 0]]]
     assert np.asarray(white).tolist() == [[[255, 255, 255]]]
     assert np.asarray(black).tolist() == [[[0, 0, 0]]]
+
+
+def test_hf_vision_auto_mode_handles_alpha_consistently_for_array_pil_and_path(tmp_path):
+    image_module = pytest.importorskip("PIL.Image")
+    transparent_red = np.asarray([[[255, 0, 0, 0]]], dtype=np.uint8)
+    pil_image = image_module.fromarray(transparent_red)
+    image_path = tmp_path / "transparent.png"
+    pil_image.save(image_path)
+
+    for source in (transparent_red, pil_image, image_path):
+        white = _coerce_image(
+            source,
+            image_module,
+            image_mode="auto",
+            alpha_mode="white_background",
+        )
+        black = _coerce_image(
+            source,
+            image_module,
+            image_mode="auto",
+            alpha_mode="black_background",
+        )
+        assert white.mode == "RGB"
+        assert black.mode == "RGB"
+        assert np.asarray(white).tolist() == [[[255, 255, 255]]]
+        assert np.asarray(black).tolist() == [[[0, 0, 0]]]
 
 
 def test_hf_vision_rejects_invalid_image_conversion_options():

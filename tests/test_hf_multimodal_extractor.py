@@ -1,0 +1,393 @@
+import sys
+import types
+
+import numpy as np
+import pytest
+
+from vertebrae import (
+    BenchmarkDataset,
+    DatasetIdentity,
+    Evaluator,
+    ZeroShotBenchmark,
+    ZeroShotDataset,
+)
+from vertebrae.config import CacheConfig, SeparatixConfig, StabilityConfig
+from vertebrae.extractors import HFMultimodalExtractor
+
+
+class FakeTensor:
+    def __init__(self, data):
+        self.data = np.asarray(data)
+        self.device = "cpu"
+
+    @property
+    def shape(self):
+        return self.data.shape
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.data
+
+    def mean(self, dim=None):
+        return FakeTensor(np.mean(self.data, axis=dim))
+
+    def __getitem__(self, key):
+        return FakeTensor(self.data[key])
+
+
+class FakeNoGrad:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakeTorch:
+    class cuda:
+        @staticmethod
+        def is_available():
+            return False
+
+    @staticmethod
+    def no_grad():
+        return FakeNoGrad()
+
+
+class FakeProcessor:
+    last_kwargs = None
+
+    def __call__(self, **kwargs):
+        self.__class__.last_kwargs = kwargs
+        batch = len(kwargs["text"] if "text" in kwargs else kwargs["images"])
+        return {
+            "input_ids": FakeTensor(np.arange(batch * 4).reshape(batch, 4)),
+            "pixel_values": FakeTensor(np.zeros((batch, 3, 2, 2))),
+        }
+
+
+class FakeModel:
+    def to(self, device):
+        return self
+
+    def eval(self):
+        return self
+
+    def __call__(self, **encoded):
+        batch = encoded["input_ids"].shape[0]
+        hidden = np.arange(batch * 3 * 4, dtype=float).reshape(batch, 3, 4)
+        return types.SimpleNamespace(
+            image_embeds=FakeTensor(np.full((batch, 4), 2.0)),
+            text_embeds=FakeTensor(np.full((batch, 4), 3.0)),
+            pooler_output=FakeTensor(np.full((batch, 4), 5.0)),
+            hidden_states=tuple(FakeTensor(hidden + index * 100.0) for index in range(4)),
+        )
+
+    def get_image_features(self, **encoded):
+        return FakeTensor(np.full((encoded["input_ids"].shape[0], 4), 2.0))
+
+    def get_text_features(self, **encoded):
+        return FakeTensor(np.full((encoded["input_ids"].shape[0], 4), 3.0))
+
+
+class FakeAutoProcessor:
+    @classmethod
+    def from_pretrained(cls, model_id, **kwargs):
+        return FakeProcessor()
+
+
+class FakeAutoModel:
+    @classmethod
+    def from_pretrained(cls, model_id, **kwargs):
+        return FakeModel()
+
+
+class FakeImageModule:
+    @staticmethod
+    def fromarray(value):
+        return value
+
+    @staticmethod
+    def open(value):
+        return types.SimpleNamespace(convert=lambda mode: value)
+
+
+@pytest.fixture
+def fake_multimodal_modules(monkeypatch):
+    FakeProcessor.last_kwargs = None
+    monkeypatch.setitem(sys.modules, "torch", FakeTorch)
+    monkeypatch.setitem(sys.modules, "PIL", types.SimpleNamespace(Image=FakeImageModule))
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        types.SimpleNamespace(
+            AutoModel=FakeAutoModel,
+            AutoProcessor=FakeAutoProcessor,
+        ),
+    )
+
+
+def _dataset():
+    return BenchmarkDataset.from_multimodal(
+        inputs={
+            "image": [np.zeros((2, 2, 3), dtype=np.uint8)] * 4,
+            "caption": ["one", "two", "three", "four"],
+        },
+        labels=["left", "left", "right", "right"],
+        modalities={"image": "image", "caption": "text"},
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+
+def test_hf_multimodal_transform_many_uses_default_text_image_mapping(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[
+            {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
+            {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
+            {"name": "fused", "source": "fused", "model_output": "pooler_output"},
+        ],
+        batch_size=2,
+    )
+
+    outputs = extractor.transform_many(_dataset().X)
+
+    assert [output.name for output in outputs] == ["image_branch", "text_branch", "fused"]
+    assert all(output.embeddings.shape == (4, 4) for output in outputs)
+    assert FakeProcessor.last_kwargs["text"] == ["three", "four"]
+    assert len(FakeProcessor.last_kwargs["images"]) == 2
+
+
+def test_hf_multimodal_runs_zero_shot_protocol(fake_multimodal_modules, fake_overlapindex):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[
+            {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
+            {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
+        ],
+    )
+    protocol = ZeroShotDataset.from_templates(
+        BenchmarkDataset.from_arrays(
+            [np.zeros((2, 2, 3), dtype=np.uint8)] * 4,
+            ["left", "left", "right", "right"],
+            modality="image",
+            identity=DatasetIdentity.ephemeral(),
+        ),
+        ["{label}"],
+    )
+    result = ZeroShotBenchmark(
+        protocol,
+        [extractor],
+        sample_branch="image_branch",
+        text_branch="text_branch",
+    ).run()
+    assert result.extractor_results[0].zero_shot.metrics["accuracy"] >= 0.0
+
+
+def test_hf_multimodal_supports_input_and_output_adapters(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[{"name": "fused", "source": "fused", "model_output": "custom"}],
+        input_fn=lambda batch: {
+            "text": [item.upper() for item in batch["caption"]],
+            "images": batch["image"],
+        },
+        output_fn=lambda model_output: {"fused": model_output.pooler_output},
+        batch_size=2,
+    )
+
+    output = extractor.transform(_dataset().X)
+
+    assert output.shape == (4, 4)
+    assert FakeProcessor.last_kwargs["text"] == ["THREE", "FOUR"]
+
+
+def test_hf_multimodal_selects_hidden_state_and_pooling(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[
+            {
+                "name": "hidden_cls",
+                "source": "fused",
+                "model_output": "hidden_states",
+                "hidden_layer": 2,
+                "pooling": "cls",
+            }
+        ],
+        batch_size=2,
+    )
+
+    output = extractor.transform(_dataset().X)
+
+    assert output.tolist() == [
+        [200.0, 201.0, 202.0, 203.0],
+        [212.0, 213.0, 214.0, 215.0],
+        [200.0, 201.0, 202.0, 203.0],
+        [212.0, 213.0, 214.0, 215.0],
+    ]
+
+
+def test_hf_multimodal_applies_selector_to_ordinary_outputs(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[
+            {
+                "name": "selected",
+                "source": "fused",
+                "model_output": "custom",
+                "selector": "embedding",
+            }
+        ],
+        output_fn=lambda model_output: {"selected": {"embedding": model_output.pooler_output}},
+        batch_size=2,
+    )
+
+    output = extractor.transform(_dataset().X)
+
+    assert output.tolist() == [[5.0] * 4] * 4
+    assert extractor.recipe()["outputs"][0]["selector"] == "embedding"
+
+
+def test_hf_multimodal_alpha_modes_composite_transparency():
+    image_module = pytest.importorskip("PIL.Image")
+    from vertebrae.extractors.huggingface_multimodal import _coerce_image
+
+    transparent_red = np.asarray([[[255, 0, 0, 0]]], dtype=np.uint8)
+
+    white = _coerce_image(transparent_red, image_module, "rgb", "white_background")
+    black = _coerce_image(transparent_red, image_module, "rgb", "black_background")
+
+    assert np.asarray(white).tolist() == [[[255, 255, 255]]]
+    assert np.asarray(black).tolist() == [[[0, 0, 0]]]
+
+
+def test_hf_multimodal_recipe_and_report_metadata(
+    fake_multimodal_modules,
+    fake_overlapindex,
+    tmp_path,
+):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[{"name": "fused", "source": "fused", "model_output": "pooler_output"}],
+        batch_size=2,
+    )
+
+    recipe = extractor.recipe()
+    result = Evaluator(
+        dataset=_dataset(),
+        extractor=extractor,
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+    markdown_path = tmp_path / "multimodal.md"
+    result.save_markdown(str(markdown_path))
+    report = markdown_path.read_text(encoding="utf-8")
+
+    assert recipe["modality"] == "multimodal"
+    assert recipe["input_modalities"] == {"image": "image", "caption": "text"}
+    assert result.extractor_results[0].embedding_metadata["output_metadata"]["source"] == "fused"
+    assert "Modalities: {'image': 'image', 'caption': 'text'}" in report
+    assert "Output source: fused" in report
+    assert len(fake_overlapindex.calls) == 1
+
+
+def test_hf_multimodal_rejects_invalid_output_resolution(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[{"name": "missing", "source": "fused", "model_output": "does_not_exist"}],
+    )
+
+    with pytest.raises(ValueError, match="could not resolve"):
+        extractor.transform(_dataset().X)
+
+
+def test_hf_multimodal_rejects_invalid_output_shape(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[{"name": "bad", "source": "fused", "model_output": "bad"}],
+        output_fn=lambda model_output: {"bad": np.array([1.0, 2.0, 3.0])},
+    )
+
+    with pytest.raises(ValueError, match="1D vector"):
+        extractor.transform(_dataset().X)
+
+
+def test_hf_multimodal_supports_structured_outputs(fake_multimodal_modules):
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[{"name": "fused", "source": "fused", "model_output": "pooler_output"}],
+        structured_outputs=[
+            {
+                "name": "tokens",
+                "unit_type": "token",
+                "source": "fused",
+                "model_output": "hidden_states",
+                "hidden_layer": 2,
+            }
+        ],
+        batch_size=2,
+    )
+
+    output = extractor.transform_structured(_dataset().X)[0]
+
+    assert output.name == "tokens"
+    assert output.unit_type == "token"
+    assert len(output.embeddings) == 4
+    assert output.embeddings[0].shape == (3, 4)
+    assert extractor.recipe()["structured_outputs"][0]["model_output"] == "hidden_states"
+
+
+def test_hf_multimodal_lazy_import_error(monkeypatch):
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    monkeypatch.delitem(sys.modules, "PIL", raising=False)
+    monkeypatch.delitem(sys.modules, "transformers", raising=False)
+    original_import = __import__
+
+    def raising_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name in {"torch", "PIL", "transformers"}:
+            raise ImportError(name)
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", raising_import)
+    extractor = HFMultimodalExtractor(
+        name="clip",
+        model_id="fake-clip",
+        input_modalities={"image": "image", "caption": "text"},
+        outputs=[{"name": "fused", "source": "fused", "model_output": "pooler_output"}],
+    )
+
+    with pytest.raises(ImportError, match="optional Hugging Face multi-modal dependencies"):
+        extractor.transform_many(
+            {
+                "image": [np.zeros((2, 2, 3), dtype=np.uint8)],
+                "caption": ["one"],
+            }
+        )

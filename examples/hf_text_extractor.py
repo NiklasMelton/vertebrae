@@ -5,10 +5,10 @@ Requires optional dependencies and a model available locally or from Hugging Fac
     poetry install -E hf
 """
 
-from _common import CACHE_DIR, ensure_output_dir, print_ranking
+from _common import ensure_output_dir, print_ranking
 
-from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import HFTextExtractor
 
 
@@ -23,7 +23,9 @@ def main() -> None:
         "The onboarding workflow needs clearer settings.",
     ]
     labels = ["finance", "finance", "platform", "platform", "product", "product"]
-    dataset = BenchmarkDataset.from_arrays(texts, labels, modality="text")
+    dataset = BenchmarkDataset.from_arrays(
+        texts, labels, modality="text", identity=DatasetIdentity.ephemeral()
+    )
 
     extractor = HFTextExtractor(
         name="distilbert_mean_pool",
@@ -38,8 +40,8 @@ def main() -> None:
             extractor=extractor,
             scoring_config=OverlapScoringConfig(k=1, min_samples_per_cluster=2),
             stability_config=StabilityConfig(repeats=3),
-            probe_config=ProbeConfig(enabled=False),
-            cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
+            # This example intentionally uses an unpinned remote model name.
+            cache_config=CacheConfig(enabled=False),
         ).run()
     except ImportError as exc:
         print(exc)

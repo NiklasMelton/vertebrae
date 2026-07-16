@@ -9,9 +9,12 @@ from the repository README, existing Markdown guides, and generated API referenc
 
 overview
 datasets
+segmentation
 feature_extractors
 compression
 scoring
+retrieval
+zero_shot
 results_and_reports
 examples
 distributed_readiness

@@ -1,13 +1,13 @@
 """Compare several feature extractors on the same labeled numeric dataset."""
 
 import numpy as np
-from _common import CACHE_DIR, ensure_output_dir, make_separated_blobs, print_ranking
+from _common import ensure_output_dir, make_separated_blobs, print_ranking
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from vertebrae import Benchmark, BenchmarkDataset
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae import Benchmark, BenchmarkDataset, DatasetIdentity
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor, SklearnExtractor
 
 
@@ -19,14 +19,15 @@ def main() -> None:
         labels,
         modality="tabular",
         metadata={"example": "multi_extractor_comparison"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     benchmark = Benchmark(
         dataset=dataset,
         scoring_config=OverlapScoringConfig(k=4, min_samples_per_cluster=5),
         stability_config=StabilityConfig(repeats=4, random_state=29),
-        probe_config=ProbeConfig(methods=("nearest_centroid", "knn")),
-        cache_config=CacheConfig(cache_dir=str(CACHE_DIR)),
+        # Local lambdas and a fitted pipeline have no portable reusable identity here.
+        cache_config=CacheConfig(enabled=False),
     )
     benchmark.add_extractor(
         CallableExtractor(

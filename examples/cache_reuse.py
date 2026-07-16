@@ -2,8 +2,8 @@
 
 from _common import CACHE_DIR, ensure_output_dir, make_separated_blobs
 
-from vertebrae import BenchmarkDataset, Evaluator
-from vertebrae.config import CacheConfig, OverlapScoringConfig, ProbeConfig, StabilityConfig
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
+from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import CallableExtractor
 
 
@@ -15,6 +15,7 @@ def main() -> None:
         labels,
         modality="tabular",
         metadata={"example": "cache_reuse"},
+        identity=DatasetIdentity.ephemeral(),
     )
 
     cache_config = CacheConfig(cache_dir=str(CACHE_DIR))
@@ -22,11 +23,13 @@ def main() -> None:
         name="expensive_domain_features",
         transform_fn=lambda values: values[:, :4] * 1.25,
         modality="tabular",
+        # This lambda is intentionally local and therefore has no portable code
+        # identity. Declare the transformation revision explicitly to opt into reuse.
+        cache_identity="expensive-domain-features-v1",
     )
     kwargs = {
         "scoring_config": OverlapScoringConfig(k=3, min_samples_per_cluster=4),
         "stability_config": StabilityConfig(enabled=False),
-        "probe_config": ProbeConfig(enabled=False),
         "cache_config": cache_config,
     }
 

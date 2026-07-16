@@ -1,9 +1,33 @@
 """Optional Keras module extractor for local user-supplied models."""
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
+from vertebrae.extractors._outputs import validate_named_output_mapping
+from vertebrae.extractors._utils import (
+    optional_dependency_versions,
+    snapshot_mapping,
+    validate_bool,
+    validate_choice,
+    validate_nonblank_string,
+    validate_optional_nonblank_string,
+)
+from vertebrae.extractors.spatial import (
+    SpatialEmbeddingOutput,
+    SpatialOutputSpec,
+    _per_image_values,
+)
+from vertebrae.extractors.structured import (
+    StructuredEmbeddingOutput,
+    StructuredOutputSpec,
+    _per_parent_structured_values,
+)
 from vertebrae.utils.validation import ensure_numeric_matrix
 
 
@@ -39,26 +63,73 @@ class KerasExtractor:
         recipe_data: Optional[Dict[str, Any]] = None,
         allow_sparse: bool = False,
         streaming_safe: bool = True,
+        spatial_output_fn: Optional[Callable[[Any], Any]] = None,
+        spatial_output_specs: Optional[Iterable[SpatialOutputSpec]] = None,
+        structured_output_fn: Optional[Callable[[Any], Any]] = None,
+        structured_output_specs: Optional[Iterable[StructuredOutputSpec]] = None,
+        checkpoint_paths: Optional[Iterable[str]] = None,
+        profiling_device: Optional[str] = None,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        if call_method not in {"call", "predict"}:
-            raise ValueError("call_method must be either 'call' or 'predict'.")
-        self.name = name
+        call_method = validate_choice(call_method, "call_method", {"call", "predict"})
+        for option_name, option_value in (
+            ("collate_fn", collate_fn),
+            ("output_fn", output_fn),
+            ("spatial_output_fn", spatial_output_fn),
+            ("structured_output_fn", structured_output_fn),
+        ):
+            if option_value is not None and not callable(option_value):
+                raise TypeError(f"{option_name} must be callable when provided.")
+        self.name = validate_extractor_name(name)
         self.model = model
         self.collate_fn = collate_fn or np.asarray
         self.output_fn = output_fn
         self.call_method = call_method
         self.call_kwargs = {"training": False}
-        if call_kwargs is not None:
-            self.call_kwargs.update(call_kwargs)
+        self.call_kwargs.update(snapshot_mapping(call_kwargs, "call_kwargs"))
         self.predict_kwargs = {"verbose": 0}
-        if predict_kwargs is not None:
-            self.predict_kwargs.update(predict_kwargs)
-        self.modality = modality
-        self.extractor_type = extractor_type
-        self.recipe_data = recipe_data or {}
-        self.allow_sparse = allow_sparse
-        self.streaming_safe = streaming_safe
+        self.predict_kwargs.update(snapshot_mapping(predict_kwargs, "predict_kwargs"))
+        self.modality = validate_nonblank_string(modality, "modality")
+        self.extractor_type = validate_nonblank_string(extractor_type, "extractor_type")
+        self.recipe_data = snapshot_mapping(recipe_data, "recipe_data")
+        self.allow_sparse = validate_bool(allow_sparse, "allow_sparse")
+        self.streaming_safe = validate_bool(streaming_safe, "streaming_safe")
+        self.spatial_output_fn = spatial_output_fn
+        self._spatial_output_specs = list(spatial_output_specs or [])
+        self.structured_output_fn = structured_output_fn
+        self._structured_output_specs = list(structured_output_specs or [])
+        for owner, specs in (
+            ("spatial", self._spatial_output_specs),
+            ("structured", self._structured_output_specs),
+        ):
+            names = [spec.name for spec in specs]
+            if len(names) != len(set(names)):
+                raise ValueError(f"KerasExtractor {owner} output names must be unique.")
+        if (self.spatial_output_fn is None) != (not self._spatial_output_specs):
+            raise ValueError(
+                "spatial_output_fn and spatial_output_specs must be provided together."
+            )
+        if (self.structured_output_fn is None) != (not self._structured_output_specs):
+            raise ValueError(
+                "structured_output_fn and structured_output_specs must be provided together."
+            )
         self._keras: Any = None
+        self.checkpoint_paths = tuple(checkpoint_paths or ())
+        self.profiling_device = validate_optional_nonblank_string(
+            profiling_device, "profiling_device"
+        )
+        self.cache_identity = validate_cache_identity(cache_identity)
+
+    def get_resource_profile_adapter(self) -> Any:
+        """Return Keras-specific model-footprint hooks."""
+
+        from vertebrae.profiling import KerasResourceProfileAdapter
+
+        return KerasResourceProfileAdapter(
+            self,
+            self.checkpoint_paths,
+            profiling_device=self.profiling_device,
+        )
 
     def fit(self, X: Any, y: Any = None) -> "KerasExtractor":
         """No-op fit for local Keras models."""
@@ -84,10 +155,67 @@ class KerasExtractor:
 
         return self.fit(X, y).transform(X)
 
+    def spatial_output_specs(self) -> List[SpatialOutputSpec]:
+        return list(self._spatial_output_specs)
+
+    def transform_spatial(self, X: Any) -> List[SpatialEmbeddingOutput]:
+        if self.spatial_output_fn is None:
+            raise ValueError("KerasExtractor was not configured with spatial outputs.")
+        self._load_keras()
+        values = self._to_numpy(self.spatial_output_fn(self._call_model(self.collate_fn(X))))
+        if not isinstance(values, dict) and len(self._spatial_output_specs) == 1:
+            values = {self._spatial_output_specs[0].name: values}
+        if not isinstance(values, dict):
+            raise ValueError("Multi-output Keras spatial adapters must return a mapping.")
+        values = validate_named_output_mapping(
+            values,
+            [spec.name for spec in self._spatial_output_specs],
+            "KerasExtractor spatial adapter",
+        )
+        return [
+            SpatialEmbeddingOutput(
+                name=spec.name,
+                embeddings=_per_image_values(values[spec.name], spec.layout),
+                layout=spec.layout,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+                annotation_transform=spec.annotation_transform,
+            )
+            for spec in self._spatial_output_specs
+        ]
+
+    def structured_output_specs(self) -> List[StructuredOutputSpec]:
+        return list(self._structured_output_specs)
+
+    def transform_structured(self, X: Any) -> List[StructuredEmbeddingOutput]:
+        if self.structured_output_fn is None:
+            raise ValueError("KerasExtractor was not configured with structured outputs.")
+        self._load_keras()
+        values = self._to_numpy(self.structured_output_fn(self._call_model(self.collate_fn(X))))
+        if not isinstance(values, dict) and len(self._structured_output_specs) == 1:
+            values = {self._structured_output_specs[0].name: values}
+        if not isinstance(values, dict):
+            raise ValueError("Multi-output Keras structured adapters must return a mapping.")
+        values = validate_named_output_mapping(
+            values,
+            [spec.name for spec in self._structured_output_specs],
+            "KerasExtractor structured adapter",
+        )
+        return [
+            StructuredEmbeddingOutput(
+                name=spec.name,
+                embeddings=_per_parent_structured_values(values[spec.name], spec.unit_type),
+                unit_type=spec.unit_type,
+                recipe={"hidden_layer": spec.hidden_layer},
+                metadata=dict(spec.metadata),
+            )
+            for spec in self._structured_output_specs
+        ]
+
     def recipe(self) -> Dict[str, Any]:
         """Return a serializable recipe for this extractor."""
 
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "modality": self.modality,
@@ -99,8 +227,58 @@ class KerasExtractor:
             "predict_kwargs": self.predict_kwargs,
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,
+            "dependency_versions": optional_dependency_versions("keras", "tensorflow"),
             "streaming_safe": self.streaming_safe,
+            "spatial_output_fn": (
+                _callable_name(self.spatial_output_fn)
+                if self.spatial_output_fn is not None
+                else None
+            ),
+            "spatial_outputs": [
+                {
+                    "name": spec.name,
+                    "layout": spec.layout.__dict__,
+                    "hidden_layer": spec.hidden_layer,
+                    "metadata": spec.metadata,
+                }
+                for spec in self._spatial_output_specs
+            ],
+            "structured_output_fn": (
+                _callable_name(self.structured_output_fn)
+                if self.structured_output_fn is not None
+                else None
+            ),
+            "structured_outputs": [
+                {
+                    "name": spec.name,
+                    "unit_type": spec.unit_type,
+                    "hidden_layer": spec.hidden_layer,
+                    "metadata": spec.metadata,
+                }
+                for spec in self._structured_output_specs
+            ],
         }
+        identity_callables = [
+            ("collate_fn", self.collate_fn),
+            ("output_fn", self.output_fn),
+            ("spatial_output_fn", self.spatial_output_fn),
+            ("structured_output_fn", self.structured_output_fn),
+        ]
+        identity_callables.extend(
+            (f"annotation_transform:{spec.name}", spec.annotation_transform)
+            for spec in self._spatial_output_specs
+            if spec.annotation_transform is not None
+        )
+        recipe.update(
+            cache_identity_fields(
+                explicit=self.cache_identity,
+                callables=identity_callables,
+                paths=self.checkpoint_paths,
+                state_required=True,
+                paths_authoritative=False,
+            )
+        )
+        return recipe
 
     def _load_keras(self) -> Any:
         if self._keras is None:
@@ -140,4 +318,7 @@ class KerasExtractor:
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:
-    return f"{getattr(fn, '__module__', '<unknown>')}.{getattr(fn, '__qualname__', repr(fn))}"
+    value_type = type(fn)
+    module = getattr(fn, "__module__", value_type.__module__)
+    qualname = getattr(fn, "__qualname__", value_type.__qualname__)
+    return f"{module}.{qualname}"

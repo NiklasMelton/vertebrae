@@ -1,9 +1,14 @@
 """Scikit-learn transformer and pipeline extractors."""
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 
+from vertebrae.extractors._identity import (
+    cache_identity_fields,
+    validate_cache_identity,
+    validate_extractor_name,
+)
 from vertebrae.utils.validation import (
     ensure_dense_numeric_2d,
     ensure_sparse_numeric_2d,
@@ -31,14 +36,16 @@ class SklearnExtractor:
         extractor_type: str = "unsupervised_fitted",
         max_dense_bytes: int = 2_000_000_000,
         allow_sparse: bool = False,
+        cache_identity: Optional[str] = None,
     ) -> None:
-        self.name = name
+        self.name = validate_extractor_name(name)
         self.pipeline = pipeline
         self.already_fitted = already_fitted
         self.extractor_type = extractor_type
         self.max_dense_bytes = max_dense_bytes
         self.allow_sparse = allow_sparse
         self.modality = "unknown"
+        self.cache_identity = validate_cache_identity(cache_identity)
 
     def fit(self, X: Any, y: Any = None) -> "SklearnExtractor":
         """Fit the wrapped scikit-learn object when needed.
@@ -108,7 +115,7 @@ class SklearnExtractor:
                 for key, value in self.pipeline.get_params(deep=True).items()
                 if _is_simple_param(value)
             }
-        return {
+        recipe = {
             "name": self.name,
             "extractor_type": self.extractor_type,
             "pipeline_class": (
@@ -119,6 +126,8 @@ class SklearnExtractor:
             "allow_sparse": self.allow_sparse,
             "params": params,
         }
+        recipe.update(cache_identity_fields(explicit=self.cache_identity, state_required=True))
+        return recipe
 
     def _prepare_output(self, output: Any) -> np.ndarray:
         if hasattr(output, "toarray"):
