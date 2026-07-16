@@ -260,8 +260,9 @@ def test_cli_artifact_workflow_scores_real_overlapindex(tmp_path, capsys):
         )
         == 0
     )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
-    for shard_index in range(3):
+    for shard in plan["shard_jobs"]:
         assert (
             main(
                 [
@@ -269,15 +270,13 @@ def test_cli_artifact_workflow_scores_real_overlapindex(tmp_path, capsys):
                     "--dataset-pickle",
                     str(dataset_path),
                     "--extractor-pickle",
-                    str(extractor_path),
+                    plan["extractor_pickle"],
                     "--cache-dir",
                     str(cache_dir),
-                    "--total-shards",
-                    "3",
+                    "--plan-json",
+                    str(plan_path),
                     "--shard-index",
-                    str(shard_index),
-                    "--batch-size",
-                    "40",
+                    str(shard["shard_index"]),
                 ]
             )
             == 0
@@ -575,6 +574,7 @@ def test_local_torch_keras_and_onnx_model_families_run_full_benchmark(monkeypatc
         types.SimpleNamespace(
             Tensor=FakeTensor,
             cuda=types.SimpleNamespace(is_available=lambda: False),
+            inference_mode=lambda: _torch.FakeInferenceMode(),
         ),
     )
     torch_model = TrackingModel(
