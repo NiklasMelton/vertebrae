@@ -27,6 +27,11 @@ those diagnostics with practical dataset handling, named target and hierarchy
 views, caching, memory-aware subsampling, stability analysis, artifact-backed
 execution, custom embedding metrics, and report generation.
 
+SciPy sparse matrices and sparse arrays are normalized to CSR and remain sparse
+through classification, multi-label, regression, and stability scoring, and when
+passed into Separatix. Multi-label targets may also be supplied as sparse binary
+indicator matrices.
+
 ## Installation
 
 ```bash
@@ -703,7 +708,8 @@ alongside the runnable
 
 - precomputed dense or sparse embeddings,
 - NumPy arrays and pandas DataFrames,
-- single-label classification, multi-label classification, and explicit regression targets,
+- single-label classification, multi-label classification (including sparse binary
+  indicators), and explicit regression targets,
 - hierarchy label views and named target views for scoring the same embeddings against
   different targets,
 - graph-node, graph-edge, entity, pair, triplet-derived, and generic labeled-unit

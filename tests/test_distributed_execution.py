@@ -1382,3 +1382,90 @@ def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(
     assert (
         result["extractor_results"][0]["separatix"]["probe_summary"]["best_probe"] == "smooth_poly"
     )
+
+
+@pytest.mark.parametrize(
+    ("excluded", "expected_rows", "expected_columns", "expected_ran"),
+    [
+        (None, 8, 3, True),
+        (["round"], 7, 2, True),
+        (["red", "round", "sweet"], 0, 0, False),
+    ],
+)
+def test_distributed_multilabel_separatix_preserves_sparse_targets_and_exclusions(
+    tmp_path,
+    fake_overlapindex,
+    fake_separatix,
+    excluded,
+    expected_rows,
+    expected_columns,
+    expected_ran,
+):
+    dataset = BenchmarkDataset.from_embeddings(
+        np.arange(24).reshape(8, 3),
+        [
+            ("red", "round"),
+            ("red",),
+            ("round",),
+            ("sweet",),
+            ("red", "sweet"),
+            ("round", "sweet"),
+            ("red", "round"),
+            ("red", "sweet"),
+        ],
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = CallableExtractor(
+        "diagnose_multilabel_artifact",
+        lambda batch: np.asarray(batch),
+        streaming_safe=True,
+    )
+    store = LocalArtifactStore(str(tmp_path))
+    embedding_manifest = materialize_and_merge_embeddings(
+        dataset=dataset,
+        extractor=extractor,
+        store=store,
+        execution=LocalBackend(),
+        total_shards=2,
+        batch_size=2,
+    )
+    label_manifest = materialize_label_artifact(dataset, store)
+    score = score_embedding_artifact(
+        ScoringJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            output_key=_default_scoring_key(
+                embedding_manifest["output_key"],
+                label_manifest["output_key"],
+            ),
+            scoring_config=OverlapScoringConfig(
+                k=1,
+                min_samples_per_cluster=1,
+                exclude_classes=excluded,
+            ),
+        ),
+        store,
+    )
+
+    diagnostic = diagnose_embedding_artifact(
+        SeparatixJob(
+            embedding_key=embedding_manifest["output_key"],
+            labels_key=label_manifest["output_key"],
+            score_key=score["output_key"],
+            output_key=_default_separatix_key(
+                embedding_manifest["output_key"],
+                label_manifest["output_key"],
+                score["output_key"],
+            ),
+        ),
+        store,
+    )
+
+    assert diagnostic["diagnostic"]["ran"] is expected_ran
+    if expected_ran:
+        call = fake_separatix.ComplexityProfiler.calls[-1]
+        assert call["target_mode"] == "multilabel"
+        assert call["y_sparse"] is True
+        assert call["y_shape"] == [expected_rows, expected_columns]
+    else:
+        assert "all classes were excluded" in diagnostic["diagnostic"]["skipped_reason"]

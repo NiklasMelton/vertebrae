@@ -28,13 +28,18 @@ def test_separatix_config_validates_threshold_and_limits():
         SeparatixConfig(max_dense_bytes=0)
     with pytest.raises(ValueError, match="n_jobs"):
         SeparatixConfig(n_jobs=0)
+    with pytest.raises(ValueError, match="densify_policy"):
+        SeparatixConfig(densify_policy="sometimes")
 
 
 def test_separatix_scorer_preserves_sparse_input_and_records_normalization(fake_separatix):
     embeddings = sparse.csr_matrix(np.eye(6))
     labels = np.array(["a", "a", "a", "b", "b", "b"])
     scorer = SeparatixScorer(
-        config=SeparatixConfig(max_dense_bytes=1_048_576),
+        config=SeparatixConfig(
+            densify_policy="skip",
+            max_dense_bytes=1_048_576,
+        ),
         overlap_config=OverlapScoringConfig(normalize_embeddings=True),
     )
 
@@ -43,9 +48,13 @@ def test_separatix_scorer_preserves_sparse_input_and_records_normalization(fake_
     assert result.ran is True
     assert result.metadata["normalized_embeddings"] is True
     assert result.metadata["sparse_input"] is True
+    assert result.metadata["densify_policy"] == "skip"
     assert result.metadata["max_dense_mb"] == 1
+    assert result.preprocessing["is_sparse"] is True
+    assert result.densification_events == []
     assert fake_separatix.ComplexityProfiler.calls[0]["kind"] == "diagnose"
     assert fake_separatix.ComplexityProfiler.calls[0]["is_sparse"] is True
+    assert fake_separatix.ComplexityProfiler.calls[0]["densify_policy"] == "skip"
 
 
 def test_separatix_scorer_passes_multilabel_target_mode(fake_separatix):
@@ -68,6 +77,101 @@ def test_separatix_scorer_passes_multilabel_target_mode(fake_separatix):
     assert call["kind"] == "diagnose"
     assert call["target_mode"] == "multilabel"
     assert call["y_shape"] == [6, 3]
+    assert call["y_sparse"] is True
+
+
+def test_local_multilabel_separatix_exclusions_drop_unlabeled_rows(
+    fake_overlapindex,
+    fake_separatix,
+):
+    dataset = BenchmarkDataset.from_embeddings(
+        sparse.csr_array(np.arange(24).reshape(8, 3)),
+        [
+            ("red", "round"),
+            ("red",),
+            ("round",),
+            ("sweet",),
+            ("red", "sweet"),
+            ("round", "sweet"),
+            ("red", "round"),
+            ("red", "sweet"),
+        ],
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor("sparse_multilabel"),
+        scoring_config=OverlapScoringConfig(
+            k=1,
+            min_samples_per_cluster=1,
+            exclude_classes=["round"],
+        ),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(overlap_threshold=0.8),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+
+    call = fake_separatix.ComplexityProfiler.calls[-1]
+    assert call["target_mode"] == "multilabel"
+    assert call["shape"] == [7, 3]
+    assert call["y_shape"] == [7, 2]
+    assert call["y_sparse"] is True
+
+
+def test_local_multilabel_separatix_skips_when_all_labels_are_excluded(
+    fake_overlapindex,
+    fake_separatix,
+):
+    dataset = BenchmarkDataset.from_embeddings(
+        sparse.csr_array(np.arange(24).reshape(8, 3)),
+        [
+            ("red", "round"),
+            ("red",),
+            ("round",),
+            ("sweet",),
+            ("red", "sweet"),
+            ("round", "sweet"),
+            ("red", "round"),
+            ("red", "sweet"),
+        ],
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor("sparse_multilabel"),
+        scoring_config=OverlapScoringConfig(
+            k=1,
+            min_samples_per_cluster=1,
+            exclude_classes=["red", "round", "sweet"],
+        ),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(overlap_threshold=0.8),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+
+    diagnostic = result.extractor_results[0].separatix
+    assert diagnostic is not None
+    assert diagnostic.ran is False
+    assert "all classes were excluded" in (diagnostic.skipped_reason or "")
+
+
+def test_separatix_profiler_path_forwards_sparse_policy(fake_separatix):
+    embeddings = sparse.csc_array(np.eye(6))
+    labels = np.array(["a", "a", "a", "b", "b", "b"])
+
+    result = SeparatixScorer(
+        config=SeparatixConfig(n_jobs=2, densify_policy="fail"),
+    ).score(embeddings, labels)
+
+    init = fake_separatix.ComplexityProfiler.calls[0]
+    fit = fake_separatix.ComplexityProfiler.calls[1]
+    assert init["kind"] == "profiler_init"
+    assert init["densify_policy"] == "fail"
+    assert fit["kind"] == "profiler_fit"
+    assert fit["is_sparse"] is True
+    assert result.metadata["densify_policy"] == "fail"
 
 
 def test_separatix_scorer_passes_groups_without_serializing_ids(fake_separatix):
@@ -196,12 +300,16 @@ def test_reports_include_separatix_content(tmp_path, fake_overlapindex):
     assert extractor_payload["separatix"]["report"]["recommendation"] == (
         "smooth_nonlinear_recommended"
     )
+    assert extractor_payload["separatix"]["preprocessing"]["is_sparse"] is False
+    assert extractor_payload["separatix"]["densification_events"] == []
     assert extractor_payload["separatix"]["probe_summary"]["primary_metric"] == {
         "name": "balanced_accuracy",
         "value": 0.89,
     }
     assert "Separatix complexity diagnostic" in markdown
     assert "smooth_nonlinear_recommended" in markdown
+    assert "Sparse diagnostic input: False" in markdown
+    assert "Densification policy: warn_and_sample" in markdown
     assert "Probe signal is strong." in markdown
     assert "| 0.9100 |" in markdown
 

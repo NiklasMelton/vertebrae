@@ -262,6 +262,11 @@ per-extractor details show the full descriptive context. When Separatix MLP prob
 are enabled, their trigger, status, reason, and comparison payload remain separate
 from the ordinary baseline probe summary.
 
+Sparse diagnostic runs also expose preprocessing metadata, the effective
+densification policy, structured densification events, skipped diagnostics, and
+warnings. Markdown details render these fields compactly; JSON retains their complete
+structured payloads.
+
 `probe_summary` is required in the current result contract. Serialized
 artifacts created before this field was introduced are not backward compatible and
 are not reconstructed from the raw Separatix report. The raw report remains

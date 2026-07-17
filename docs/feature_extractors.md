@@ -144,9 +144,10 @@ extractor = HFMultimodalExtractor(
 
 Extractor recipes are serialized into result metadata and cache keys. Scoring consumes
 numeric embeddings and labels, not live model objects. Embeddings may be dense NumPy
-arrays or scipy sparse matrices. Sparse embeddings are stored as `.npz` artifacts and
-converted to dense arrays only at the MiniBatchKMeans-backed OverlapIndex scoring
-boundary, with `OverlapScoringConfig.max_dense_bytes` guarding memory use.
+arrays, scipy sparse matrices, or scipy sparse arrays. Sparse embeddings are
+normalized to CSR, stored as `.npz` artifacts, and remain sparse through
+MiniBatchKMeans-backed overlap scoring and when passed into Separatix. Separatix may
+perform bounded internal densification for diagnostics that inherently require it.
 
 Cache identity schema v2 hashes the complete typed extractor recipe. Callable and
 live-model extractors accept an explicit `cache_identity`. Without one, cache reuse is
@@ -288,8 +289,9 @@ shape mismatches instead of relying on NumPy broadcasting.
 
 When output shape is not known ahead of time, streaming-safe extractors are probed on a
 small first batch. The inferred embedding dimension and dtype are used with
-`MemoryConfig` to estimate whether the full embedding artifact and dense scoring input
-fit in memory before the full job runs.
+`MemoryConfig` to estimate whether the full embedding artifact and its actual dense or
+sparse scoring representation fit in memory before the full job runs. Result metadata
+also retains the hypothetical dense footprint for capacity planning.
 
 ## Resource profiling adapters
 

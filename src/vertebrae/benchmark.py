@@ -61,8 +61,8 @@ from vertebrae.utils.memory import (
     assert_within_memory,
     estimate_embedding_from_probe,
     estimate_matrix_resident_bytes,
-    estimate_metadata_dense_scoring_bytes,
     estimate_metadata_resident_bytes,
+    estimate_metadata_scoring_input_bytes,
     largest_fitting_subsample_rate,
     resolve_memory_budget,
 )
@@ -71,7 +71,11 @@ from vertebrae.utils.semantic_labels import (
     label_display,
     semantic_label_key,
 )
-from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
+from vertebrae.utils.validation import (
+    ensure_numeric_matrix,
+    is_sparse_matrix,
+    sparse_storage_format,
+)
 
 
 class Benchmark:
@@ -723,7 +727,7 @@ class Benchmark:
                 "output_sparse",
                 embedding_metadata.get("sparse"),
             )
-            self._admit_scoring_memory(scoring_metadata)
+            self._admit_scoring_memory(scoring_metadata, dataset)
             target_metadata = dict(dataset.metadata)
             target_metadata["target_type"] = dataset.metadata.get("target_type", "auto")
             groups = dataset.groups() if callable(getattr(dataset, "groups", None)) else None
@@ -882,8 +886,9 @@ class Benchmark:
             scoring_config=scoring_config,
             label_names=label_names,
         )
-        if len(diagnostic_labels) == 0 or (
-            target_type == MULTI_LABEL_TARGET and np.asarray(diagnostic_labels).shape[1] == 0
+        diagnostic_shape: Any = getattr(diagnostic_labels, "shape", ())
+        if int(diagnostic_shape[0]) == 0 or (
+            target_type == MULTI_LABEL_TARGET and int(diagnostic_shape[1]) == 0
         ):
             return scorer.skipped_result(
                 reason="Skipped Separatix because all classes were excluded from diagnostics.",
@@ -945,10 +950,12 @@ class Benchmark:
                 for index, name in enumerate(names)
                 if semantic_label_key(name) not in excluded_keys
             ]
+            selected_labels = label_array[:, keep]
+            active_rows = np.asarray(selected_labels.sum(axis=1)).reshape(-1) > 0
             return (
-                embeddings,
-                label_array[:, keep],
-                groups,
+                embeddings[active_rows],
+                selected_labels[active_rows],
+                None if groups is None else np.asarray(groups)[active_rows],
                 tuple(names[index] for index in keep),
             )
         if not excluded:
@@ -1320,9 +1327,10 @@ class Benchmark:
             estimates, aggregate = self._estimate_multi_output_memory(
                 first_outputs,
                 n_samples=len(dataset.y),
+                scoring_row_multiplier=self._scoring_row_multiplier(dataset),
             )
             required = max(
-                aggregate["dense_scoring_bytes"],
+                aggregate["scoring_input_bytes"],
                 aggregate["resident_bytes"],
             )
             try:
@@ -1355,8 +1363,9 @@ class Benchmark:
             n_samples=len(dataset.y),
             batch_size=self.embedding_config.batch_size,
             memory_config=self.memory_config,
+            scoring_row_multiplier=self._scoring_row_multiplier(dataset),
         )
-        required = estimate.dense_scoring_bytes
+        required = estimate.scoring_input_bytes
         if estimate.strategy == "in_memory":
             required = max(required, estimate.resident_bytes)
         try:
@@ -1571,7 +1580,7 @@ class Benchmark:
         resident_sizes = []
         for metadata in preflight.values():
             self._admit_cached_embedding_load(metadata)
-            self._admit_scoring_memory(metadata)
+            self._admit_scoring_memory(metadata, dataset)
             resident = estimate_metadata_resident_bytes(metadata)
             if resident is not None:
                 resident_sizes.append(resident)
@@ -1745,6 +1754,7 @@ class Benchmark:
                 n_samples=n_samples,
                 batch_size=self.embedding_config.batch_size,
                 memory_config=self.memory_config,
+                scoring_row_multiplier=self._scoring_row_multiplier(dataset),
             )
             self._admit_embedding_plan(memory_estimate)
         else:
@@ -1843,6 +1853,7 @@ class Benchmark:
             estimates, aggregate = self._estimate_multi_output_memory(
                 first_outputs,
                 n_samples=n_samples,
+                scoring_row_multiplier=self._scoring_row_multiplier(dataset),
             )
             self._admit_multi_embedding_plan(aggregate)
         else:
@@ -2101,7 +2112,7 @@ class Benchmark:
             "dtype": str(embeddings.dtype),
             "sparse": sparse_embeddings,
             "nnz": int(embeddings.nnz) if sparse_embeddings else None,
-            "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
+            "storage_format": (sparse_storage_format(embeddings) if sparse_embeddings else "dense"),
             "streamed": False,
             "memory_estimate": None,
             "recipe": recipe,
@@ -2128,9 +2139,9 @@ class Benchmark:
                 purpose="Resident embedding artifact",
             )
         assert_within_memory(
-            estimate.dense_scoring_bytes,
+            estimate.scoring_input_bytes,
             self.memory_config,
-            purpose="Dense scoring input",
+            purpose="Scoring input",
         )
 
     def _admit_resident_embedding(self, embeddings: Any) -> None:
@@ -2158,14 +2169,24 @@ class Benchmark:
                 purpose="Cached embedding artifact load",
             )
 
-    def _admit_scoring_memory(self, metadata: dict) -> None:
-        required = estimate_metadata_dense_scoring_bytes(metadata)
+    def _admit_scoring_memory(self, metadata: dict, dataset: Any) -> None:
+        required = estimate_metadata_scoring_input_bytes(
+            metadata,
+            scoring_row_multiplier=self._scoring_row_multiplier(dataset),
+        )
         if required is not None:
             assert_within_memory(
                 required,
                 self.memory_config,
-                purpose="Dense scoring input",
+                purpose="Scoring input",
             )
+
+    @staticmethod
+    def _scoring_row_multiplier(dataset: Any) -> float:
+        if dataset.metadata.get("target_type") != MULTI_LABEL_TARGET:
+            return 1.0
+        summary = dataset.summary()
+        return max(1.0, float(summary.get("mean_label_cardinality", 1.0)))
 
     def _resolved_scoring_config(
         self,
@@ -2310,6 +2331,7 @@ class Benchmark:
         self,
         outputs: List[EmbeddingOutput],
         n_samples: int,
+        scoring_row_multiplier: float = 1.0,
     ) -> Tuple[dict[str, EmbeddingMemoryEstimate], dict[str, Any]]:
         estimates = {
             output.name: estimate_embedding_from_probe(
@@ -2317,6 +2339,7 @@ class Benchmark:
                 n_samples=n_samples,
                 batch_size=self.embedding_config.batch_size,
                 memory_config=self.memory_config,
+                scoring_row_multiplier=scoring_row_multiplier,
             )
             for output in outputs
         }
@@ -2328,6 +2351,9 @@ class Benchmark:
             "resident_bytes": resident_bytes,
             "dense_scoring_bytes": max(
                 estimate.dense_scoring_bytes for estimate in estimates.values()
+            ),
+            "scoring_input_bytes": max(
+                estimate.scoring_input_bytes for estimate in estimates.values()
             ),
             "batch_embedding_bytes": sum(
                 estimate.batch_embedding_bytes for estimate in estimates.values()
@@ -2359,9 +2385,9 @@ class Benchmark:
                 purpose="Resident embedding artifacts",
             )
         assert_within_memory(
-            int(aggregate["dense_scoring_bytes"]),
+            int(aggregate["scoring_input_bytes"]),
             self.memory_config,
-            purpose="Dense scoring input",
+            purpose="Scoring input",
         )
 
     def _cache_embeddings_enabled(self, extractor: Any) -> bool:
@@ -2569,7 +2595,7 @@ def _embedding_batch_contract(batch: Any) -> dict[str, Any]:
         "embedding_dim": int(shape[1]),
         "dtype": str(batch.dtype),
         "sparse": sparse,
-        "storage_format": batch.getformat() if sparse else "dense",
+        "storage_format": sparse_storage_format(batch) if sparse else "dense",
     }
 
 

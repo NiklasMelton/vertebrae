@@ -13,7 +13,8 @@ from vertebrae.utils.labels import (
     REGRESSION_TARGET,
     class_counts,
     display_label,
-    metric_labels,
+    multilabel_indicator,
+    normalize_targets,
     target_summary,
 )
 from vertebrae.utils.semantic_labels import (
@@ -26,7 +27,6 @@ from vertebrae.utils.validation import (
     ensure_numeric_matrix,
     is_sparse_matrix,
     l2_normalize_rows,
-    sparse_to_dense,
 )
 
 
@@ -156,48 +156,55 @@ class OverlapIndexScorer:
         """Score dense or sparse embeddings with OverlapIndex-family backends."""
 
         embeddings = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
-        labels, label_metadata = metric_labels(
+        normalized_labels, label_metadata = normalize_targets(
             y,
             label_names=label_names,
             target_type=target_type,
             target_names=target_names,
         )
+        if label_metadata["target_type"] == MULTI_LABEL_TARGET:
+            labels = multilabel_indicator(
+                normalized_labels,
+                label_metadata["label_names"],
+                sparse_output=True,
+            )
+        elif label_metadata["target_type"] == REGRESSION_TARGET:
+            labels = np.asarray(normalized_labels, dtype=float)
+        else:
+            labels = normalized_labels
         if label_metadata["target_type"] != REGRESSION_TARGET:
             label_metadata["label_catalog"] = list(
                 label_catalog or label_metadata.get("label_catalog") or []
             )
-        if embeddings.shape[0] != len(labels):
+        label_rows = int(labels.shape[0])
+        if embeddings.shape[0] != label_rows:
             raise ValueError(
                 "embeddings and labels must have the same length; "
-                f"got {embeddings.shape[0]} and {len(labels)}."
+                f"got {embeddings.shape[0]} and {label_rows}."
             )
         if label_metadata["target_type"] == REGRESSION_TARGET:
             return self._score_regression(embeddings, labels, label_metadata, seed=seed)
-        return self._score_classification(embeddings, labels, label_metadata, seed=seed)
+        return self._score_classification(
+            embeddings,
+            labels,
+            normalized_labels,
+            label_metadata,
+            seed=seed,
+        )
 
     def _score_classification(
         self,
         embeddings: Any,
-        labels: np.ndarray,
+        labels: Any,
+        original_labels: np.ndarray,
         label_metadata: Dict[str, Any],
         seed: Optional[int],
     ) -> OverlapScoreResult:
         config = _coerce_classification_config(self.config)
         warnings: List[str] = []
-        original_labels = labels
         if label_metadata["target_type"] != MULTI_LABEL_TARGET:
             labels = np.asarray(semantic_label_keys(labels.tolist()), dtype=object)
         sparse_input = is_sparse_matrix(embeddings)
-        if sparse_input:
-            embeddings = sparse_to_dense(
-                embeddings,
-                "embeddings",
-                max_dense_bytes=config.max_dense_bytes,
-            )
-            warnings.append(
-                "Sparse embeddings were densified for MiniBatchKMeans-backed "
-                "OverlapIndex scoring."
-            )
         if config.normalize_embeddings:
             embeddings = l2_normalize_rows(embeddings)
 
@@ -285,7 +292,7 @@ class OverlapIndexScorer:
             "seed": seed,
             "kmeans_kwargs": kmeans_kwargs,
             "sparse_input": sparse_input,
-            "scoring_input_format": "dense",
+            "scoring_input_format": "csr" if sparse_input else "dense",
             "target_type": label_metadata["target_type"],
             "label_names": label_metadata.get("label_names"),
             "label_catalog": catalog,
@@ -321,16 +328,6 @@ class OverlapIndexScorer:
         config = _coerce_continuous_config(self.config)
         warnings: List[str] = []
         sparse_input = is_sparse_matrix(embeddings)
-        if sparse_input:
-            embeddings = sparse_to_dense(
-                embeddings,
-                "embeddings",
-                max_dense_bytes=config.max_dense_bytes,
-            )
-            warnings.append(
-                "Sparse embeddings were densified for MiniBatchKMeans-backed "
-                "ContinuousOverlapIndex scoring."
-            )
         if config.normalize_embeddings:
             embeddings = l2_normalize_rows(embeddings)
         if (
@@ -385,7 +382,7 @@ class OverlapIndexScorer:
             "seed": seed,
             "kmeans_kwargs": kmeans_kwargs,
             "sparse_input": sparse_input,
-            "scoring_input_format": "dense",
+            "scoring_input_format": "csr" if sparse_input else "dense",
             "target_type": label_metadata["target_type"],
             "target_names": label_metadata.get("target_names"),
             "target_summary": summary,
@@ -472,7 +469,7 @@ def _load_overlap_index() -> Any:
         from overlapindex import OverlapIndex
     except ImportError as exc:
         raise ImportError(
-            "overlapindex>=0.1.3a3 is required for scoring. Install dependencies with "
+            "overlapindex>=0.1.3a4 is required for scoring. Install dependencies with "
             "Poetry or install overlapindex directly."
         ) from exc
     return OverlapIndex
@@ -483,7 +480,7 @@ def _load_continuous_overlap_index() -> Any:
         from overlapindex import ContinuousOverlapIndex
     except ImportError as exc:
         raise ImportError(
-            "overlapindex>=0.1.3a3 is required for regression scoring. Install "
+            "overlapindex>=0.1.3a4 is required for regression scoring. Install "
             "dependencies with Poetry or install overlapindex directly."
         ) from exc
     return ContinuousOverlapIndex

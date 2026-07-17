@@ -3,6 +3,7 @@ import types
 
 import numpy as np
 import pytest
+from scipy import sparse
 
 
 class FakeOverlapIndex:
@@ -14,7 +15,10 @@ class FakeOverlapIndex:
 
     def fit_offline(self, Z, y, reset_state=True):
         assert reset_state is True
-        y_arr = np.asarray(y)
+        y_arr = y.toarray() if sparse.issparse(y) else np.asarray(y)
+        self.__class__.calls[-1]["fit_X_sparse"] = sparse.issparse(Z)
+        self.__class__.calls[-1]["fit_X_format"] = Z.format if sparse.issparse(Z) else "dense"
+        self.__class__.calls[-1]["fit_y_sparse"] = sparse.issparse(y)
         self.__class__.calls[-1]["fit_y_shape"] = list(y_arr.shape)
         self.__class__.calls[-1]["fit_y"] = y_arr.copy()
         seed = (self.kwargs.get("kmeans_kwargs") or {}).get("random_state")
@@ -43,7 +47,9 @@ class FakeContinuousOverlapIndex:
         y_arr = np.asarray(y, dtype=float)
         self.__class__.calls[-1]["fit_y_shape"] = list(y_arr.shape)
         self.__class__.calls[-1]["fit_y"] = y_arr.copy()
-        self.__class__.calls[-1]["fit_X_shape"] = list(np.asarray(Z).shape)
+        self.__class__.calls[-1]["fit_X_shape"] = list(Z.shape)
+        self.__class__.calls[-1]["fit_X_sparse"] = sparse.issparse(Z)
+        self.__class__.calls[-1]["fit_X_format"] = Z.format if sparse.issparse(Z) else "dense"
         seed = self.kwargs.get("random_state")
         jitter = 0.0 if seed is None else (int(seed) % 13) / 1_000.0
         self.index = 0.62 + jitter
@@ -92,8 +98,9 @@ class FakeComplexityProfiler:
                 "kind": "profiler_fit",
                 "shape": list(X.shape),
                 "is_sparse": hasattr(X, "tocsr"),
-                "n_labels": len(y),
-                "y_shape": list(np.asarray(y).shape),
+                "n_labels": int(y.shape[0]),
+                "y_shape": list(y.shape),
+                "y_sparse": sparse.issparse(y),
                 **kwargs,
             }
         )
@@ -272,7 +279,7 @@ def _build_fake_separatix_payload(X, y, kwargs):
 
 
 def _fake_class_summary(y):
-    y_arr = np.asarray(y)
+    y_arr = y.toarray() if sparse.issparse(y) else np.asarray(y)
     if y_arr.ndim == 2:
         counts = np.asarray(y_arr.sum(axis=0), dtype=int)
         labels = [f"label_{index}" for index in range(y_arr.shape[1])]
@@ -322,8 +329,9 @@ def fake_separatix(monkeypatch):
                 "kind": "diagnose",
                 "shape": list(X.shape),
                 "is_sparse": hasattr(X, "tocsr"),
-                "n_labels": len(y),
-                "y_shape": list(np.asarray(y).shape),
+                "n_labels": int(y.shape[0]),
+                "y_shape": list(y.shape),
+                "y_sparse": sparse.issparse(y),
                 **kwargs,
             }
         )

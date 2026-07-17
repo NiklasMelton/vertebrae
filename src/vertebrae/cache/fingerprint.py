@@ -123,7 +123,7 @@ def _exact_fingerprintable(value: Any) -> Any:
         matrix = value
         result = {
             "type": "sparse_matrix",
-            "format": matrix.getformat(),
+            "format": str(matrix.format),
             "shape": list(matrix.shape),
             "dtype": str(matrix.dtype),
         }
@@ -131,9 +131,9 @@ def _exact_fingerprintable(value: Any) -> Any:
             component = getattr(matrix, name, None)
             if component is not None:
                 result[f"{name}_sha256"] = _hash_array_bytes(np.asarray(component))
-        if matrix.getformat() == "dok":
+        if matrix.format == "dok":
             result["values"] = _exact_fingerprintable(dict(matrix.items()))
-        elif matrix.getformat() == "lil":
+        elif matrix.format == "lil":
             result["rows"] = _exact_fingerprintable(matrix.rows)
             result["values"] = _exact_fingerprintable(matrix.data)
         return result
