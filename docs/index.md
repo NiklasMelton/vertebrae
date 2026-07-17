@@ -7,7 +7,7 @@ from the repository README, existing Markdown guides, and generated API referenc
 :maxdepth: 2
 :caption: Guides
 
-overview
+Project Overview <overview>
 datasets
 segmentation
 feature_extractors
@@ -18,5 +18,5 @@ zero_shot
 results_and_reports
 examples
 distributed_readiness
-api/vertebrae/index
+API Reference <api/vertebrae/index>
 ```
