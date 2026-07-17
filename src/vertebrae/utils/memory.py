@@ -44,7 +44,8 @@ class EmbeddingMemoryEstimate:
         embedding_dim: Number of embedding columns.
         dtype: Embedding dtype string.
         resident_bytes: Estimated bytes to hold the embedding artifact in memory.
-        dense_scoring_bytes: Estimated dense bytes required by scoring.
+        scoring_input_bytes: Estimated bytes for the representation consumed by scoring.
+        dense_scoring_bytes: Hypothetical dense footprint of the scoring matrix.
         batch_embedding_bytes: Estimated bytes for one embedding batch.
         strategy: Planned strategy: `"in_memory"` or `"stream_to_disk"`.
     """
@@ -53,6 +54,7 @@ class EmbeddingMemoryEstimate:
     embedding_dim: int
     dtype: str
     resident_bytes: int
+    scoring_input_bytes: int
     dense_scoring_bytes: int
     batch_embedding_bytes: int
     strategy: str
@@ -69,6 +71,7 @@ class EmbeddingMemoryEstimate:
             "embedding_dim": self.embedding_dim,
             "dtype": self.dtype,
             "resident_bytes": self.resident_bytes,
+            "scoring_input_bytes": self.scoring_input_bytes,
             "dense_scoring_bytes": self.dense_scoring_bytes,
             "batch_embedding_bytes": self.batch_embedding_bytes,
             "strategy": self.strategy,
@@ -1327,6 +1330,7 @@ def estimate_embedding_from_probe(
     n_samples: int,
     batch_size: int,
     memory_config: MemoryConfig,
+    scoring_row_multiplier: float = 1.0,
 ) -> EmbeddingMemoryEstimate:
     """Estimate full embedding memory from a probe batch.
 
@@ -1335,11 +1339,14 @@ def estimate_embedding_from_probe(
         n_samples: Full dataset sample count.
         batch_size: Planned embedding batch size.
         memory_config: Memory configuration.
+        scoring_row_multiplier: Expected row expansion performed by the scorer.
 
     Returns:
         Estimated embedding footprint and strategy.
     """
 
+    if not np.isfinite(scoring_row_multiplier) or scoring_row_multiplier < 1.0:
+        raise ValueError("scoring_row_multiplier must be finite and >= 1.")
     if is_sparse_matrix(probe_embeddings):
         dim = int(probe_embeddings.shape[1])
         dtype = str(probe_embeddings.dtype)
@@ -1350,7 +1357,15 @@ def estimate_embedding_from_probe(
             dtype=np.dtype(probe_embeddings.dtype),
             density=density,
         )
-        dense_scoring = n_samples * dim * np.dtype(probe_embeddings.dtype).itemsize
+        dense_scoring = int(
+            np.ceil(
+                n_samples
+                * dim
+                * np.dtype(probe_embeddings.dtype).itemsize
+                * scoring_row_multiplier
+            )
+        )
+        scoring_input = int(np.ceil(resident * scoring_row_multiplier))
         batch_bytes = estimate_sparse_bytes(
             n_samples=batch_size,
             n_features=dim,
@@ -1362,7 +1377,8 @@ def estimate_embedding_from_probe(
         dim = int(arr.shape[1])
         dtype = str(arr.dtype)
         resident = n_samples * dim * np.dtype(arr.dtype).itemsize
-        dense_scoring = resident
+        dense_scoring = int(np.ceil(resident * scoring_row_multiplier))
+        scoring_input = int(np.ceil(resident * scoring_row_multiplier))
         batch_bytes = batch_size * dim * np.dtype(arr.dtype).itemsize
     budget = resolve_memory_budget(memory_config)
     strategy = (
@@ -1375,6 +1391,7 @@ def estimate_embedding_from_probe(
         embedding_dim=dim,
         dtype=dtype,
         resident_bytes=int(resident),
+        scoring_input_bytes=scoring_input,
         dense_scoring_bytes=int(dense_scoring),
         batch_embedding_bytes=int(batch_bytes),
         strategy=strategy,
@@ -1517,13 +1534,13 @@ def estimate_metadata_resident_bytes(metadata: dict[str, Any]) -> Optional[int]:
 
 
 def estimate_metadata_dense_scoring_bytes(metadata: dict[str, Any]) -> Optional[int]:
-    """Estimate dense bytes needed for scoring from embedding metadata.
+    """Estimate the hypothetical dense footprint from embedding metadata.
 
     Args:
         metadata: Embedding metadata dictionary.
 
     Returns:
-        Estimated dense scoring bytes, or `None` if metadata is incomplete.
+        Estimated dense footprint, or `None` if metadata is incomplete.
     """
 
     shape = metadata.get("shape")
@@ -1531,6 +1548,21 @@ def estimate_metadata_dense_scoring_bytes(metadata: dict[str, Any]) -> Optional[
     if not shape or len(shape) != 2 or dtype is None:
         return None
     return int(shape[0]) * int(shape[1]) * np.dtype(dtype).itemsize
+
+
+def estimate_metadata_scoring_input_bytes(
+    metadata: dict[str, Any],
+    *,
+    scoring_row_multiplier: float = 1.0,
+) -> Optional[int]:
+    """Estimate the actual dense or sparse representation consumed by scoring."""
+
+    if not np.isfinite(scoring_row_multiplier) or scoring_row_multiplier < 1.0:
+        raise ValueError("scoring_row_multiplier must be finite and >= 1.")
+    resident = estimate_metadata_resident_bytes(metadata)
+    if resident is None:
+        return None
+    return int(np.ceil(resident * scoring_row_multiplier))
 
 
 def assert_within_memory(

@@ -61,10 +61,12 @@ from vertebrae.profiling import (
 from vertebrae.scoring.separatix import SeparatixResult, SeparatixScorer
 from vertebrae.utils.embedding_batches import encode_endpoint_batches, take_endpoint_rows
 from vertebrae.utils.labels import (
+    MULTI_LABEL_TARGET,
     REGRESSION_TARGET,
     canonical_metric_targets,
     label_view_suffix,
     labels_to_jsonable,
+    metric_labels,
     target_summary,
     target_view_suffix,
 )
@@ -79,7 +81,11 @@ from vertebrae.utils.semantic_labels import (
     semantic_label_key,
 )
 from vertebrae.utils.serialization import make_json_safe
-from vertebrae.utils.validation import ensure_numeric_matrix, is_sparse_matrix
+from vertebrae.utils.validation import (
+    ensure_numeric_matrix,
+    is_sparse_matrix,
+    sparse_storage_format,
+)
 
 
 def embedding_artifact_key(dataset: Any, extractor: Any) -> str:
@@ -731,7 +737,9 @@ def materialize_structured_artifacts(
             "dtype": str(embeddings.dtype),
             "sparse": sparse_embeddings,
             "nnz": int(embeddings.nnz) if sparse_embeddings else None,
-            "storage_format": embeddings.getformat() if sparse_embeddings else "dense",
+            "storage_format": (
+                sparse_storage_format(embeddings) if sparse_embeddings else "dense"
+            ),
             "modality": materialization.dataset.modality,
             "structured": materialization.metadata,
             "unit_type": materialization.metadata.get("unit_type"),
@@ -1483,30 +1491,61 @@ def diagnose_embedding_artifact(
                 else semantic_label_key(item.item() if hasattr(item, "item") else item)
                 for item in excluded
             }
-            mask = np.asarray(
-                [semantic_label_key(label) not in excluded_keys for label in labels],
-                dtype=bool,
-            )
-            embeddings = embeddings[mask]
-            labels = np.asarray(labels)[mask]
-            groups = None if groups is None else np.asarray(groups)[mask]
-        try:
-            diagnostic = scorer.score(
-                embeddings,
-                labels,
-                label_names=label_metadata.get("label_names"),
-                target_type=target_type,
-                target_names=label_metadata.get("target_names"),
-                groups=groups,
-            )
-        except ValueError as exc:
-            if groups is None:
-                raise
+            if target_type == MULTI_LABEL_TARGET:
+                labels, target_metadata = metric_labels(
+                    labels,
+                    label_names=label_metadata.get("label_names"),
+                    target_type=MULTI_LABEL_TARGET,
+                )
+                names = tuple(target_metadata.get("label_names") or ())
+                keep = [
+                    index
+                    for index, name in enumerate(names)
+                    if semantic_label_key(name) not in excluded_keys
+                ]
+                labels = labels[:, keep]
+                active_rows = np.asarray(labels.sum(axis=1)).reshape(-1) > 0
+                embeddings = embeddings[active_rows]
+                labels = labels[active_rows]
+                groups = None if groups is None else np.asarray(groups)[active_rows]
+                label_metadata = dict(label_metadata)
+                label_metadata["label_names"] = [names[index] for index in keep]
+            else:
+                mask = np.asarray(
+                    [semantic_label_key(label) not in excluded_keys for label in labels],
+                    dtype=bool,
+                )
+                embeddings = embeddings[mask]
+                labels = np.asarray(labels)[mask]
+                groups = None if groups is None else np.asarray(groups)[mask]
+        if (
+            target_type == MULTI_LABEL_TARGET
+            and int(getattr(labels, "ndim", 1)) == 2
+            and int(labels.shape[1]) == 0
+        ):
             diagnostic = scorer.skipped_result(
-                reason=f"Skipped grouped Separatix diagnostic: {exc}",
+                reason="Skipped Separatix because all classes were excluded from diagnostics.",
                 overlap_score=overlap_score,
                 threshold=threshold,
             )
+        else:
+            try:
+                diagnostic = scorer.score(
+                    embeddings,
+                    labels,
+                    label_names=label_metadata.get("label_names"),
+                    target_type=target_type,
+                    target_names=label_metadata.get("target_names"),
+                    groups=groups,
+                )
+            except ValueError as exc:
+                if groups is None:
+                    raise
+                diagnostic = scorer.skipped_result(
+                    reason=f"Skipped grouped Separatix diagnostic: {exc}",
+                    overlap_score=overlap_score,
+                    threshold=threshold,
+                )
 
     cache_eligible, cache_status = derived_cache_reuse_decision(
         embedding_metadata,
@@ -1555,7 +1594,9 @@ def compress_embedding_artifact(
             "dtype": str(compressed_embeddings.dtype),
             "sparse": sparse_output,
             "nnz": int(compressed_embeddings.nnz) if sparse_output else None,
-            "storage_format": (compressed_embeddings.getformat() if sparse_output else "dense"),
+            "storage_format": (
+                sparse_storage_format(compressed_embeddings) if sparse_output else "dense"
+            ),
             "compression": compression_result.metadata,
             "cache_eligible": cache_eligible,
             "cache_status": cache_status,
@@ -2606,7 +2647,7 @@ def materialize_retrieval_embedding_shard(
         "dtype": str(embeddings.dtype),
         "sparse": sparse,
         "nnz": int(embeddings.nnz) if sparse else None,
-        "storage_format": embeddings.getformat() if sparse else "dense",
+        "storage_format": sparse_storage_format(embeddings) if sparse else "dense",
         "cache_eligible": job.cache_eligible,
         "cache_status": job.cache_status,
         "batch_size": job.batch_size,
@@ -2677,7 +2718,9 @@ def compress_retrieval_embedding_artifacts(
                 "dtype": str(values.dtype),
                 "sparse": is_sparse_matrix(values),
                 "nnz": int(values.nnz) if is_sparse_matrix(values) else None,
-                "storage_format": values.getformat() if is_sparse_matrix(values) else "dense",
+                "storage_format": (
+                    sparse_storage_format(values) if is_sparse_matrix(values) else "dense"
+                ),
                 "compression": metadata,
                 "cache_eligible": cache_eligible,
                 "cache_status": cache_status,
@@ -3044,7 +3087,9 @@ def _materialize_multi_output_embedding_shard(
                 "dtype": str(embeddings.dtype),
                 "sparse": sparse_embeddings,
                 "nnz": int(embeddings.nnz) if sparse_embeddings else None,
-                "storage_format": (embeddings.getformat() if sparse_embeddings else "dense"),
+                "storage_format": (
+                    sparse_storage_format(embeddings) if sparse_embeddings else "dense"
+                ),
                 "cache_eligible": job.cache_eligible,
                 "cache_status": job.cache_status,
                 "memory_staging": {

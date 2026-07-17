@@ -407,6 +407,14 @@ def render_markdown_report(result: Any) -> str:
             lines.append(
                 f"- Summary: {_markdown_text((item.separatix.recommendation_text or '').strip())}"
             )
+            lines.append(
+                "- Sparse diagnostic input: "
+                f"{bool(item.separatix.preprocessing.get('is_sparse', False))}"
+            )
+            lines.append(
+                "- Densification policy: "
+                f"{_markdown_text(item.separatix.metadata.get('densify_policy', ''))}"
+            )
             lines.append(f"- Probe status: {_markdown_text(probe.get('status', ''))}")
             lines.append(f"- Best probe: {_markdown_text(probe.get('best_probe') or '')}")
             if primary_probe_metric:
@@ -489,6 +497,16 @@ def render_markdown_report(result: Any) -> str:
                     lines.append(
                         f"  - {_markdown_text(entry.get('name', ''))}: "
                         f"{_markdown_text(entry.get('reason', ''))}"
+                    )
+            if item.separatix.densification_events:
+                lines.append("")
+                lines.append("- Densification events:")
+                for entry in item.separatix.densification_events:
+                    name = entry.get("diagnostic") or entry.get("name") or entry.get("operation")
+                    action = entry.get("action") or entry.get("reason") or entry.get("status")
+                    lines.append(
+                        f"  - {_markdown_text(name or '')}: "
+                        f"{_markdown_text(action or '')}"
                     )
             if item.separatix.warnings:
                 lines.append("")

@@ -62,7 +62,7 @@ def ensure_numeric_matrix(value: Any, name: str, allow_sparse: bool = True) -> A
         allow_sparse: Whether sparse matrices are accepted.
 
     Returns:
-        A NumPy array for dense input, or the original sparse matrix for sparse input.
+        A NumPy array for dense input, or a CSR matrix for sparse input.
 
     Raises:
         ValueError: If the matrix is not 2D, numeric, finite, or sparse is disallowed.
@@ -83,7 +83,7 @@ def ensure_sparse_numeric_2d(value: Any, name: str) -> Any:
         name: Human-readable name used in error messages.
 
     Returns:
-        The original sparse matrix.
+        A CSR matrix that preserves the input dtype.
 
     Raises:
         ValueError: If the sparse matrix is non-2D, non-numeric, or non-finite.
@@ -99,7 +99,9 @@ def ensure_sparse_numeric_2d(value: Any, name: str) -> Any:
         raise ValueError(f"{name} must contain numeric values.")
     if not _all_finite(value.data):
         raise ValueError(f"{name} must contain only finite numeric values.")
-    return value
+    from scipy import sparse
+
+    return sparse.csr_matrix(value, copy=False)
 
 
 def sparse_to_dense(value: Any, name: str, max_dense_bytes: int) -> np.ndarray:
@@ -145,6 +147,17 @@ def is_sparse_matrix(value: Any) -> bool:
     return bool(sparse.issparse(value))
 
 
+def sparse_storage_format(value: Any) -> str:
+    """Return a scipy sparse matrix/array format without deprecated APIs."""
+
+    if not is_sparse_matrix(value):
+        raise ValueError("value must be a scipy sparse matrix or sparse array.")
+    format_name = getattr(value, "format", None)
+    if not isinstance(format_name, str) or not format_name:
+        raise ValueError("Sparse value does not declare a storage format.")
+    return format_name
+
+
 def _all_finite(values: Any, chunk_size: int = 65_536) -> bool:
     """Check finite values without allocating a full-size boolean matrix."""
 
@@ -180,9 +193,18 @@ def validate_row_indices(value: Any, size: int, name: str = "indices") -> np.nda
     return indices
 
 
-def l2_normalize_rows(value: np.ndarray) -> np.ndarray:
-    """L2-normalize rows of a dense numeric array."""
+def l2_normalize_rows(value: Any) -> Any:
+    """L2-normalize dense or sparse rows without densifying sparse input."""
 
-    norms = np.linalg.norm(value, axis=1, keepdims=True)
+    if is_sparse_matrix(value):
+        from scipy import sparse
+
+        matrix = sparse.csr_matrix(value, dtype=float, copy=False)
+        squared = matrix.multiply(matrix)
+        norms = np.sqrt(np.asarray(squared.sum(axis=1)).reshape(-1))
+        norms[norms == 0.0] = 1.0
+        return sparse.csr_matrix(matrix.multiply(1.0 / norms[:, None]), copy=False)
+    array = ensure_2d_numeric_array(value, "value")
+    norms = np.linalg.norm(array, axis=1, keepdims=True)
     norms[norms == 0.0] = 1.0
-    return value / norms
+    return array / norms

@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from scipy import sparse
 
 from vertebrae import BenchmarkDataset, DatasetIdentity, EmbeddingConfig, Evaluator, MemoryConfig
 from vertebrae.config import (
@@ -80,7 +81,7 @@ def test_streaming_embedding_fails_after_probe_when_auto_subsampling_disabled(
     )
     extractor = CallableExtractor("large_embeddings", embed, streaming_safe=True)
 
-    with pytest.raises(ValueError, match="Dense scoring input"):
+    with pytest.raises(ValueError, match="Scoring input"):
         Evaluator(
             dataset=dataset,
             extractor=extractor,
@@ -345,7 +346,68 @@ def test_streaming_embedding_records_memory_estimate(tmp_path, fake_overlapindex
     estimate = result.extractor_results[0].embedding_metadata["memory_estimate"]
     assert estimate["embedding_dim"] == 2
     assert estimate["resident_bytes"] == 64
+    assert estimate["scoring_input_bytes"] == 64
     assert estimate["strategy"] == "in_memory"
+
+
+def test_sparse_multilabel_memory_estimate_accounts_for_row_expansion(
+    tmp_path,
+    fake_overlapindex,
+):
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(8, 3),
+        [
+            ("a", "b"),
+            ("a",),
+            ("b",),
+            ("a", "c"),
+            ("b", "c"),
+            ("c",),
+            ("a", "b"),
+            ("a", "c"),
+        ],
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    def sparse_embedding(batch):
+        columns = np.asarray(batch)[:, 0].astype(int) % 64
+        return sparse.csr_array(
+            (
+                np.ones(len(columns), dtype=np.float32),
+                (np.arange(len(columns)), columns),
+            ),
+            shape=(len(columns), 64),
+        )
+
+    extractor = CallableExtractor(
+        "sparse_multilabel_embeddings",
+        sparse_embedding,
+        streaming_safe=True,
+    )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=extractor,
+        scoring_config=OverlapScoringConfig(k=1, min_samples_per_cluster=1),
+        stability_config=StabilityConfig(enabled=False),
+        separatix_config=SeparatixConfig(enabled=False),
+        cache_config=CacheConfig(cache_dir=str(tmp_path)),
+        embedding_config=EmbeddingConfig(batch_size=3),
+        memory_config=MemoryConfig(max_memory_bytes=10_000_000),
+    ).run()
+
+    estimate = result.extractor_results[0].embedding_metadata["memory_estimate"]
+    assert estimate["scoring_input_bytes"] == int(
+        np.ceil(estimate["resident_bytes"] * dataset.summary()["mean_label_cardinality"])
+    )
+    assert estimate["dense_scoring_bytes"] == int(
+        np.ceil(
+            8
+            * 64
+            * np.dtype(np.float32).itemsize
+            * dataset.summary()["mean_label_cardinality"]
+        )
+    )
 
 
 def test_disposable_streaming_probe_is_not_reused_by_live_extractor(

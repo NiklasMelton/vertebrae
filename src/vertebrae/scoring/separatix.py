@@ -30,6 +30,8 @@ class SeparatixResult:
     decision_path: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     skipped_diagnostics: List[Dict[str, Any]] = field(default_factory=list)
+    preprocessing: Dict[str, Any] = field(default_factory=dict)
+    densification_events: List[Dict[str, Any]] = field(default_factory=list)
     skipped_reason: Optional[str] = None
     report: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -71,12 +73,13 @@ class SeparatixScorer:
             target_type=target_type,
             target_names=target_names,
         )
-        if embeddings.shape[0] != len(labels):
+        label_rows = int(labels.shape[0])
+        if embeddings.shape[0] != label_rows:
             raise ValueError(
                 "embeddings and labels must have the same length; "
-                f"got {embeddings.shape[0]} and {len(labels)}."
+                f"got {embeddings.shape[0]} and {label_rows}."
             )
-        normalized_groups = _validate_groups(groups, len(labels))
+        normalized_groups = _validate_groups(groups, label_rows)
 
         sparse_input = is_sparse_matrix(embeddings)
         normalize_embeddings = self.overlap_config.normalize_embeddings
@@ -102,6 +105,8 @@ class SeparatixScorer:
             decision_path=report_dict.get("decision_path", []),
             warnings=report_dict.get("warnings", []),
             skipped_diagnostics=report_dict.get("skipped_diagnostics", []),
+            preprocessing=report_dict.get("preprocessing", {}),
+            densification_events=report_dict.get("densification_events", []),
             report=report_dict,
             probe_summary=summarize_probe_diagnostics(
                 report_dict,
@@ -114,6 +119,7 @@ class SeparatixScorer:
                 "sparse_input": sparse_input,
                 "budget": self.config.budget or "standard",
                 "max_samples": self.config.max_samples,
+                "densify_policy": self.config.densify_policy,
                 "max_dense_mb": self._max_dense_mb(),
                 "n_jobs": self.config.n_jobs,
                 "target_type": label_metadata["target_type"],
@@ -155,7 +161,7 @@ class SeparatixScorer:
     def _run_separatix(
         self,
         embeddings: Any,
-        labels: np.ndarray,
+        labels: Any,
         label_metadata: Dict[str, Any],
         groups: Optional[np.ndarray],
     ) -> Any:
@@ -164,6 +170,7 @@ class SeparatixScorer:
             "return_report": True,
             "random_state": self.config.random_state,
             "budget": self.config.budget or "standard",
+            "densify_policy": self.config.densify_policy,
             "max_dense_mb": self._max_dense_mb(),
             "max_samples": self.config.max_samples,
             "mlp_probes": self.config.mlp_probes,
@@ -186,6 +193,7 @@ class SeparatixScorer:
         profiler = separatix.ComplexityProfiler(
             target_mode=kwargs["target_mode"],
             budget=kwargs["budget"],
+            densify_policy=kwargs["densify_policy"],
             max_dense_mb=kwargs["max_dense_mb"],
             max_samples=kwargs["max_samples"],
             random_state=kwargs["random_state"],
@@ -378,18 +386,13 @@ def _load_separatix() -> Any:
         import separatix
     except ImportError as exc:
         raise ImportError(
-            "separatix>=0.1.0a3 is required for complexity diagnostics. Install dependencies with "
+            "separatix>=0.1.0a5 is required for complexity diagnostics. Install dependencies with "
             "Poetry or install separatix directly."
         ) from exc
     return separatix
 
 
 def _l2_normalize_for_separatix(value: Any) -> Any:
-    if is_sparse_matrix(value):
-        squared = value.multiply(value)
-        norms = np.sqrt(np.asarray(squared.sum(axis=1)).reshape(-1))
-        norms[norms == 0.0] = 1.0
-        return value.multiply(1.0 / norms[:, None])
     return l2_normalize_rows(value)
 
 

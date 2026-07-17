@@ -397,8 +397,9 @@ requires a complete embedding artifact before scoring.
 Memory admission is handled separately from scheduling. `MemoryConfig` uses `psutil`
 to derive an available-memory budget unless an explicit byte limit is supplied. For
 streaming-safe extractors, the benchmark probes a small first batch, estimates the
-final embedding artifact and dense scoring input, and reuses that probe as the first
-materialized batch when no subsampling is needed. If the full plan would exceed the
+final embedding artifact and its actual dense or sparse scoring representation, and
+reuses that probe as the first materialized batch when no subsampling is needed. If
+the full plan would exceed the
 budget, the local runner records a warning and switches to the largest fitting
 target-preserving subsample: class/label-aware for categorical targets and
 non-constant-target-aware for regression. Result metadata records the original and
@@ -406,6 +407,10 @@ final row counts plus separate manual, automatic, and cumulative subsample rates
 an automatic second stage never overwrites the earlier user-requested stage. This keeps
 single-GPU sequential embedding and CPU-distributed analysis workflows from
 overcommitting memory.
+
+For multi-label overlap scoring, the scoring estimate includes the expected sparse
+row expansion derived from mean label cardinality. Separatix separately enforces its
+configured dense-operation limit and densification policy.
 
 The metric backend remains fixed: all scoring goes through MiniBatchKMeans-backed
 `overlapindex.OverlapIndex` or `overlapindex.ContinuousOverlapIndex` via the

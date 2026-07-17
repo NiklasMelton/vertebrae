@@ -22,7 +22,7 @@ class OverlapScoringConfig:
         kmeans_kwargs: Extra keyword arguments passed to MiniBatchKMeans.
         offline_chunk_size: Chunk size forwarded to `OverlapIndex.fit_offline`.
         normalize_embeddings: Whether to L2-normalize embeddings before scoring.
-        max_dense_bytes: Maximum sparse-to-dense allocation allowed for scoring.
+        max_dense_bytes: Fallback dense-operation limit for downstream diagnostics.
         exclude_classes: Reporting-only classes omitted from global aggregation.
     """
 
@@ -290,6 +290,7 @@ class SeparatixConfig:
         random_state: Seed forwarded to Separatix.
         budget: Optional Separatix diagnostic budget.
         max_samples: Optional Separatix sample cap.
+        densify_policy: Behavior when a dense-only diagnostic receives sparse data.
         max_dense_bytes: Optional sparse densification memory limit in bytes.
         n_jobs: Optional parallelism hint forwarded to Separatix.
         mlp_probes: Whether conditional Separatix MLP probes should be enabled.
@@ -305,6 +306,7 @@ class SeparatixConfig:
     random_state: Optional[int] = 42
     budget: Optional[str] = None
     max_samples: Optional[int] = None
+    densify_policy: str = "warn_and_sample"
     max_dense_bytes: Optional[int] = None
     n_jobs: Optional[int] = None
     mlp_probes: bool = False
@@ -322,6 +324,8 @@ class SeparatixConfig:
         )
         _require_optional_int(self.random_state, "SeparatixConfig.random_state")
         _require_optional_int(self.max_samples, "SeparatixConfig.max_samples")
+        if not isinstance(self.densify_policy, str):
+            raise TypeError("SeparatixConfig.densify_policy must be a string.")
         _require_optional_int(self.max_dense_bytes, "SeparatixConfig.max_dense_bytes")
         _require_optional_int(self.n_jobs, "SeparatixConfig.n_jobs")
         _require_bool(self.mlp_probes, "SeparatixConfig.mlp_probes")
@@ -343,6 +347,12 @@ class SeparatixConfig:
             )
         if self.budget is not None and self.budget not in allowed_budgets:
             raise ValueError(f"SeparatixConfig.budget must be one of {sorted(allowed_budgets)}.")
+        allowed_densify_policies = {"fail", "skip", "warn_and_sample"}
+        if self.densify_policy not in allowed_densify_policies:
+            raise ValueError(
+                "SeparatixConfig.densify_policy must be one of "
+                f"{sorted(allowed_densify_policies)}."
+            )
         if self.max_samples is not None and self.max_samples < 1:
             raise ValueError("SeparatixConfig.max_samples must be >= 1 when provided.")
         if self.max_dense_bytes is not None and self.max_dense_bytes < 1:

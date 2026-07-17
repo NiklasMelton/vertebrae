@@ -37,7 +37,7 @@ from vertebrae.utils.semantic_labels import (
     validate_label_catalog,
 )
 from vertebrae.utils.serialization import json_dumps_strict
-from vertebrae.utils.validation import is_sparse_matrix
+from vertebrae.utils.validation import is_sparse_matrix, sparse_storage_format
 
 
 class LocalArtifactStore:
@@ -116,11 +116,12 @@ class LocalArtifactStore:
             if sparse_value:
                 from scipy import sparse
 
-                sparse.save_npz(prepared, arr)
-                shape = tuple(int(size) for size in arr.shape)
-                dtype = str(arr.dtype)
-                sparse_format = str(arr.getformat())
-                nnz = int(arr.nnz)
+                matrix = sparse.csr_matrix(arr, copy=False)
+                sparse.save_npz(prepared, matrix)
+                shape = tuple(int(size) for size in matrix.shape)
+                dtype = str(matrix.dtype)
+                sparse_format = "csr"
+                nnz = int(matrix.nnz)
             else:
                 array = np.asarray(arr)
                 with prepared.open("wb") as file:
@@ -1048,7 +1049,10 @@ class LocalArtifactStore:
             raise ValueError("Loaded array shape does not match its committed manifest.")
         if str(value.dtype) != manifest.dtype:
             raise ValueError("Loaded array dtype does not match its committed manifest.")
-        if manifest.storage_format == "npz" and value.getformat() != manifest.sparse_format:
+        if (
+            manifest.storage_format == "npz"
+            and sparse_storage_format(value) != manifest.sparse_format
+        ):
             raise ValueError("Loaded sparse format does not match its committed manifest.")
         if manifest.storage_format == "npz" and int(value.nnz) != manifest.nnz:
             raise ValueError("Loaded sparse nnz does not match its committed manifest.")
