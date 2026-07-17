@@ -1,0 +1,9 @@
+/* The source logo is intentionally tall. Keep it legible without letting it
+   consume the full Read the Docs navigation column. */
+.wy-side-nav-search > a img.logo,
+.wy-side-nav-search .wy-dropdown > a img.logo {
+  width: auto;
+  height: 11rem;
+  max-width: 100%;
+  margin: 0.5rem auto 0.75rem;
+}

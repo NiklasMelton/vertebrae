@@ -29,7 +29,9 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 suppress_warnings = ["autoapi.python_import_resolution", "ref.python"]
 
 html_theme = "sphinx_rtd_theme"
-html_static_path = []
+html_logo = "../img/vertebrae_logo.png"
+html_static_path = ["_static"]
+html_css_files = ["logo.css"]
 
 source_suffix = {
     ".md": "markdown",

@@ -1,17 +1,14 @@
 # Vertebrae
 
-<table>
-  <tr>
-    <td width="100" valign="top">
-      <a href="https://github.com/NiklasMelton/vertebrae">
-        <img
-          src="https://github.com/NiklasMelton/vertebrae/blob/develop/img/vertebrae_logo.png?raw=true"
-          alt="Vertebrae logo"
-          width="140"
-        />
-      </a>
-    </td>
-    <td valign="top">
+<p align="center">
+  <a href="https://github.com/NiklasMelton/vertebrae">
+    <img
+      src="https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/vertebrae_logo.png"
+      alt="Vertebrae logo"
+      height="300"
+    />
+  </a>
+</p>
 
 `vertebrae` is a Python package for evaluating feature extractors and
 transfer-learning backbones on labeled datasets. It supports dense and sparse
@@ -29,11 +26,6 @@ clears a configurable overlap-quality threshold. The full evaluation flow wraps
 those diagnostics with practical dataset handling, named target and hierarchy
 views, caching, memory-aware subsampling, stability analysis, artifact-backed
 execution, custom embedding metrics, and report generation.
-
-</tr>
-</table>
-
-
 
 ## Installation
 
