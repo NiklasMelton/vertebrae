@@ -737,9 +737,7 @@ def materialize_structured_artifacts(
             "dtype": str(embeddings.dtype),
             "sparse": sparse_embeddings,
             "nnz": int(embeddings.nnz) if sparse_embeddings else None,
-            "storage_format": (
-                sparse_storage_format(embeddings) if sparse_embeddings else "dense"
-            ),
+            "storage_format": (sparse_storage_format(embeddings) if sparse_embeddings else "dense"),
             "modality": materialization.dataset.modality,
             "structured": materialization.metadata,
             "unit_type": materialization.metadata.get("unit_type"),

@@ -80,9 +80,7 @@ def test_continuous_overlap_scorer_preserves_sparse_features(fake_overlapindex):
     embeddings = sparse.csc_array(np.eye(6))
     targets = np.linspace(0.0, 1.0, 6)
 
-    result = OverlapIndexScorer(
-        ContinuousOverlapScoringConfig(k=1, n_null_permutations=1)
-    ).score(
+    result = OverlapIndexScorer(ContinuousOverlapScoringConfig(k=1, n_null_permutations=1)).score(
         embeddings,
         targets,
         target_type="regression",
@@ -112,9 +110,7 @@ def test_sparse_multilabel_targets_are_validated_and_passed_as_csr(fake_overlapi
         identity=DatasetIdentity.ephemeral(),
     )
 
-    result = OverlapIndexScorer(
-        OverlapScoringConfig(k=1, min_samples_per_cluster=1)
-    ).score(
+    result = OverlapIndexScorer(OverlapScoringConfig(k=1, min_samples_per_cluster=1)).score(
         dataset.X,
         dataset.y,
         label_names=dataset.metadata["label_names"],

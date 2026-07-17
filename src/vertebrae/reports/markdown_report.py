@@ -505,8 +505,7 @@ def render_markdown_report(result: Any) -> str:
                     name = entry.get("diagnostic") or entry.get("name") or entry.get("operation")
                     action = entry.get("action") or entry.get("reason") or entry.get("status")
                     lines.append(
-                        f"  - {_markdown_text(name or '')}: "
-                        f"{_markdown_text(action or '')}"
+                        f"  - {_markdown_text(name or '')}: " f"{_markdown_text(action or '')}"
                     )
             if item.separatix.warnings:
                 lines.append("")

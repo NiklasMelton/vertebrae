@@ -1359,10 +1359,7 @@ def estimate_embedding_from_probe(
         )
         dense_scoring = int(
             np.ceil(
-                n_samples
-                * dim
-                * np.dtype(probe_embeddings.dtype).itemsize
-                * scoring_row_multiplier
+                n_samples * dim * np.dtype(probe_embeddings.dtype).itemsize * scoring_row_multiplier
             )
         )
         scoring_input = int(np.ceil(resident * scoring_row_multiplier))

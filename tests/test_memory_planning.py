@@ -369,6 +369,7 @@ def test_sparse_multilabel_memory_estimate_accounts_for_row_expansion(
         modality="tabular",
         identity=DatasetIdentity.ephemeral(),
     )
+
     def sparse_embedding(batch):
         columns = np.asarray(batch)[:, 0].astype(int) % 64
         return sparse.csr_array(
@@ -402,10 +403,7 @@ def test_sparse_multilabel_memory_estimate_accounts_for_row_expansion(
     )
     assert estimate["dense_scoring_bytes"] == int(
         np.ceil(
-            8
-            * 64
-            * np.dtype(np.float32).itemsize
-            * dataset.summary()["mean_label_cardinality"]
+            8 * 64 * np.dtype(np.float32).itemsize * dataset.summary()["mean_label_cardinality"]
         )
     )
 

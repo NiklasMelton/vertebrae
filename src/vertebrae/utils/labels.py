@@ -959,8 +959,7 @@ def _labels_from_sparse_indicator(
     indicator.eliminate_zeros()
     indicator.sort_indices()
     if indicator.data.size and (
-        not bool(np.all(np.isfinite(indicator.data)))
-        or not bool(np.all(indicator.data == 1))
+        not bool(np.all(np.isfinite(indicator.data))) or not bool(np.all(indicator.data == 1))
     ):
         raise ValueError("Indicator labels must contain only 0/1 or boolean values.")
     rows: List[Tuple[Any, ...]] = []
