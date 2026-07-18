@@ -10,6 +10,10 @@ Runnable examples live in `examples/`:
 - `sklearn_wine_pipeline.py`: compare real scaling/projection pipelines on the
   bundled UCI Wine dataset.
 - `multi_extractor_comparison.py`: compare multiple local extractors.
+- `representation_monitoring.py`: train a local Torch model, evaluate two named
+  representations after each epoch, persist summary JSONL plus caller-managed
+  training state, resume them together with `--resume`, and pivot overlap by epoch
+  and layer.
 - `cache_reuse.py`: demonstrate safe embedding cache reuse with an explicit callable
   `cache_identity`.
 - `zero_shot_callable.py`: compare a synthetic frozen image/text-aligned adapter with

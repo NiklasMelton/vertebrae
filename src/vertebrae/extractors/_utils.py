@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optio
 
 import numpy as np
 
+from vertebrae.extractors._outputs import validate_named_output_mapping
 from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.structured import StructuredEmbeddingOutput, StructuredOutputSpec
 from vertebrae.utils.serialization import make_json_safe
@@ -292,9 +293,16 @@ def coerce_image(
 def resolve_output_specs(
     outputs: Optional[Sequence[Dict[str, Any]]],
     default_name: str = "embeddings",
+    *,
+    implicit_flatten: bool = True,
 ) -> List[EmbeddingOutputSpec]:
     if outputs is None:
-        return [EmbeddingOutputSpec(default_name)]
+        return [
+            EmbeddingOutputSpec(
+                default_name,
+                metadata={"flatten": validate_bool(implicit_flatten, "implicit_flatten")},
+            )
+        ]
     if not outputs:
         raise ValueError("outputs must not be empty.")
     specs: List[EmbeddingOutputSpec] = []
@@ -337,18 +345,52 @@ def resolve_output_specs(
     return specs
 
 
+def validate_ordinary_output_projection(
+    value: Any,
+    specs: Sequence[EmbeddingOutputSpec],
+    owner: str,
+) -> Any:
+    """Validate how selector-free specs obtain values from a multi-output projection."""
+
+    if len(specs) <= 1:
+        return value
+    selector_free = [
+        spec for spec in specs if not str(spec.metadata.get("selector") or "").strip()
+    ]
+    if not selector_free:
+        return value
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"{owner} multi-output adapters with selector-free outputs must return a mapping."
+        )
+    if len(selector_free) == len(specs):
+        return validate_named_output_mapping(
+            value,
+            [spec.name for spec in specs],
+            f"{owner} ordinary output",
+        )
+    missing = [spec.name for spec in selector_free if spec.name not in value]
+    if missing:
+        raise ValueError(
+            f"{owner} selector-free output names must be present in the projected mapping; "
+            f"missing={missing}."
+        )
+    return dict(value)
+
+
 def materialize_named_outputs(
     raw_output: Any,
     specs: Sequence[EmbeddingOutputSpec],
     owner: str,
     allow_sparse: bool = False,
     fallback_output: Any = None,
+    allow_1d: bool = True,
 ) -> List[EmbeddingOutput]:
     outputs: List[EmbeddingOutput] = []
     for spec in specs:
         if (
             spec.metadata.get("selector") is None
-            and isinstance(raw_output, dict)
+            and isinstance(raw_output, Mapping)
             and spec.name in raw_output
         ):
             value = raw_output[spec.name]
@@ -357,7 +399,7 @@ def materialize_named_outputs(
         if value is None and fallback_output is not None and fallback_output is not raw_output:
             if (
                 spec.metadata.get("selector") is None
-                and isinstance(fallback_output, dict)
+                and isinstance(fallback_output, Mapping)
                 and spec.name in fallback_output
             ):
                 value = fallback_output[spec.name]
@@ -368,6 +410,7 @@ def materialize_named_outputs(
             f"{owner} output '{spec.name}'",
             flatten=bool(spec.metadata.get("flatten", True)),
             allow_sparse=allow_sparse,
+            allow_1d=allow_1d,
         )
         outputs.append(
             EmbeddingOutput(
@@ -479,7 +522,7 @@ def resolve_output_value(value: Any, selector: Optional[str]) -> Any:
     for part in selector.split("."):
         if current is None:
             return None
-        if isinstance(current, dict):
+        if isinstance(current, Mapping):
             current = current.get(part)
             continue
         if isinstance(current, (list, tuple)) and part.isdigit():
@@ -497,6 +540,7 @@ def materialize_output_matrix(
     name: str,
     flatten: bool = True,
     allow_sparse: bool = False,
+    allow_1d: bool = True,
 ) -> Any:
     if value is None:
         raise ValueError(f"{name} could not be resolved from the model output.")
@@ -505,6 +549,8 @@ def materialize_output_matrix(
         return ensure_numeric_matrix(value, name, allow_sparse=allow_sparse)
     array = np.asarray(value)
     if array.ndim == 1:
+        if not allow_1d:
+            raise ValueError(f"{name} must be a 2D numeric matrix.")
         array = array.reshape(1, -1)
     elif array.ndim > 2 and flatten:
         array = array.reshape(array.shape[0], -1)
@@ -561,7 +607,7 @@ def spec_to_recipe(spec: EmbeddingOutputSpec) -> Dict[str, Any]:
         "hidden_layer": spec.hidden_layer,
         "metadata": dict(spec.metadata),
     }
-    for key in ("selector", "source"):
+    for key in ("selector", "source", "flatten"):
         if key in spec.metadata:
             recipe[key] = spec.metadata[key]
     return recipe

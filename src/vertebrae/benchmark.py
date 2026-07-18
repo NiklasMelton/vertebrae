@@ -359,6 +359,8 @@ class Benchmark:
                             embedding=item.resource_profile.embedding,
                         )
                     item.extractor_type = getattr(extractor, "extractor_type", "spatial")
+                    item.embedding_metadata["parent_extractor_name"] = extractor.name
+                    item.embedding_metadata["output_name"] = materialization.name
                     item.embedding_metadata["segmentation"] = materialization.metadata
                     item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
                     item.embedding_metadata["resolved_scoring_config"] = (
@@ -496,6 +498,8 @@ class Benchmark:
                             embedding=item.resource_profile.embedding,
                         )
                     item.extractor_type = getattr(extractor, "extractor_type", "structured")
+                    item.embedding_metadata["parent_extractor_name"] = extractor.name
+                    item.embedding_metadata["output_name"] = materialization.name
                     item.embedding_metadata["structured"] = materialization.metadata
                     item.embedding_metadata["source_extractor_recipe"] = extractor.recipe()
                     item.embedding_metadata["resolved_scoring_config"] = (

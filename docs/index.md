@@ -11,6 +11,7 @@ Project Overview <overview>
 datasets
 segmentation
 feature_extractors
+monitoring
 compression
 scoring
 retrieval

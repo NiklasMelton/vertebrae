@@ -25,7 +25,8 @@ adds a `separatix` complexity diagnostic to reports when an evaluated embedding
 clears a configurable overlap-quality threshold. The full evaluation flow wraps
 those diagnostics with practical dataset handling, named target and hierarchy
 views, caching, memory-aware subsampling, stability analysis, artifact-backed
-execution, custom embedding metrics, and report generation.
+execution, custom embedding metrics, report generation, and repeated monitoring
+of live representations during training.
 
 SciPy sparse matrices and sparse arrays are normalized to CSR and remain sparse
 through classification, multi-label, regression, and stability scoring, and when
@@ -527,6 +528,46 @@ downloads a laptop-sized Caltech-101 subset with a few related category pairs,
 compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
 embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 
+### Representation monitoring during training
+
+`RepresentationMonitor` repeatedly runs a fresh labeled `Benchmark` against live
+extractors while your code retains control of training, cadence, checkpoints, and
+optimization. Named outputs make it possible to inspect representation separation as
+a function of both training progress and layer depth.
+
+```python
+from vertebrae import (
+    ConsoleReporter,
+    EvaluationHistoryConfig,
+    RepresentationMonitor,
+)
+
+monitor = RepresentationMonitor(
+    fixed_probe_dataset,
+    [live_torch_extractor],
+    history_config=EvaluationHistoryConfig(
+        storage="disk",
+        path="representation-history.jsonl",
+    ),
+    reporters=[ConsoleReporter()],
+)
+
+for epoch in range(epochs):
+    train_one_epoch(model)
+    monitor.evaluate(epoch=epoch, metadata={"loss": training_loss})
+
+history = monitor.history.to_dataframe()
+```
+
+Every call executes the configured benchmark stack and always recomputes embeddings,
+even if an enabled cache is supplied. Use a fixed held-out probe dataset and control
+evaluation cost through cadence, stability, and Separatix settings. The append-only
+JSONL format supports protocol-validated resume and read-only loading. Restoring the
+matching live model, optimizer, epoch, and step remains the caller's responsibility.
+See the
+[representation monitoring guide](docs/monitoring.md) and the network-free
+`examples/representation_monitoring.py` Torch workflow.
+
 ### Retrieval and matching
 
 `RetrievalBenchmark` evaluates frozen query embeddings against an explicit gallery
@@ -733,6 +774,7 @@ alongside the runnable
 - local Keras modules through `KerasExtractor`,
 - local ONNX Runtime sessions through `ONNXExtractor`,
 - single-output and multi-output extractor evaluation,
+- repeated time-by-layer representation monitoring for live extractors,
 - single-extractor evaluation,
 - multi-extractor comparisons,
 - JSON and Markdown reports,
