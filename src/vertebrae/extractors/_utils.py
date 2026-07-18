@@ -354,9 +354,7 @@ def validate_ordinary_output_projection(
 
     if len(specs) <= 1:
         return value
-    selector_free = [
-        spec for spec in specs if not str(spec.metadata.get("selector") or "").strip()
-    ]
+    selector_free = [spec for spec in specs if not str(spec.metadata.get("selector") or "").strip()]
     if not selector_free:
         return value
     if not isinstance(value, Mapping):

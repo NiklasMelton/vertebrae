@@ -290,9 +290,7 @@ class EvaluationRecord:
             status=status,
             evaluation_index=evaluation_index,
             rows=[dict(row) for row in rows],
-            benchmark_result=(
-                dict(benchmark_result) if benchmark_result is not None else None
-            ),
+            benchmark_result=(dict(benchmark_result) if benchmark_result is not None else None),
             error_type=value["error_type"],
             error_message=value["error_message"],
             error_traceback=value["error_traceback"],
@@ -761,8 +759,7 @@ def _monitor_protocol(benchmark: Benchmark, error_policy: str) -> Dict[str, Any]
         dataset.identity_key() if callable(getattr(dataset, "identity_key", None)) else None
     )
     structured_aligners = {
-        name: aligner.recipe()
-        for name, aligner in sorted(benchmark.structured_aligners.items())
+        name: aligner.recipe() for name, aligner in sorted(benchmark.structured_aligners.items())
     }
     execution = benchmark.execution
     execution_identity = (
@@ -786,9 +783,7 @@ def _monitor_protocol(benchmark: Benchmark, error_policy: str) -> Dict[str, Any]
                 "label_view_config": asdict(benchmark.label_view_config),
                 "target_view_config": asdict(benchmark.target_view_config),
                 "separatix_config": asdict(benchmark.separatix_config),
-                "compression_configs": [
-                    asdict(config) for config in benchmark.compression_configs
-                ],
+                "compression_configs": [asdict(config) for config in benchmark.compression_configs],
                 "embedding_config": asdict(benchmark.embedding_config),
                 "memory_config": asdict(benchmark.memory_config),
                 "execution_backend": execution_identity,
@@ -797,9 +792,7 @@ def _monitor_protocol(benchmark: Benchmark, error_policy: str) -> Dict[str, Any]
                 "structured_aligners": structured_aligners,
                 "metrics": [metric.recipe() for metric in benchmark.metrics],
                 "primary_metric": benchmark.primary_metric,
-                "resource_profiling_config": asdict(
-                    benchmark.resource_profiling_config
-                ),
+                "resource_profiling_config": asdict(benchmark.resource_profiling_config),
                 "cache_policy": {
                     "enabled": benchmark.cache_config.enabled,
                     "force_recompute": True,
@@ -921,8 +914,7 @@ def _validate_monitor_compatibility(
         )
         detail = ", ".join(differing) or "metadata"
         raise ValueError(
-            "Evaluation history monitoring protocol mismatch; differing components: "
-            f"{detail}."
+            "Evaluation history monitoring protocol mismatch; differing components: " f"{detail}."
         )
     raise ValueError("Evaluation history monitor metadata does not match the existing file.")
 

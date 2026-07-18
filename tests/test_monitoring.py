@@ -874,9 +874,7 @@ def test_disk_history_rejects_unknown_fields_and_detail_invariants(tmp_path):
             rows=[{"primary_score": 0.5}],
         )
     )
-    lines = [
-        json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines()
-    ]
+    lines = [json.loads(line) for line in summary_path.read_text(encoding="utf-8").splitlines()]
     lines[1]["unexpected"] = True
     unknown = tmp_path / "unknown.jsonl"
     unknown.write_text(
@@ -897,9 +895,7 @@ def test_disk_history_rejects_unknown_fields_and_detail_invariants(tmp_path):
         EvaluationHistory.load(summary_full)
 
     full_path = tmp_path / "full.jsonl"
-    full = EvaluationHistory(
-        EvaluationHistoryConfig(storage="disk", path=full_path, detail="full")
-    )
+    full = EvaluationHistory(EvaluationHistoryConfig(storage="disk", path=full_path, detail="full"))
     with pytest.raises(ValueError, match="benchmark_result"):
         full.append(
             EvaluationRecord(
@@ -922,9 +918,7 @@ def test_disk_history_rejects_unknown_or_missing_manifest_and_context_fields(tmp
             rows=[{"primary_score": 0.5}],
         )
     )
-    original = [
-        json.loads(line) for line in source.read_text(encoding="utf-8").splitlines()
-    ]
+    original = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines()]
     mutations = []
     manifest_extra = deepcopy(original)
     manifest_extra[0]["unexpected"] = True

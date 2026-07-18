@@ -41,8 +41,7 @@ def test_representation_monitoring_example_fresh_and_resume(tmp_path):
     resumed = run("--resume", "--epochs", "2")
     assert resumed.returncode == 0, resumed.stderr
     records = [
-        json.loads(line)
-        for line in history_path.read_text(encoding="utf-8").splitlines()[1:]
+        json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines()[1:]
     ]
     assert [record["evaluation_index"] for record in records] == [0, 1]
     assert [record["context"]["epoch"] for record in records] == [0, 1]
