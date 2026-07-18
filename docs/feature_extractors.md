@@ -88,6 +88,8 @@ independent even when their readable slugs match.
 
 Native multi-output support is available for:
 
+- `TorchExtractor`
+- `KerasExtractor`
 - `HFTextExtractor`
 - `HFAudioExtractor`
 - `HFMultimodalExtractor`
@@ -114,6 +116,53 @@ extractor = HFVisionExtractor(
     ],
 )
 ```
+
+Local Torch and Keras models use the same explicit ordinary `outputs` mapping. These
+adapters do not discover internal layers or install hooks; the model or `output_fn`
+must expose every declared representation:
+
+```python
+extractor = TorchExtractor(
+    name="local_encoder",
+    model=model,
+    collate_fn=collate_fn,
+    output_fn=lambda raw: {
+        "middle": raw["middle"],
+        "final": raw["final"],
+    },
+    outputs=[
+        {
+            "name": "middle",
+            "selector": "middle",
+            "hidden_layer": 2,
+            "pooling": "mean",
+        },
+        {
+            "name": "final",
+            "selector": "final",
+            "hidden_layer": 4,
+            "pooling": "cls",
+        },
+    ],
+)
+```
+
+The same constructor shape applies to `KerasExtractor`. Each batch invokes the model
+once, applies `output_fn` once, and materializes all named outputs. Selectors are
+dotted paths and may address sequence positions with numeric components. `flatten`
+defaults to `True` for explicit declarations. `hidden_layer`, `pooling`, `flatten`,
+and `metadata` are explicit provenance and become part of the extractor recipe and
+cache identity.
+
+When `outputs` is omitted, the legacy single-output path remains strict: the model or
+`output_fn` must return a 2D numeric matrix and higher-rank arrays are rejected rather
+than flattened. Declare an output explicitly to opt into flattening. When multiple
+outputs omit selectors, the model or `output_fn` must return a mapping whose keys
+exactly match the declared names. In a mixed configuration, every selector-free
+output must still be present by name in the mapping.
+
+`transform()` remains the ergonomic single-output path. With multiple declarations it
+raises with guidance to use `Benchmark`, `Evaluator`, or `transform_many()`.
 
 For paired image-text models, `HFMultimodalExtractor` works with aligned
 structured dataset inputs and explicit named branch or fused outputs:

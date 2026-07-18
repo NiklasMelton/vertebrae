@@ -1,10 +1,12 @@
 import sys
 import types
+from collections import UserDict
 
 import numpy as np
 import pytest
 
 from vertebrae import (
+    Benchmark,
     BenchmarkDataset,
     DatasetIdentity,
     EmbeddingConfig,
@@ -13,6 +15,7 @@ from vertebrae import (
     SpatialOutputSpec,
     StructuredOutputSpec,
 )
+from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.config import CacheConfig, StabilityConfig
 from vertebrae.extractors import TorchExtractor
 
@@ -222,6 +225,187 @@ def test_torch_extractor_supports_output_fn_and_recipe(fake_torch):
     assert recipe["collate_fn"].endswith(".collate_fn")
 
 
+def test_torch_extractor_supports_named_ordinary_outputs_in_one_call(fake_torch):
+    output_fn_calls = []
+    model = TrackingModel(
+        lambda args, kwargs: {
+            "hidden_states": [
+                FakeTensor(np.arange(12, dtype=float).reshape(3, 2, 2)),
+                FakeTensor(np.arange(12, 24, dtype=float).reshape(3, 2, 2)),
+            ],
+            "pooled": FakeTensor(np.arange(6, dtype=float).reshape(3, 2)),
+        }
+    )
+
+    def output_fn(raw_output):
+        output_fn_calls.append(raw_output)
+        return raw_output
+
+    extractor = TorchExtractor(
+        "layers",
+        model=model,
+        collate_fn=lambda batch: FakeTensor(batch),
+        output_fn=output_fn,
+        outputs=[
+            {
+                "name": "middle",
+                "selector": "hidden_states.0",
+                "hidden_layer": 1,
+                "pooling": "flatten",
+            },
+            {
+                "name": "final",
+                "selector": "pooled",
+                "flatten": False,
+                "hidden_layer": 2,
+                "pooling": "mean",
+                "metadata": {"branch": "encoder"},
+            },
+        ],
+    )
+
+    outputs = extractor.transform_many(np.ones((3, 4), dtype=float))
+    recipe = extractor.recipe()
+
+    assert [output.name for output in outputs] == ["middle", "final"]
+    assert [output.embeddings.shape for output in outputs] == [(3, 4), (3, 2)]
+    assert len(model.calls) == 1
+    assert len(output_fn_calls) == 1
+    assert model.training is True
+    assert recipe["outputs"][0]["selector"] == "hidden_states.0"
+    assert recipe["outputs"][0]["hidden_layer"] == 1
+    assert recipe["outputs"][1]["pooling"] == "mean"
+    with pytest.raises(ValueError, match="transform_many"):
+        extractor.transform(np.ones((3, 4), dtype=float))
+    assert len(model.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "values, message",
+    [
+        (
+            {
+                "middle": FakeTensor(np.ones((2, 2))),
+                "final": FakeTensor(np.ones((2, 2))),
+                "extra": FakeTensor(np.ones((2, 2))),
+            },
+            "extra=.*extra",
+        ),
+        (
+            {"middle": FakeTensor(np.ones((2, 2)))},
+            "missing=.*final",
+        ),
+    ],
+)
+def test_torch_extractor_requires_exact_direct_named_outputs(
+    fake_torch,
+    values,
+    message,
+):
+    extractor = TorchExtractor(
+        "layers",
+        model=TrackingModel(lambda args, kwargs: values),
+        collate_fn=lambda batch: FakeTensor(batch),
+        outputs=[{"name": "middle"}, {"name": "final"}],
+    )
+
+    with pytest.raises(ValueError, match=message):
+        extractor.transform_many(np.ones((2, 2)))
+
+
+def test_torch_extractor_rejects_non_mapping_selector_free_outputs(fake_torch):
+    extractor = TorchExtractor(
+        "layers",
+        model=TrackingModel(lambda args, kwargs: FakeTensor(np.ones((2, 2)))),
+        collate_fn=lambda batch: FakeTensor(batch),
+        outputs=[{"name": "middle"}, {"name": "final"}],
+    )
+
+    with pytest.raises(ValueError, match="must return a mapping"):
+        extractor.transform_many(np.ones((2, 2)))
+
+
+def test_torch_extractor_accepts_mapping_and_mixed_selectors(fake_torch):
+    values = UserDict(
+        {
+            "middle": FakeTensor(np.ones((2, 2))),
+            "nested": {"final": FakeTensor(np.full((2, 2), 2.0))},
+        }
+    )
+    extractor = TorchExtractor(
+        "layers",
+        model=TrackingModel(lambda args, kwargs: values),
+        collate_fn=lambda batch: FakeTensor(batch),
+        outputs=[
+            {"name": "middle"},
+            {"name": "final", "selector": "nested.final"},
+        ],
+    )
+
+    outputs = extractor.transform_many(np.ones((2, 2)))
+
+    assert [output.name for output in outputs] == ["middle", "final"]
+    assert np.array_equal(outputs[0].embeddings, np.ones((2, 2)))
+    assert np.array_equal(outputs[1].embeddings, np.full((2, 2), 2.0))
+
+
+def test_torch_extractor_resolves_selectors_from_custom_mappings(fake_torch):
+    values = UserDict(
+        {
+            "nested": UserDict(
+                {
+                    "middle": FakeTensor(np.ones((2, 2))),
+                    "final": FakeTensor(np.full((2, 2), 2.0)),
+                }
+            )
+        }
+    )
+    extractor = TorchExtractor(
+        "layers",
+        model=TrackingModel(lambda args, kwargs: values),
+        collate_fn=lambda batch: FakeTensor(batch),
+        outputs=[
+            {"name": "middle", "selector": "nested.middle"},
+            {"name": "final", "selector": "nested.final"},
+        ],
+    )
+
+    outputs = extractor.transform_many(np.ones((2, 2)))
+
+    assert np.array_equal(outputs[0].embeddings, np.ones((2, 2)))
+    assert np.array_equal(outputs[1].embeddings, np.full((2, 2), 2.0))
+
+
+def test_torch_implicit_output_is_2d_but_explicit_output_may_flatten(fake_torch):
+    model = TrackingModel(
+        lambda args, kwargs: FakeTensor(np.arange(24, dtype=float).reshape(2, 3, 4))
+    )
+    implicit = TorchExtractor("implicit", model=model, collate_fn=lambda batch: FakeTensor(batch))
+    explicit = TorchExtractor(
+        "explicit",
+        model=model,
+        collate_fn=lambda batch: FakeTensor(batch),
+        outputs=[{"name": "tokens"}],
+    )
+    strict = TorchExtractor(
+        "strict",
+        model=model,
+        collate_fn=lambda batch: FakeTensor(batch),
+        outputs=[{"name": "tokens", "flatten": False}],
+    )
+
+    with pytest.raises(ValueError, match="2D"):
+        implicit.transform(np.ones((2, 2)))
+    assert explicit.transform(np.ones((2, 2))).shape == (2, 12)
+    with pytest.raises(ValueError, match="2D"):
+        strict.transform(np.ones((2, 2)))
+    assert implicit.recipe()["outputs"][0]["flatten"] is False
+    assert explicit.recipe()["outputs"][0]["flatten"] is True
+    assert fingerprint_extractor_recipe(implicit.recipe()) != fingerprint_extractor_recipe(
+        explicit.recipe()
+    )
+
+
 def test_torch_extractor_moves_nested_batches_and_model(fake_torch):
     class NestedModel(TrackingModel):
         pass
@@ -312,6 +496,46 @@ def test_torch_extractor_works_in_streaming_evaluator(fake_torch, fake_overlapin
     assert metadata["streamed"] is True
     assert metadata["stream_batch_size"] == 3
     assert len(model.calls) == 3
+
+
+def test_torch_multi_output_streaming_calls_model_once_per_batch(
+    fake_torch,
+    fake_overlapindex,
+):
+    model = TrackingModel(
+        lambda args, kwargs: {
+            "middle": FakeTensor(np.asarray(kwargs["x"].data[:, :2], dtype=float)),
+            "final": FakeTensor(np.asarray(kwargs["x"].data, dtype=float)),
+        }
+    )
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24, dtype=float).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+    extractor = TorchExtractor(
+        "streaming_layers",
+        model=model,
+        collate_fn=lambda batch: {"x": FakeTensor(np.asarray(batch, dtype=float))},
+        outputs=[
+            {"name": "middle", "hidden_layer": 1},
+            {"name": "final", "hidden_layer": 2},
+        ],
+        streaming_safe=True,
+    )
+
+    result = Benchmark(
+        dataset=dataset,
+        extractors=[extractor],
+        cache_config=CacheConfig(enabled=False),
+        stability_config=StabilityConfig(enabled=False),
+        embedding_config=EmbeddingConfig(batch_size=3),
+    ).run()
+
+    assert len(result.extractor_results) == 2
+    assert len(model.calls) == 3
+    assert all(item.embedding_metadata["streamed"] is True for item in result.extractor_results)
 
 
 def test_torch_extractor_supports_explicit_spatial_outputs(fake_torch):

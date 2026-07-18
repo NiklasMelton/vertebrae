@@ -24,6 +24,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_outputs
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_depth.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_slots.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
@@ -67,6 +68,10 @@ Each script writes reports to `examples/output/`.
 - `torch_local_model.py`: demonstrate `TorchExtractor` with content-digested checkpoint
   provenance, inference-mode/eval defaults, and user-supplied
   `collate_fn` / `output_fn`.
+- `representation_monitoring.py`: train a small local Torch network, monitor two
+  explicitly named representations after every epoch, persist summary history and
+  caller-managed training state, resume them together with `--resume`, and pivot the
+  final DataFrame by epoch and hidden layer.
 - `keras_local_model.py`: demonstrate `KerasExtractor` with content-digested provenance
   for a locally saved Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export

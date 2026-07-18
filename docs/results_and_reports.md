@@ -148,6 +148,27 @@ best = result.ranked_results()[0]
 print(best.name, best.primary_metric_name, best.primary_score)
 ```
 
+The default DataFrame remains ranked and valid-only. Pass
+`to_dataframe(include_invalid=True)` to retain every result; valid results receive
+snapshot-local ranks and invalid aggregates receive a null `rank`.
+
+Tabular rows include explicit `parent_extractor`, `output_name`, `hidden_layer`, and
+`pooling` provenance for ordinary, structured, and spatial outputs. Each aggregate
+metric is also available as `metric.<name>`, and benchmark stage timings use
+`runtime.<stage>`. Stability mode, repeats, interval level, mean, standard deviation,
+minimum, maximum, interval bounds, and width are flattened alongside warnings,
+overlap, Separatix/probe, compression, target/label-view, and compact resource-profile
+columns. Detailed per-class,
+pairwise, complete stability-repeat, and full Separatix data remain in the serialized
+result rather than being expanded into wide DataFrame cells.
+
+`RepresentationMonitor` uses this same row builder with `include_invalid=True`, then
+adds `evaluation_index`, status, evaluation identifiers, `recorded_at`,
+`context_metadata.<key>`, and failure fields. See
+[representation monitoring](monitoring.md) for memory and JSONL history behavior.
+Failed snapshots use the same canonical result columns with null values, including
+configured `metric.<name>` and standard `runtime.<stage>` columns.
+
 The Markdown ranking table uses the same metric-aware summary fields. Its current
 core columns are `primary_metric`, `primary_score`, `overlap_score`,
 `overlap_macro`, `overlap_weighted`, `stability_interval`, `weakest_class`,
