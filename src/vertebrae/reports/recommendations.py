@@ -31,7 +31,7 @@ def recommendation_for_extractor(
         recommendation = "strong_candidate"
     elif score >= 0.80:
         recommendation = "promising_inspect_weak_classes"
-    elif score >= 0.75:
+    elif score >= 0.7:
         recommendation = "moderate_overlap_fine_tuning_likely"
     else:
         recommendation = "poor_frozen_representation"
