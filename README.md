@@ -1115,4 +1115,6 @@ repeatable `vertebrae score --metric module:callable` options. Run
 
 ## License
 
-MIT
+The source code is licensed under the GNU Affero General Public License
+v3.0 or later (AGPLv3-or-later). Commercial licenses are available; please
+contact the maintainer through GitHub.
