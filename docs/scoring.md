@@ -52,8 +52,7 @@ config = OverlapScoringConfig(
 
 Classification and multi-label OverlapIndex scores are bounded to `[0, 1]`:
 `1.0` indicates perfect class separation and `0.0` indicates perfect class
-overlap. This discrete score is not calibrated against a permutation null, so
-`0.5` has no special null interpretation.
+overlap.
 
 Key fields:
 
