@@ -1023,6 +1023,12 @@ By default, extractors are ranked by overlap. When a custom `primary_metric` is
 configured, they are ranked by that metric instead; the overlap columns remain
 available for representation diagnostics and Separatix gating.
 
+For classification and multi-label targets, discrete OverlapIndex scores are
+bounded to `[0, 1]`: `1.0` indicates perfect class separation and `0.0` indicates
+perfect class overlap. The discrete score is not permutation-null calibrated, so
+`0.5` has no special null interpretation. ContinuousOverlapIndex uses the separate
+regression calibration described in the scoring documentation.
+
 The easiest way to interpret the report is:
 
 - Start with `primary_metric` and `primary_score`. By default these are overlap;

@@ -93,7 +93,6 @@ class ContinuousOverlapScoringConfig:
     n_projections: int = 64
     n_null_permutations: int = 20
     aggregation: str = "support_weighted"
-    clip: bool = True
 
     def __post_init__(self) -> None:
         _require_int(self.k, "ContinuousOverlapScoringConfig.k")
@@ -113,7 +112,6 @@ class ContinuousOverlapScoringConfig:
             self.n_null_permutations,
             "ContinuousOverlapScoringConfig.n_null_permutations",
         )
-        _require_bool(self.clip, "ContinuousOverlapScoringConfig.clip")
         if self.k < 1:
             raise ValueError("ContinuousOverlapScoringConfig.k must be >= 1.")
         if self.offline_chunk_size is not None and self.offline_chunk_size < 1:

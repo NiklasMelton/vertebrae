@@ -22,11 +22,11 @@ def recommendation_for_extractor(
 
     width = _stability_width(stability)
     if target_type == "regression":
-        if _crosses_null_reference(stability, null_reference=0.5):
+        if score <= 0.0:
+            return "continuous_overlap_null_like"
+        if _crosses_null_reference(stability, null_reference=0.0):
             return "continuous_overlap_null_indeterminate"
-        if score >= 0.5:
-            return "continuous_structure_above_null"
-        return "continuous_overlap_below_null"
+        return "continuous_structure_above_null"
     if score >= 0.9 and width <= 0.05:
         recommendation = "strong_candidate"
     elif score >= 0.80:

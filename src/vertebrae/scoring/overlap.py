@@ -355,7 +355,6 @@ class OverlapIndexScorer:
             n_null_permutations=config.n_null_permutations,
             aggregation=config.aggregation,
             random_state=seed,
-            clip=config.clip,
         )
         with _capture_runtime_warnings(warnings):
             raw_score = index.fit_offline(embeddings, labels, reset_state=True)
@@ -387,7 +386,7 @@ class OverlapIndexScorer:
             "target_names": label_metadata.get("target_names"),
             "target_summary": summary,
             "aggregate_valid": True,
-            "continuous_null_reference": 0.5,
+            "continuous_null_reference": 0.0,
             "continuous_aggregation": config.aggregation,
             "target_cover": config.target_cover,
             "n_target_cells": config.n_target_cells,
@@ -395,7 +394,6 @@ class OverlapIndexScorer:
             "target_scaling": config.target_scaling,
             "n_projections": config.n_projections,
             "n_null_permutations": config.n_null_permutations,
-            "clip": config.clip,
         }
         return OverlapScoreResult(
             score=score,
