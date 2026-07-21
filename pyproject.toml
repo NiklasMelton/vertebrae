@@ -70,6 +70,7 @@ datasets = { version = "^2.0", optional = true }
 torch = { version = ">=2.1", optional = true }
 timm = { version = "^1.0", optional = true }
 torchvision = { version = ">=0.16", optional = true }
+matplotlib = { version = ">=3.9,<4", optional = true }
 sentence-transformers = { version = "^3.0", optional = true }
 soundfile = { version = "^0.13", optional = true }
 av = { version = ">=12,<16", optional = true }
@@ -103,6 +104,7 @@ video = ["transformers", "torch", "av", "pytorchvideo"]
 torch = ["torch"]
 timm = ["torch", "timm"]
 torchvision = ["torch", "torchvision"]
+visuals = ["torch", "torchvision", "matplotlib"]
 openclip = ["torch", "open-clip-torch"]
 mlp = ["torch"]
 keras = ["keras"]
