@@ -730,6 +730,19 @@ Dense segmentation evaluation scores spatial feature cells after they are aligne
 to semantic mask labels. It measures representation organization for retained
 tokens; it is not an IoU, mask-accuracy, or boundary-quality metric.
 
+Both dense spatial outputs and other structured model outputs become ordinary
+labeled embedding rows before scoring:
+
+```mermaid
+flowchart TB
+    spatial_source["Spatial path<br/>image, semantic mask, declared feature grid"] --> spatial_align["Assign cells by mask coverage<br/>filter ambiguity and sample deterministically"]
+    structured_source["Structured path<br/>parent sample, unit annotations, emitted rows"] --> structured_align["Select and align emitted rows<br/>to declared unit annotations"]
+
+    spatial_align --> rows["Materialized BenchmarkDataset rows<br/>embeddings, targets, parent groups, provenance"]
+    structured_align --> rows
+    rows --> scoring["Standard labeled-embedding scoring<br/>OverlapIndex, stability, gated Separatix"]
+```
+
 ```python
 from vertebrae import (
     Benchmark,
