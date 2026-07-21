@@ -35,6 +35,26 @@ through classification, multi-label, regression, and stability scoring, and when
 passed into Separatix. Multi-label targets may also be supplied as sparse binary
 indicator matrices.
 
+## Evaluation flow
+
+The benchmark protocols share extraction, artifact, compression, and reporting
+infrastructure while keeping their scoring semantics separate.
+
+```mermaid
+flowchart TB
+    data["Dataset and protocol metadata"] --> extract["Extract or load embeddings<br/>single or multi-output; row-aligned when needed"]
+    extract --> artifacts["Reusable raw artifacts<br/>and optional compression variants"]
+    artifacts --> protocol{"Configured evaluation protocol"}
+
+    protocol --> labeled["Labeled embeddings<br/>OverlapIndex, stability, gated Separatix"]
+    protocol --> retrieval["Exact query-gallery retrieval<br/>NDCG, recall, precision, mAP, MRR"]
+    protocol --> zero_shot["Fixed-prompt zero-shot<br/>top-k classification and sample overlap"]
+
+    labeled --> results["Practical results<br/>Python objects, DataFrames, JSON, Markdown"]
+    retrieval --> results
+    zero_shot --> results
+```
+
 ## Installation
 
 ```bash

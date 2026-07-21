@@ -1,11 +1,13 @@
 # scoring
 
-All overlap scoring in `vertebrae` goes through one internal adapter:
-`OverlapIndexScorer`.
+All [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) scoring in
+`vertebrae` goes through one internal adapter: `OverlapIndexScorer`.
 
-`vertebrae` can also run a default Separatix complexity diagnostic through the
-internal `SeparatixScorer` adapter. Separatix does not affect extractor ranking;
-it adds classifier-complexity guidance on top of the overlap result when enabled.
+`vertebrae` can also run a default
+[Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic
+through the internal `SeparatixScorer` adapter. Separatix does not affect
+extractor ranking; it adds classifier-complexity guidance on top of the overlap
+result when enabled.
 When a dataset declares groups, vertebrae forwards them to Separatix so supervised
 evaluation and structural evidence respect those independence units. A grouped
 diagnostic that lacks sufficient cross-group class support is recorded as skipped;
@@ -13,8 +15,9 @@ vertebrae never retries it with a row-level split.
 
 ## Fixed metric backend
 
-`vertebrae` depends on the external `overlapindex` package and does not reimplement
-OverlapIndex. Currently, the backend is fixed internally to MiniBatchKMeans:
+`vertebrae` depends on the external
+[OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) package and does not
+reimplement it. Currently, the backend is fixed internally to MiniBatchKMeans:
 
 ```python
 OverlapIndex(
@@ -196,7 +199,8 @@ explicitly in a future release.
 
 ## Separatix diagnostics
 
-Use `SeparatixConfig` to control the optional complexity diagnostic stage:
+Use `SeparatixConfig` to control the optional
+[Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic stage:
 
 ```python
 from vertebrae import SeparatixConfig
