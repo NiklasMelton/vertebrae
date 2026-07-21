@@ -20,8 +20,10 @@ JAX/Flax, tree ensembles, graph models, and hosted embedding APIs. It can also
 evaluate labeled embedding units such as document regions, tokens, frames,
 keypoints, depth cells, and latent slots emitted directly by a model.
 
-The package uses the `overlapindex` library as its primary separation metric and
-adds a `separatix` complexity diagnostic to reports when an evaluated embedding
+The package uses [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) as
+its primary separation metric and adds a
+[Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic to
+reports when an evaluated embedding
 clears a configurable overlap-quality threshold. The full evaluation flow wraps
 those diagnostics with practical dataset handling, named target and hierarchy
 views, caching, memory-aware subsampling, stability analysis, artifact-backed
@@ -32,47 +34,6 @@ SciPy sparse matrices and sparse arrays are normalized to CSR and remain sparse
 through classification, multi-label, regression, and stability scoring, and when
 passed into Separatix. Multi-label targets may also be supplied as sparse binary
 indicator matrices.
-
-## Visual examples
-
-The network-free-after-download
-[`fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py) example
-trains a compact two-block convolutional network and generates these figures from real
-Fashion-MNIST evaluations. It carves a fixed, stratified validation set out before
-training, leaves the official test set untouched, and disables Separatix and stability
-repeats so each figure focuses on the raw OverlapIndex diagnostic.
-
-### Representations during training
-
-Two spatial convolutional representations and the learned 128-dimensional embedding
-are evaluated before training and every two optimizer steps over three epochs. The same
-layer identities and colors connect the network diagram to the monitoring curves.
-Fashion-MNIST's visually related apparel classes make it possible to compare how local
-features and the task-specific embedding evolve at different depths.
-
-![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](img/visuals/fashion-mnist-representation-monitoring.png)
-
-### Compression frontier
-
-The trained penultimate embedding is compressed with PCA and quantization. Each point
-shows the measured OverlapIndex score against encoded bytes per sample; the dashed line
-marks the non-dominated frontier.
-
-![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](img/visuals/fashion-mnist-compression-frontier.png)
-
-### Hierarchy by layer
-
-The same representations are evaluated against nested department, garment-group, and
-exact-class label views before and after training.
-
-![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](img/visuals/fashion-mnist-hierarchy-heatmap.png)
-
-Reproduce all three figures with:
-
-```bash
-poetry install -E visuals
-poetry run python examples/fashion_mnist_visual_suite.py
-```
 
 ## Installation
 
@@ -301,6 +262,14 @@ result = Evaluator(
 
 Supported compression methods include `pca`, `incremental_pca`,
 `truncated_svd`, random projections, `prefix_truncate`, and `quantize`.
+
+The network-free-after-download
+[`fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py)
+also illustrates the storage-quality tradeoffs of PCA and quantization on a
+trained penultimate embedding. Each point shows the measured OverlapIndex score
+against encoded bytes per sample; the dashed line marks the non-dominated frontier.
+
+![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](img/visuals/fashion-mnist-compression-frontier.png)
 
 ### Scikit-learn pipelines
 
@@ -614,6 +583,40 @@ matching live model, optimizer, epoch, and step remains the caller's responsibil
 See the
 [representation monitoring guide](docs/monitoring.md) and the network-free
 `examples/representation_monitoring.py` Torch workflow.
+
+The network-free-after-download
+[`fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py)
+trains a compact two-block convolutional network and applies the same protocol
+to real Fashion-MNIST evaluations. It carves a fixed, stratified validation set
+out before training, leaves the official test set untouched, and disables
+Separatix and stability repeats so each figure focuses on the raw OverlapIndex
+diagnostic. For complementary visual examples of the underlying metrics, see the
+[OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) and
+[Separatix](https://github.com/NiklasMelton/Separatix) repositories.
+
+#### Representation trajectories
+
+Two spatial convolutional representations and the learned 128-dimensional embedding
+are evaluated before training and every two optimizer steps over three epochs. The same
+layer identities and colors connect the network diagram to the monitoring curves.
+Fashion-MNIST's visually related apparel classes make it possible to compare how local
+features and the task-specific embedding evolve at different depths.
+
+![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](img/visuals/fashion-mnist-representation-monitoring.png)
+
+#### Hierarchical label views
+
+The same representations are evaluated against nested department, garment-group, and
+exact-class label views before and after training.
+
+![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](img/visuals/fashion-mnist-hierarchy-heatmap.png)
+
+Reproduce the monitoring, hierarchy, and compression figures with:
+
+```bash
+poetry install -E visuals
+poetry run python examples/fashion_mnist_visual_suite.py
+```
 
 ### Retrieval and matching
 
