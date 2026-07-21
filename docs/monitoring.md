@@ -206,3 +206,9 @@ See the network-free
 workflow for a complete local Torch training loop with two named representations,
 caller-managed checkpoint restoration via `--resume`, strict JSONL resume, and a
 final epoch-by-layer pivot.
+
+For a visual real-data workflow, [`examples/mnist_visual_suite.py`](../examples/mnist_visual_suite.py)
+trains a small PyTorch MLP on MNIST, monitors three named layers from initialization
+through three epochs at optimizer-step cadence, evaluates only against a stratified
+held-out validation set, disables Separatix and stability repeats, and renders the
+network architecture beside the layer-wise OverlapIndex trajectories.

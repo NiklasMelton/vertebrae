@@ -14,6 +14,12 @@ Runnable examples live in `examples/`:
   representations after each epoch, persist summary JSONL plus caller-managed
   training state, resume them together with `--resume`, and pivot overlap by epoch
   and layer.
+- `mnist_visual_suite.py`: train a local PyTorch MLP on a deterministic MNIST subset,
+  reserve a stratified validation set before training, monitor three hidden outputs
+  every two optimizer steps, compare compression variants, evaluate nested label
+  views, and generate the three figures embedded in the README. Install the
+  `visuals` extra; torchvision downloads MNIST on the first run and reuses the local
+  copy.
 - `cache_reuse.py`: demonstrate safe embedding cache reuse with an explicit callable
   `cache_identity`.
 - `zero_shot_callable.py`: compare a synthetic frozen image/text-aligned adapter with

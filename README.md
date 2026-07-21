@@ -33,6 +33,44 @@ through classification, multi-label, regression, and stability scoring, and when
 passed into Separatix. Multi-label targets may also be supplied as sparse binary
 indicator matrices.
 
+## Visual examples
+
+The network-free-after-download [`mnist_visual_suite.py`](examples/mnist_visual_suite.py)
+example trains a small local PyTorch classifier and generates these figures from
+real MNIST evaluations. It carves a fixed, stratified validation set out before
+training, leaves the official test set untouched, and disables Separatix and
+stability repeats so each figure focuses on the raw OverlapIndex diagnostic.
+
+### Representations during training
+
+Three named hidden outputs are evaluated before training and every two optimizer steps
+over three epochs. The same layer identities and colors connect the network diagram to
+the monitoring curves.
+
+![MNIST network architecture with OverlapIndex trajectories for three hidden representations](img/visuals/mnist-representation-monitoring.png)
+
+### Compression frontier
+
+The trained penultimate embedding is compressed with PCA and quantization. Each point
+shows the measured OverlapIndex score against encoded bytes per sample; the dashed line
+marks the non-dominated frontier.
+
+![MNIST embedding compression frontier comparing storage and OverlapIndex](img/visuals/mnist-compression-frontier.png)
+
+### Hierarchy by layer
+
+The same representations are evaluated against nested parity, parity-plus-range, and
+exact-digit label views before and after training.
+
+![MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](img/visuals/mnist-hierarchy-heatmap.png)
+
+Reproduce all three figures with:
+
+```bash
+poetry install -E visuals
+poetry run python examples/mnist_visual_suite.py
+```
+
 ## Installation
 
 ```bash
@@ -76,6 +114,12 @@ pip install "vertebrae[torch]"
 pip install "vertebrae[timm]"
 pip install "vertebrae[torchvision]"
 pip install "vertebrae[openclip]"
+```
+
+Optional dependencies for the MNIST visual example suite:
+
+```bash
+pip install "vertebrae[visuals]"
 ```
 
 Optional local Keras model support:
