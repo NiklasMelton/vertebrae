@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 
@@ -13,8 +14,8 @@ def _load_example_module():
     sys.path.insert(0, str(examples_dir))
     try:
         spec = importlib.util.spec_from_file_location(
-            "mnist_visual_suite",
-            examples_dir / "mnist_visual_suite.py",
+            "fashion_mnist_visual_suite",
+            examples_dir / "fashion_mnist_visual_suite.py",
         )
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
@@ -24,10 +25,14 @@ def _load_example_module():
         sys.path.remove(str(examples_dir))
 
 
-def test_mnist_visual_suite_help_does_not_require_optional_dependencies():
+def test_fashion_mnist_visual_suite_help_does_not_require_optional_dependencies():
     root = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
-        [sys.executable, str(root / "examples" / "mnist_visual_suite.py"), "--help"],
+        [
+            sys.executable,
+            str(root / "examples" / "fashion_mnist_visual_suite.py"),
+            "--help",
+        ],
         cwd=root,
         capture_output=True,
         text=True,
@@ -41,24 +46,39 @@ def test_mnist_visual_suite_help_does_not_require_optional_dependencies():
     assert "--no-download" in completed.stdout
 
 
-def test_mnist_visual_suite_builds_nested_digit_hierarchy():
+def test_fashion_mnist_visual_suite_builds_nested_product_hierarchy():
     module = _load_example_module()
 
     assert module._hierarchy_paths(range(10)) == [
-        ("even", "even, 0-4", "0"),
-        ("odd", "odd, 0-4", "1"),
-        ("even", "even, 0-4", "2"),
-        ("odd", "odd, 0-4", "3"),
-        ("even", "even, 0-4", "4"),
-        ("odd", "odd, 5-9", "5"),
-        ("even", "even, 5-9", "6"),
-        ("odd", "odd, 5-9", "7"),
-        ("even", "even, 5-9", "8"),
-        ("odd", "odd, 5-9", "9"),
+        ("apparel", "upper garment", "T-shirt/top"),
+        ("apparel", "lower/full-body", "Trouser"),
+        ("apparel", "upper garment", "Pullover"),
+        ("apparel", "lower/full-body", "Dress"),
+        ("apparel", "upper garment", "Coat"),
+        ("footwear", "open footwear", "Sandal"),
+        ("apparel", "upper garment", "Shirt"),
+        ("footwear", "closed footwear", "Sneaker"),
+        ("accessory", "bag", "Bag"),
+        ("footwear", "closed footwear", "Ankle boot"),
     ]
 
 
-def test_mnist_visual_suite_stratified_subset_and_pareto_frontier_are_deterministic():
+def test_fashion_mnist_visual_suite_uses_spatial_cnn_representations():
+    torch = pytest.importorskip("torch")
+    module = _load_example_module()
+    model = module._build_model(torch)
+
+    model.eval()
+    with torch.inference_mode():
+        outputs = model(torch.zeros((2, 28 * 28), dtype=torch.float32))
+
+    assert tuple(outputs["conv_1"].shape) == (2, 128)
+    assert tuple(outputs["conv_2"].shape) == (2, 256)
+    assert tuple(outputs["embedding"].shape) == (2, 128)
+    assert tuple(outputs["logits"].shape) == (2, 10)
+
+
+def test_fashion_mnist_visual_suite_stratified_subset_and_pareto_are_deterministic():
     module = _load_example_module()
     labels = np.repeat(np.arange(10), 12)
 
@@ -73,19 +93,19 @@ def test_mnist_visual_suite_stratified_subset_and_pareto_frontier_are_determinis
     ) == [0, 2]
 
 
-def test_mnist_visual_suite_holds_validation_rows_out_before_training(tmp_path):
+def test_fashion_mnist_visual_suite_holds_validation_rows_out_before_training(tmp_path):
     module = _load_example_module()
     calls = []
 
-    class FakeMNIST:
+    class FakeFashionMNIST:
         def __init__(self, root, train, download):
             calls.append({"root": root, "train": train, "download": download})
             row_ids = np.arange(120, dtype=np.float32)
             self.data = np.broadcast_to(row_ids[:, None, None], (120, 2, 2)).copy()
             self.targets = np.repeat(np.arange(10), 12)
 
-    train_x, train_y, validation_x, validation_y = module._load_mnist(
-        FakeMNIST,
+    train_x, train_y, validation_x, validation_y = module._load_fashion_mnist(
+        FakeFashionMNIST,
         data_dir=tmp_path,
         train_size=50,
         validation_size=30,
@@ -94,7 +114,10 @@ def test_mnist_visual_suite_holds_validation_rows_out_before_training(tmp_path):
     )
 
     def restore_ids(values):
-        return np.rint((values[:, 0] * 0.3081 + 0.1307) * 255.0).astype(int)
+        return np.rint(
+            (values[:, 0] * module._NORMALIZATION_STD + module._NORMALIZATION_MEAN)
+            * 255.0
+        ).astype(int)
 
     assert set(restore_ids(train_x)).isdisjoint(set(restore_ids(validation_x)))
     assert np.bincount(train_y).tolist() == [5] * 10
@@ -102,13 +125,13 @@ def test_mnist_visual_suite_holds_validation_rows_out_before_training(tmp_path):
     assert calls == [{"root": str(tmp_path), "train": True, "download": False}]
 
 
-def test_readme_mnist_visual_assets_are_present_and_renderable():
+def test_readme_fashion_mnist_visual_assets_are_present_and_renderable():
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
     stems = (
-        "mnist-representation-monitoring",
-        "mnist-compression-frontier",
-        "mnist-hierarchy-heatmap",
+        "fashion-mnist-representation-monitoring",
+        "fashion-mnist-compression-frontier",
+        "fashion-mnist-hierarchy-heatmap",
     )
 
     for stem in stems:

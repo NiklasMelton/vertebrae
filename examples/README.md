@@ -25,7 +25,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_depth.p
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_slots.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
-POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/mnist_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
@@ -73,12 +73,13 @@ Each script writes reports to `examples/output/`.
   explicitly named representations after every epoch, persist summary history and
   caller-managed training state, resume them together with `--resume`, and pivot the
   final DataFrame by epoch and hidden layer.
-- `mnist_visual_suite.py`: train a local PyTorch MLP on a deterministic MNIST subset
-  with a fixed held-out validation set, monitor hidden representations every two
-  optimizer steps, and generate the README's representation-monitoring,
-  compression-frontier, and layer-by-hierarchy figures. The first run downloads
-  MNIST through torchvision; install all required optional dependencies with
-  `poetry install -E visuals`.
+- `fashion_mnist_visual_suite.py`: train a compact two-block PyTorch CNN on a deterministic
+  Fashion-MNIST subset with a fixed held-out validation set, monitor hidden
+  pooled convolutional representations and a 128-dimensional embedding every two
+  optimizer steps, and generate the README's
+  representation-monitoring, compression-frontier, and layer-by-hierarchy figures.
+  The first run downloads Fashion-MNIST through torchvision; install all required
+  optional dependencies with `poetry install -E visuals`.
 - `keras_local_model.py`: demonstrate `KerasExtractor` with content-digested provenance
   for a locally saved Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export

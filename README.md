@@ -35,19 +35,22 @@ indicator matrices.
 
 ## Visual examples
 
-The network-free-after-download [`mnist_visual_suite.py`](examples/mnist_visual_suite.py)
-example trains a small local PyTorch classifier and generates these figures from
-real MNIST evaluations. It carves a fixed, stratified validation set out before
-training, leaves the official test set untouched, and disables Separatix and
-stability repeats so each figure focuses on the raw OverlapIndex diagnostic.
+The network-free-after-download
+[`fashion_mnist_visual_suite.py`](examples/fashion_mnist_visual_suite.py) example
+trains a compact two-block convolutional network and generates these figures from real
+Fashion-MNIST evaluations. It carves a fixed, stratified validation set out before
+training, leaves the official test set untouched, and disables Separatix and stability
+repeats so each figure focuses on the raw OverlapIndex diagnostic.
 
 ### Representations during training
 
-Three named hidden outputs are evaluated before training and every two optimizer steps
-over three epochs. The same layer identities and colors connect the network diagram to
-the monitoring curves.
+Two spatial convolutional representations and the learned 128-dimensional embedding
+are evaluated before training and every two optimizer steps over three epochs. The same
+layer identities and colors connect the network diagram to the monitoring curves.
+Fashion-MNIST's visually related apparel classes make it possible to compare how local
+features and the task-specific embedding evolve at different depths.
 
-![MNIST network architecture with OverlapIndex trajectories for three hidden representations](img/visuals/mnist-representation-monitoring.png)
+![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](img/visuals/fashion-mnist-representation-monitoring.png)
 
 ### Compression frontier
 
@@ -55,20 +58,20 @@ The trained penultimate embedding is compressed with PCA and quantization. Each 
 shows the measured OverlapIndex score against encoded bytes per sample; the dashed line
 marks the non-dominated frontier.
 
-![MNIST embedding compression frontier comparing storage and OverlapIndex](img/visuals/mnist-compression-frontier.png)
+![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](img/visuals/fashion-mnist-compression-frontier.png)
 
 ### Hierarchy by layer
 
-The same representations are evaluated against nested parity, parity-plus-range, and
-exact-digit label views before and after training.
+The same representations are evaluated against nested department, garment-group, and
+exact-class label views before and after training.
 
-![MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](img/visuals/mnist-hierarchy-heatmap.png)
+![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](img/visuals/fashion-mnist-hierarchy-heatmap.png)
 
 Reproduce all three figures with:
 
 ```bash
 poetry install -E visuals
-poetry run python examples/mnist_visual_suite.py
+poetry run python examples/fashion_mnist_visual_suite.py
 ```
 
 ## Installation
@@ -116,7 +119,7 @@ pip install "vertebrae[torchvision]"
 pip install "vertebrae[openclip]"
 ```
 
-Optional dependencies for the MNIST visual example suite:
+Optional dependencies for the Fashion-MNIST visual example suite:
 
 ```bash
 pip install "vertebrae[visuals]"

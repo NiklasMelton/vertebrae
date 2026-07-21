@@ -1,4 +1,4 @@
-"""Generate three visual examples from one locally trained MNIST network.
+"""Generate three visual examples from one locally trained Fashion-MNIST network.
 
 The suite demonstrates mini-batch representation monitoring, embedding compression,
 and hierarchical label views with real OverlapIndex evaluations on a held-out
@@ -8,10 +8,10 @@ figures focus on the raw representation diagnostic.
 Install the optional dependencies and run from the repository root:
 
     poetry install -E visuals
-    poetry run python examples/mnist_visual_suite.py
+    poetry run python examples/fashion_mnist_visual_suite.py
 
-MNIST is downloaded through torchvision on the first run and reused from the
-local data directory afterward.
+Fashion-MNIST is downloaded through torchvision on the first run and reused from
+the local data directory afterward.
 """
 
 from __future__ import annotations
@@ -40,24 +40,38 @@ from vertebrae.config import CacheConfig
 from vertebrae.extractors import PrecomputedExtractor, TorchExtractor
 
 _OUTPUT_SPECS = (
-    {"name": "hidden_1", "hidden_layer": 1, "pooling": "identity"},
-    {"name": "hidden_2", "hidden_layer": 2, "pooling": "identity"},
+    {"name": "conv_1", "hidden_layer": 1, "pooling": "adaptive_avg_2x2"},
+    {"name": "conv_2", "hidden_layer": 2, "pooling": "adaptive_avg_2x2"},
     {"name": "embedding", "hidden_layer": 3, "pooling": "identity"},
 )
-_LAYER_ORDER = ("hidden_1", "hidden_2", "embedding")
+_LAYER_ORDER = ("conv_1", "conv_2", "embedding")
 _LAYER_LABELS = {
-    "hidden_1": "Hidden 1",
-    "hidden_2": "Hidden 2",
+    "conv_1": "Conv block 1",
+    "conv_2": "Conv block 2",
     "embedding": "Embedding",
 }
-_LAYER_DIMS = {"hidden_1": 256, "hidden_2": 128, "embedding": 64}
+_LAYER_DIMS = {"conv_1": 32 * 2 * 2, "conv_2": 64 * 2 * 2, "embedding": 128}
 _LAYER_COLORS = {
-    "hidden_1": "#3B82F6",
-    "hidden_2": "#8B5CF6",
+    "conv_1": "#3B82F6",
+    "conv_2": "#8B5CF6",
     "embedding": "#EC4899",
 }
-_LAYER_MARKERS = {"hidden_1": "o", "hidden_2": "s", "embedding": "D"}
-_HIERARCHY_LEVELS = ("parity", "parity + range", "digit")
+_LAYER_MARKERS = {"conv_1": "o", "conv_2": "s", "embedding": "D"}
+_FASHION_CLASS_NAMES = (
+    "T-shirt/top",
+    "Trouser",
+    "Pullover",
+    "Dress",
+    "Coat",
+    "Sandal",
+    "Shirt",
+    "Sneaker",
+    "Bag",
+    "Ankle boot",
+)
+_HIERARCHY_LEVELS = ("department", "garment group", "class")
+_NORMALIZATION_MEAN = 0.2860
+_NORMALIZATION_STD = 0.3530
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
@@ -78,7 +92,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "--data-dir",
         type=Path,
         default=Path("examples/data"),
-        help="Directory used by torchvision for the MNIST download/cache.",
+        help="Directory used by torchvision for the Fashion-MNIST download/cache.",
     )
     parser.add_argument(
         "--figure-dir",
@@ -89,7 +103,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     parser.add_argument(
         "--no-download",
         action="store_true",
-        help="Require MNIST to already exist under --data-dir.",
+        help="Require Fashion-MNIST to already exist under --data-dir.",
     )
     args = parser.parse_args(argv)
     _validate_args(args, parser)
@@ -100,7 +114,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import torch
-        from torchvision.datasets import MNIST
+        from torchvision.datasets import FashionMNIST
     except ImportError as exc:
         print(exc)
         print("Install the visual example dependencies with: poetry install -E visuals")
@@ -110,8 +124,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     np.random.seed(args.seed)
     torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
 
-    train_x, train_y, validation_x, validation_y = _load_mnist(
-        MNIST,
+    train_x, train_y, validation_x, validation_y = _load_fashion_mnist(
+        FashionMNIST,
         data_dir=args.data_dir,
         train_size=args.train_size,
         validation_size=args.validation_size,
@@ -120,7 +134,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     validation_dataset = _validation_dataset(validation_x, validation_y, args.seed)
     model = _build_model(torch)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0015)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.0001)
     loss_fn = torch.nn.CrossEntropyLoss()
     extractor = _multi_output_extractor(model, torch, args.seed)
     scoring_config = _scoring_config(args.seed)
@@ -186,7 +200,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     figure_dir = args.figure_dir or output_dir
     figure_dir.mkdir(parents=True, exist_ok=True)
     history = monitor.history.to_dataframe()
-    history.to_csv(output_dir / "mnist_representation_history.csv", index=False)
+    history.to_csv(output_dir / "fashion_mnist_representation_history.csv", index=False)
 
     final_outputs = {
         item.name: item.embeddings for item in extractor.transform_many(validation_x)
@@ -196,7 +210,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         validation_y,
         scoring_config,
     )
-    compression_result.save_json(str(output_dir / "mnist_compression_frontier.json"))
+    compression_result.save_json(
+        str(output_dir / "fashion_mnist_compression_frontier.json")
+    )
     trained_hierarchy_result = _hierarchy_benchmark(
         validation_dataset,
         extractor,
@@ -204,10 +220,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         batch_size=args.embedding_batch_size,
     )
     initial_hierarchy_result.save_json(
-        str(output_dir / "mnist_hierarchy_layers_initial.json")
+        str(output_dir / "fashion_mnist_hierarchy_layers_initial.json")
     )
     trained_hierarchy_result.save_json(
-        str(output_dir / "mnist_hierarchy_layers_trained.json")
+        str(output_dir / "fashion_mnist_hierarchy_layers_trained.json")
     )
 
     monitoring_paths = _plot_monitoring(history, figure_dir, plt)
@@ -229,7 +245,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         .dropna()
         .iloc[-1]
     )
-    print(f"Final MNIST validation accuracy: {final_accuracy:.3f}")
+    print(f"Final Fashion-MNIST validation accuracy: {final_accuracy:.3f}")
     for path in (*monitoring_paths, *compression_paths, *hierarchy_paths):
         print(f"Wrote {path}")
     print(f"Metrics written to {output_dir}")
@@ -249,7 +265,7 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
             parser.error(f"--{name.replace('_', '-')} must be >= 1")
 
 
-def _load_mnist(
+def _load_fashion_mnist(
     dataset_class: Any,
     *,
     data_dir: Path,
@@ -263,7 +279,7 @@ def _load_mnist(
     all_targets = np.asarray(full_dataset.targets, dtype=np.int64)
     if train_size + validation_size > len(all_targets):
         raise ValueError(
-            "Requested MNIST training and validation subsets exceed the available "
+            "Requested Fashion-MNIST training and validation subsets exceed the available "
             f"training split; got train_size={train_size}, "
             f"validation_size={validation_size}."
         )
@@ -277,8 +293,8 @@ def _load_mnist(
         seed,
     )
     train_indices = remaining_indices[relative_train_indices]
-    train_x = _normalize_mnist(all_values[train_indices])
-    validation_x = _normalize_mnist(all_values[validation_indices])
+    train_x = _normalize_fashion_mnist(all_values[train_indices])
+    validation_x = _normalize_fashion_mnist(all_values[validation_indices])
     return (
         train_x,
         all_targets[train_indices],
@@ -302,9 +318,12 @@ def _stratified_indices(labels: np.ndarray, size: int, seed: int) -> np.ndarray:
     return np.asarray(selected, dtype=np.int64)[rng.permutation(size)]
 
 
-def _normalize_mnist(values: np.ndarray) -> np.ndarray:
+def _normalize_fashion_mnist(values: np.ndarray) -> np.ndarray:
     flattened = np.asarray(values, dtype=np.float32).reshape(len(values), -1) / 255.0
-    return ((flattened - 0.1307) / 0.3081).astype(np.float32, copy=False)
+    return ((flattened - _NORMALIZATION_MEAN) / _NORMALIZATION_STD).astype(
+        np.float32,
+        copy=False,
+    )
 
 
 def _validation_dataset(
@@ -313,23 +332,26 @@ def _validation_dataset(
     seed: int,
 ) -> BenchmarkDataset:
     identity = DatasetIdentity.from_manifest(
-        "torchvision-mnist-validation",
+        "torchvision-fashion-mnist-validation",
         {
             "source_split": "train",
             "role": "validation",
             "subset": "stratified",
             "sample_count": int(len(labels)),
             "random_state": int(seed + 1),
-            "normalization": {"mean": 0.1307, "std": 0.3081},
+            "normalization": {
+                "mean": _NORMALIZATION_MEAN,
+                "std": _NORMALIZATION_STD,
+            },
         },
     )
     dataset = BenchmarkDataset.from_arrays(
         values,
-        labels.astype(str),
+        np.asarray([_FASHION_CLASS_NAMES[int(label)] for label in labels]),
         modality="image",
         metadata={
-            "example": "mnist_visual_suite",
-            "dataset_source": "torchvision.datasets.MNIST",
+            "example": "fashion_mnist_visual_suite",
+            "dataset_source": "torchvision.datasets.FashionMNIST",
             "split": "fixed_held_out_validation",
         },
         identity=identity,
@@ -344,40 +366,64 @@ def _hierarchy_paths(labels: Iterable[int]) -> list[Tuple[str, str, str]]:
     paths = []
     for raw_label in labels:
         label = int(raw_label)
-        parity = "even" if label % 2 == 0 else "odd"
-        value_range = "0-4" if label < 5 else "5-9"
-        paths.append((parity, f"{parity}, {value_range}", str(label)))
+        class_name = _FASHION_CLASS_NAMES[label]
+        if label in {0, 1, 2, 3, 4, 6}:
+            department = "apparel"
+            group = "upper garment" if label in {0, 2, 4, 6} else "lower/full-body"
+        elif label in {5, 7, 9}:
+            department = "footwear"
+            group = "open footwear" if label == 5 else "closed footwear"
+        else:
+            department = "accessory"
+            group = "bag"
+        paths.append((department, group, class_name))
     return paths
 
 
 def _build_model(torch: Any) -> Any:
-    class MNISTClassifier(torch.nn.Module):
+    class FashionMNISTClassifier(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.hidden_1 = torch.nn.Linear(28 * 28, _LAYER_DIMS["hidden_1"])
-            self.hidden_2 = torch.nn.Linear(
-                _LAYER_DIMS["hidden_1"],
-                _LAYER_DIMS["hidden_2"],
+            self.conv_1 = torch.nn.Sequential(
+                torch.nn.Conv2d(1, 32, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.Conv2d(32, 32, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.MaxPool2d(kernel_size=2),
             )
-            self.embedding = torch.nn.Linear(
-                _LAYER_DIMS["hidden_2"],
-                _LAYER_DIMS["embedding"],
+            self.conv_2 = torch.nn.Sequential(
+                torch.nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.Conv2d(64, 64, kernel_size=3, padding=1),
+                torch.nn.ReLU(),
+                torch.nn.MaxPool2d(kernel_size=2),
             )
+            self.embedding = torch.nn.Linear(64 * 7 * 7, _LAYER_DIMS["embedding"])
+            self.dropout = torch.nn.Dropout(p=0.15)
             self.classifier = torch.nn.Linear(_LAYER_DIMS["embedding"], 10)
 
         def forward(self, values: Any) -> Dict[str, Any]:
-            hidden_1 = torch.relu(self.hidden_1(values))
-            hidden_2 = torch.relu(self.hidden_2(hidden_1))
-            embedding = torch.relu(self.embedding(hidden_2))
-            logits = self.classifier(embedding)
+            images = values.reshape(-1, 1, 28, 28)
+            conv_1_maps = self.conv_1(images)
+            conv_2_maps = self.conv_2(conv_1_maps)
+            conv_1 = torch.nn.functional.adaptive_avg_pool2d(
+                conv_1_maps,
+                output_size=(2, 2),
+            ).flatten(start_dim=1)
+            conv_2 = torch.nn.functional.adaptive_avg_pool2d(
+                conv_2_maps,
+                output_size=(2, 2),
+            ).flatten(start_dim=1)
+            embedding = torch.relu(self.embedding(conv_2_maps.flatten(start_dim=1)))
+            logits = self.classifier(self.dropout(embedding))
             return {
-                "hidden_1": hidden_1,
-                "hidden_2": hidden_2,
+                "conv_1": conv_1,
+                "conv_2": conv_2,
                 "embedding": embedding,
                 "logits": logits,
             }
 
-    return MNISTClassifier()
+    return FashionMNISTClassifier()
 
 
 def _multi_output_extractor(model: Any, torch: Any, seed: int) -> TorchExtractor:
@@ -388,7 +434,7 @@ def _multi_output_extractor(model: Any, torch: Any, seed: int) -> TorchExtractor
         return {name: raw_output[name] for name in _LAYER_ORDER}
 
     return TorchExtractor(
-        name="mnist_mlp",
+        name="fashion_mnist_cnn",
         model=model,
         collate_fn=collate_fn,
         output_fn=output_fn,
@@ -396,8 +442,14 @@ def _multi_output_extractor(model: Any, torch: Any, seed: int) -> TorchExtractor
         device="cpu",
         modality="image",
         recipe_data={
-            "example": "mnist_visual_suite",
-            "architecture": [784, 256, 128, 64, 10],
+            "example": "fashion_mnist_visual_suite",
+            "architecture": {
+                "input": [1, 28, 28],
+                "conv_1": [32, 14, 14],
+                "conv_2": [64, 7, 7],
+                "embedding": 128,
+                "classes": 10,
+            },
             "training_seed": seed,
         },
     )
@@ -478,9 +530,9 @@ def _compression_benchmark(
 ) -> Any:
     dataset = BenchmarkDataset.from_embeddings(
         embeddings,
-        labels.astype(str),
+        np.asarray([_FASHION_CLASS_NAMES[int(label)] for label in labels]),
         metadata={
-            "example": "mnist_visual_suite_compression",
+            "example": "fashion_mnist_visual_suite_compression",
             "source_output": "embedding",
         },
         identity=DatasetIdentity.from_content(),
@@ -493,7 +545,7 @@ def _compression_benchmark(
             n_components=dimension,
             random_state=42,
         )
-        for dimension in (2, 4, 8, 16, 32)
+        for dimension in (2, 4, 8, 16, 32, 64)
     )
     compression_configs.extend(
         [
@@ -511,7 +563,7 @@ def _compression_benchmark(
     )
     return Benchmark(
         dataset,
-        [PrecomputedExtractor("mnist_penultimate_embedding")],
+        [PrecomputedExtractor("fashion_mnist_penultimate_embedding")],
         compression_configs=compression_configs,
         scoring_config=scoring_config,
         stability_config=StabilityConfig(enabled=False),
@@ -583,7 +635,7 @@ def _plot_monitoring(history: Any, figure_dir: Path, plt: Any) -> Tuple[Path, Pa
     accuracy_axis = figure.add_subplot(grid[1, 1])
     figure.subplots_adjust(left=0.055, right=0.96, top=0.86, bottom=0.14)
     figure.suptitle(
-        "Representation quality changes across mini-batch MNIST training",
+        "Representation quality changes across mini-batch Fashion-MNIST training",
         fontsize=18,
         fontweight="semibold",
         x=0.055,
@@ -603,7 +655,10 @@ def _plot_monitoring(history: Any, figure_dir: Path, plt: Any) -> Tuple[Path, Pa
         )
     curve_axis.set_title("OverlapIndex on held-out validation data", loc="left", pad=12)
     curve_axis.set_ylabel("OverlapIndex macro score")
-    curve_axis.set_ylim(max(0.0, float(pivot.min().min()) - 0.08), 1.01)
+    curve_axis.set_ylim(
+        max(0.0, float(pivot.min().min()) - 0.08),
+        min(1.01, float(pivot.max().max()) + 0.08),
+    )
     curve_axis.set_xlim(float(pivot.index.min()), float(pivot.index.max()))
     curve_axis.grid(axis="y", color="#CBD5E1", linewidth=0.8, alpha=0.7)
     curve_axis.legend(frameon=False, loc="lower right", ncol=3)
@@ -627,22 +682,28 @@ def _plot_monitoring(history: Any, figure_dir: Path, plt: Any) -> Tuple[Path, Pa
             axis.axvline(boundary, color="#94A3B8", linestyle=":", linewidth=1.3)
         curve_axis.text(
             boundary,
-            0.995,
+            0.97,
             f" epoch {boundary_index} ",
             color="#64748B",
             fontsize=9,
             ha="right",
             va="top",
+            transform=curve_axis.get_xaxis_transform(),
         )
     figure.text(
         0.055,
         0.055,
-        "Fixed held-out MNIST validation set  •  optimizer-step checkpoints  •  "
+        "Fixed held-out Fashion-MNIST validation set  •  optimizer-step checkpoints  •  "
         "Separatix and stability repeats disabled",
         color="#475569",
         fontsize=10,
     )
-    return _save_figure(figure, figure_dir, "mnist-representation-monitoring", plt)
+    return _save_figure(
+        figure,
+        figure_dir,
+        "fashion-mnist-representation-monitoring",
+        plt,
+    )
 
 
 def _draw_architecture(axis: Any, final_scores: Dict[str, float], plt: Any) -> None:
@@ -653,11 +714,21 @@ def _draw_architecture(axis: Any, final_scores: Dict[str, float], plt: Any) -> N
     axis.set_ylim(0, 1)
     axis.axis("off")
     blocks = (
-        ("input", "Input pixels", "784", None),
-        ("hidden_1", "Hidden 1", "256", final_scores["hidden_1"]),
-        ("hidden_2", "Hidden 2", "128", final_scores["hidden_2"]),
-        ("embedding", "Embedding", "64", final_scores["embedding"]),
-        ("output", "Classifier", "10", None),
+        ("input", "Input image", "1 × 28 × 28 pixels", None),
+        (
+            "conv_1",
+            "Conv block 1",
+            "32 × 14 × 14 → pooled 128d",
+            final_scores["conv_1"],
+        ),
+        (
+            "conv_2",
+            "Conv block 2",
+            "64 × 7 × 7 → pooled 256d",
+            final_scores["conv_2"],
+        ),
+        ("embedding", "Embedding", "128 dimensions", final_scores["embedding"]),
+        ("output", "Classifier", "10 classes", None),
     )
     y_positions = np.linspace(0.88, 0.10, len(blocks))
     for index, ((key, label, width, score), y_position) in enumerate(
@@ -685,7 +756,7 @@ def _draw_architecture(axis: Any, final_scores: Dict[str, float], plt: Any) -> N
         axis.text(
             0.17,
             y_position - 0.028,
-            f"{width} units",
+            width,
             color=text_color,
             fontsize=9,
             va="center",
@@ -778,18 +849,19 @@ def _plot_compression_frontier(
     axis.set_xlabel("Encoded embedding bytes per sample (log₂ scale)")
     axis.set_ylabel("OverlapIndex macro score")
     minimum = min(point["score"] for point in points)
-    axis.set_ylim(max(0.0, minimum - 0.06), 1.01)
+    maximum = max(point["score"] for point in points)
+    axis.set_ylim(max(0.0, minimum - 0.06), min(1.01, maximum + 0.08))
     axis.grid(color="#CBD5E1", linewidth=0.8, alpha=0.7)
     axis.legend(frameon=False, loc="lower right", ncol=2)
     figure.text(
         0.09,
         0.06,
-        "Same trained 64-dimensional MNIST embedding  •  lower storage is better  •  "
+        "Same trained 128-dimensional Fashion-MNIST embedding  •  lower storage is better  •  "
         "higher overlap is better",
         color="#475569",
         fontsize=10,
     )
-    return _save_figure(figure, figure_dir, "mnist-compression-frontier", plt)
+    return _save_figure(figure, figure_dir, "fashion-mnist-compression-frontier", plt)
 
 
 def _compression_points(result: Any, n_samples: int) -> list[Dict[str, Any]]:
@@ -872,7 +944,7 @@ def _plot_hierarchy_heatmap(
         axis.set_title(title, pad=10)
         axis.set_xticks(
             range(len(_HIERARCHY_LEVELS)),
-            labels=("Parity\n2 classes", "Parity + range\n4 classes", "Digit\n10 classes"),
+            labels=("Department\n3 classes", "Garment group\n5 classes", "Class\n10 classes"),
         )
         axis.set_yticks(
             range(len(_LAYER_ORDER)),
@@ -898,11 +970,11 @@ def _plot_hierarchy_heatmap(
     figure.text(
         0.14,
         0.07,
-        "Nested views: even/odd → parity-specific 0–4 or 5–9 range → exact digit",
+        "Nested views: apparel/footwear/accessory → garment group → exact class",
         color="#475569",
         fontsize=10,
     )
-    return _save_figure(figure, figure_dir, "mnist-hierarchy-heatmap", plt)
+    return _save_figure(figure, figure_dir, "fashion-mnist-hierarchy-heatmap", plt)
 
 
 def _hierarchy_matrix(result: Any) -> np.ndarray:
