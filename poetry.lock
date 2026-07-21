@@ -6086,14 +6086,14 @@ tiering-service = ["aiosqlite", "fire", "greenlet", "grpcio-tools (>=1.80.0)", "
 
 [[package]]
 name = "overlapindex"
-version = "0.1.3a4"
+version = "0.1.3"
 description = "OverlapIndex (OI), an Incremental Cluster Validity index for identifying the degree of overlap of data classes."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "overlapindex-0.1.3a4-py3-none-any.whl", hash = "sha256:c5ff407bbd9dce3f64f615803e317f0a0bcdb749f82e6dbb9504e1c7f066ba41"},
-    {file = "overlapindex-0.1.3a4.tar.gz", hash = "sha256:a3c46257fbe04ba7dc9fcacd0682d926115308d7958f98328424371a749f3106"},
+    {file = "overlapindex-0.1.3-py3-none-any.whl", hash = "sha256:9c49461842c565dc36bd616dd766f315441ca139717ef3890b5270fc07b3ab88"},
+    {file = "overlapindex-0.1.3.tar.gz", hash = "sha256:d8314ded5b0522f5cea67ca38994b9673bea3a3bea5ac674b9939c5b292a5102"},
 ]
 
 [package.dependencies]
@@ -8738,14 +8738,14 @@ train = ["accelerate (>=0.20.3)", "datasets"]
 
 [[package]]
 name = "separatix"
-version = "0.1.0a5"
+version = "0.1.0"
 description = "Diagnostic profiling of supervised feature spaces before model training."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "separatix-0.1.0a5-py3-none-any.whl", hash = "sha256:9d73844f75d4e6416c2c643b43a9ad18857dd284ab0e3f4484c7b659088d7ddd"},
-    {file = "separatix-0.1.0a5.tar.gz", hash = "sha256:e43ed6cd96b377625069ffb87aca9292ff140b52dee30d5c9598eb3c0362ce9d"},
+    {file = "separatix-0.1.0-py3-none-any.whl", hash = "sha256:a15ed5b16ecb971117d0eeae8872ce0fb5a5531a626d2e2c1e241306537eb8b4"},
+    {file = "separatix-0.1.0.tar.gz", hash = "sha256:4e26ae29657767733622f880d42bb146c2336bf4967c3faffcca128e947f55c4"},
 ]
 
 [package.dependencies]
@@ -11331,4 +11331,4 @@ visuals = ["matplotlib", "torch", "torchvision"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-content-hash = "bc804ebbc7729b3f93184a20962caad1aea1c31d906fffa5a9bf91301f0c9b03"
+content-hash = "d1c3ad5d4131977a18336d305d836e550c0a924caa95bf8eb4b354f026ba071a"
