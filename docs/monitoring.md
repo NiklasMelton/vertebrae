@@ -214,3 +214,6 @@ convolutional representations and its 128-dimensional embedding from
 initialization through three epochs at optimizer-step cadence, evaluates only against
 a stratified held-out validation set, disables Separatix and stability repeats, and
 renders the network architecture beside the layer-wise OverlapIndex trajectories.
+The upstream [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) and
+[Separatix](https://github.com/NiklasMelton/Separatix) repositories also have
+their own visual examples that users may find informative.

@@ -35,6 +35,26 @@ through classification, multi-label, regression, and stability scoring, and when
 passed into Separatix. Multi-label targets may also be supplied as sparse binary
 indicator matrices.
 
+## Evaluation flow
+
+The benchmark protocols share extraction, artifact, compression, and reporting
+infrastructure while keeping their scoring semantics separate.
+
+```mermaid
+flowchart TB
+    data["Dataset and protocol metadata"] --> extract["Extract or load embeddings<br/>single or multi-output; row-aligned when needed"]
+    extract --> artifacts["Reusable raw artifacts<br/>and optional compression variants"]
+    artifacts --> protocol{"Configured evaluation protocol"}
+
+    protocol --> labeled["Labeled embeddings<br/>OverlapIndex, stability, gated Separatix"]
+    protocol --> retrieval["Exact query-gallery retrieval<br/>NDCG, recall, precision, mAP, MRR"]
+    protocol --> zero_shot["Fixed-prompt zero-shot<br/>top-k classification and sample overlap"]
+
+    labeled --> results["Practical results<br/>Python objects, DataFrames, JSON, Markdown"]
+    retrieval --> results
+    zero_shot --> results
+```
+
 ## Installation
 
 ```bash
@@ -709,6 +729,19 @@ and [the distributed-readiness guide](https://github.com/NiklasMelton/vertebrae/
 Dense segmentation evaluation scores spatial feature cells after they are aligned
 to semantic mask labels. It measures representation organization for retained
 tokens; it is not an IoU, mask-accuracy, or boundary-quality metric.
+
+Both dense spatial outputs and other structured model outputs become ordinary
+labeled embedding rows before scoring:
+
+```mermaid
+flowchart TB
+    spatial_source["Spatial path<br/>image, semantic mask, declared feature grid"] --> spatial_align["Assign cells by mask coverage<br/>filter ambiguity and sample deterministically"]
+    structured_source["Structured path<br/>parent sample, unit annotations, emitted rows"] --> structured_align["Select and align emitted rows<br/>to declared unit annotations"]
+
+    spatial_align --> rows["Materialized BenchmarkDataset rows<br/>embeddings, targets, parent groups, provenance"]
+    structured_align --> rows
+    rows --> scoring["Standard labeled-embedding scoring<br/>OverlapIndex, stability, gated Separatix"]
+```
 
 ```python
 from vertebrae import (
