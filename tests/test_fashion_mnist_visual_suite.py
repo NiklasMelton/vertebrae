@@ -115,8 +115,7 @@ def test_fashion_mnist_visual_suite_holds_validation_rows_out_before_training(tm
 
     def restore_ids(values):
         return np.rint(
-            (values[:, 0] * module._NORMALIZATION_STD + module._NORMALIZATION_MEAN)
-            * 255.0
+            (values[:, 0] * module._NORMALIZATION_STD + module._NORMALIZATION_MEAN) * 255.0
         ).astype(int)
 
     assert set(restore_ids(train_x)).isdisjoint(set(restore_ids(validation_x)))

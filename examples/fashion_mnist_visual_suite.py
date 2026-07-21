@@ -180,10 +180,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             torch=torch,
         ):
             global_step += 1
-            if (
-                global_step % args.monitor_every_batches != 0
-                and batch_number != total_batches
-            ):
+            if global_step % args.monitor_every_batches != 0 and batch_number != total_batches:
                 continue
             validation_accuracy = _accuracy(model, validation_x, validation_y, torch)
             monitor.evaluate(
@@ -202,17 +199,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     history = monitor.history.to_dataframe()
     history.to_csv(output_dir / "fashion_mnist_representation_history.csv", index=False)
 
-    final_outputs = {
-        item.name: item.embeddings for item in extractor.transform_many(validation_x)
-    }
+    final_outputs = {item.name: item.embeddings for item in extractor.transform_many(validation_x)}
     compression_result = _compression_benchmark(
         final_outputs["embedding"],
         validation_y,
         scoring_config,
     )
-    compression_result.save_json(
-        str(output_dir / "fashion_mnist_compression_frontier.json")
-    )
+    compression_result.save_json(str(output_dir / "fashion_mnist_compression_frontier.json"))
     trained_hierarchy_result = _hierarchy_benchmark(
         validation_dataset,
         extractor,
@@ -241,9 +234,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
 
     final_accuracy = float(
-        history.sort_values("global_step")["context_metadata.validation_accuracy"]
-        .dropna()
-        .iloc[-1]
+        history.sort_values("global_step")["context_metadata.validation_accuracy"].dropna().iloc[-1]
     )
     print(f"Final Fashion-MNIST validation accuracy: {final_accuracy:.3f}")
     for path in (*monitoring_paths, *compression_paths, *hierarchy_paths):
@@ -731,9 +722,7 @@ def _draw_architecture(axis: Any, final_scores: Dict[str, float], plt: Any) -> N
         ("output", "Classifier", "10 classes", None),
     )
     y_positions = np.linspace(0.88, 0.10, len(blocks))
-    for index, ((key, label, width, score), y_position) in enumerate(
-        zip(blocks, y_positions)
-    ):
+    for index, ((key, label, width, score), y_position) in enumerate(zip(blocks, y_positions)):
         color = _LAYER_COLORS.get(key, "#E2E8F0")
         text_color = "white" if key in _LAYER_COLORS else "#0F172A"
         patch = FancyBboxPatch(
