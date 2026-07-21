@@ -50,6 +50,10 @@ config = OverlapScoringConfig(
 )
 ```
 
+Classification and multi-label OverlapIndex scores are bounded to `[0, 1]`:
+`1.0` indicates perfect class separation and `0.0` indicates perfect class
+overlap.
+
 Key fields:
 
 - `k`: an integer, a class-to-`k` mapping, or `"auto"`.
@@ -93,9 +97,10 @@ config = ContinuousOverlapScoringConfig(
 ```
 
 Regression scoring keeps the MiniBatchKMeans backend fixed internally and reports
-`OverlapScoreResult.score` as the primary continuous overlap score. Values near
-`0.5` are null-like, values above `0.5` indicate useful structure, and values
-below `0.5` indicate harmful overlap.
+`OverlapScoreResult.score` as the primary continuous overlap score. The score is
+always bounded to `[0, 1]`: `1.0` indicates no observed harmful continuous-target
+overlap, while `0.0` is the permutation-equivalent null endpoint. The unbounded
+loss comparison remains available through `OverlapScoreResult.loss_ratio`.
 
 ## Automatic k resolution
 

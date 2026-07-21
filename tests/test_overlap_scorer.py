@@ -169,9 +169,12 @@ def test_overlap_scorer_supports_explicit_regression_targets(fake_overlapindex):
     assert result.actual_loss == 0.12
     assert result.null_loss == 0.24
     assert result.loss_ratio == 0.50
+    assert result.metadata["continuous_null_reference"] == 0.0
+    assert "clip" not in result.metadata
     assert fake_overlapindex.continuous_calls[-1]["model_type"] == "MiniBatchKMeans"
     assert fake_overlapindex.continuous_calls[-1]["kmeans_k"] == 3
     assert fake_overlapindex.continuous_calls[-1]["random_state"] == 11
+    assert "clip" not in fake_overlapindex.continuous_calls[-1]
 
 
 @pytest.mark.parametrize(

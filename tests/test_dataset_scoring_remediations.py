@@ -27,7 +27,10 @@ from vertebrae.config import (
     ZeroShotConfig,
 )
 from vertebrae.reports.markdown_report import render_markdown_report
-from vertebrae.reports.recommendations import recommendations_for_benchmark
+from vertebrae.reports.recommendations import (
+    recommendation_for_extractor,
+    recommendations_for_benchmark,
+)
 from vertebrae.results import BenchmarkResult, ExtractorResult
 from vertebrae.scoring.separatix import summarize_probe_diagnostics
 from vertebrae.utils.labels import normalize_level_names, resolve_hierarchy_level
@@ -599,6 +602,39 @@ def test_invalid_aggregates_are_not_ranked_and_markdown_escapes_dynamic_values()
     assert no_valid.recommendations == [
         "Ranking unavailable because no valid aggregate remains under this protocol."
     ]
+
+
+@pytest.mark.parametrize(
+    ("score", "stability", "expected"),
+    [
+        (0.0, None, "continuous_overlap_null_like"),
+        (0.4, None, "continuous_structure_above_null"),
+        (
+            0.4,
+            {"summary": {"lower": 0.0, "upper": 0.6}},
+            "continuous_overlap_null_indeterminate",
+        ),
+        (
+            0.4,
+            {"summary": {"lower": 0.1, "upper": 0.6}},
+            "continuous_structure_above_null",
+        ),
+    ],
+)
+def test_regression_recommendations_use_zero_as_the_continuous_null_endpoint(
+    score,
+    stability,
+    expected,
+):
+    assert (
+        recommendation_for_extractor(
+            score,
+            stability,
+            weakest_class_score=None,
+            target_type="regression",
+        )
+        == expected
+    )
 
 
 def test_lower_is_better_probe_metrics_select_minimum_and_positive_improvement():
