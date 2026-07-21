@@ -7,16 +7,17 @@ from the repository README, existing Markdown guides, and generated API referenc
 :maxdepth: 2
 :caption: Guides
 
-overview
-datasets
-segmentation
-feature_extractors
-compression
-scoring
-retrieval
-zero_shot
-results_and_reports
-examples
-distributed_readiness
-api/vertebrae/index
+Project Overview <overview>
+Datasets <datasets>
+Dense Segmentation <segmentation>
+Feature Extractors <feature_extractors>
+Representation Monitoring <monitoring>
+Embedding Compression <compression>
+Scoring <scoring>
+Retrieval and Matching <retrieval>
+Zero-shot Semantic Alignment <zero_shot>
+Results and Reports <results_and_reports>
+Runnable Examples <examples>
+Distributed Execution <distributed_readiness>
+API Reference <api/vertebrae/index>
 ```

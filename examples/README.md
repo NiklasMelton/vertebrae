@@ -20,10 +20,13 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/sklearn_wine_pipel
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/multi_extractor_comparison.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/dispatched_benchmark.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/cache_reuse.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/zero_shot_callable.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_outputs.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_depth.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_slots.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
@@ -54,6 +57,8 @@ Each script writes reports to `examples/output/`.
 - `cache_reuse.py`: show how an explicit callable `cache_identity` enables safe
   embedding reuse across repeated runs. Callables without a provably portable
   identity still run but deliberately bypass the reusable cache.
+- `zero_shot_callable.py`: compare a synthetic frozen image/text-aligned adapter
+  with an explicit prompt protocol, without downloads or a learned head.
 - `structured_outputs.py`: materialize OCR/layout regions, ASR tokens, and pose
   keypoints directly from native structured extractors, then score them as
   representation-efficacy workflows rather than IoU, WER/CER, or OKS metrics. The
@@ -67,6 +72,18 @@ Each script writes reports to `examples/output/`.
 - `torch_local_model.py`: demonstrate `TorchExtractor` with content-digested checkpoint
   provenance, inference-mode/eval defaults, and user-supplied
   `collate_fn` / `output_fn`.
+- `representation_monitoring.py`: train a small local Torch network, monitor two
+  explicitly named representations after every epoch, persist summary history and
+  caller-managed training state, resume them together with `--resume`, and pivot the
+  final DataFrame by epoch and hidden layer.
+- `fashion_mnist_visual_suite.py`: train a compact two-block PyTorch CNN on a deterministic
+  Fashion-MNIST subset with a fixed held-out validation set, monitor hidden
+  pooled convolutional representations and a 128-dimensional embedding every two
+  optimizer steps, compare compression variants, evaluate nested product-category
+  views, and generate the README's representation-monitoring, compression-frontier,
+  and layer-by-hierarchy figures.
+  The first run downloads Fashion-MNIST through torchvision; install all required
+  optional dependencies with `poetry install -E visuals`.
 - `keras_local_model.py`: demonstrate `KerasExtractor` with content-digested provenance
   for a locally saved Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export

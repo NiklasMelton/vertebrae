@@ -488,12 +488,12 @@ footprint is admitted before allocation; disk spill cannot bypass that check. Di
 spill accounts both staged and final embeddings and metadata against one shared peak
 budget and fails before retaining or allocating a row that would exceed it.
 
-### Alpha migration note
+### Unit ID contract
 
 Materialized `unit_ids` are now generated global identifiers rather than the
 annotation values copied verbatim. Code that needs the caller-supplied ID
 should read `local_unit_id` from unit provenance. This direct contract change
-follows the package's pre-release compatibility policy.
+keeps generated identifiers globally unique while preserving caller-supplied IDs.
 
 ## Validation rules
 
@@ -682,12 +682,14 @@ Precomputed embeddings are the simplest path and the best starting point for new
 benchmarks. `BenchmarkDataset.from_embeddings(...)` accepts:
 
 - dense NumPy-like matrices, or
-- scipy sparse matrices.
+- scipy sparse matrices or sparse arrays.
 
-Sparse embeddings are preserved as sparse artifacts until the scoring boundary.
-Because the current metric backend is MiniBatchKMeans-backed OverlapIndex, sparse
-inputs are densified only inside the internal scorer, with a configurable memory
-guard.
+Sparse embeddings are normalized to CSR and preserved through extraction, artifacts,
+sparse-compatible compression, overlap scoring, stability, and the Separatix
+boundary. Separatix may perform bounded dense-only diagnostics according to its
+configured policy. Multi-label targets may also be provided as dense or scipy sparse
+binary indicator matrices; sparse indicators are validated without constructing a
+dense target matrix.
 
 ## Practical guidance
 

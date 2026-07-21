@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import sys
+from functools import partial
 from pathlib import Path
+
+from pygments.lexers import TextLexer
+from sphinx.highlighting import lexer_classes
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -26,10 +30,16 @@ extensions = [
 
 templates_path = []
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+# README.md is included verbatim in the overview. GitHub renders its native
+# ```mermaid fences; Sphinx only needs a plain-text fallback for those blocks.
+lexer_classes["mermaid"] = partial(TextLexer, stripnl=False)
+
 suppress_warnings = ["autoapi.python_import_resolution", "ref.python"]
 
 html_theme = "sphinx_rtd_theme"
-html_static_path = []
+html_logo = "../img/vertebrae_logo.png"
+html_static_path = ["_static"]
+html_css_files = ["logo.css"]
 
 source_suffix = {
     ".md": "markdown",

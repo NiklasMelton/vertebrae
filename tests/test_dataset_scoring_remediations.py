@@ -533,7 +533,7 @@ def test_semantic_exclusions_distinguish_typed_labels_and_multilabel_columns():
         scoring_config=multilabel_benchmark.scoring_config,
         label_names=multilabel.metadata["label_names"],
     )
-    assert diagnostic_labels.shape == (6, 2)
+    assert diagnostic_labels.shape == (5, 2)
     assert diagnostic_names == ("red", "sweet")
 
 

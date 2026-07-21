@@ -1,7 +1,7 @@
 """Optional Torch module extractor for local user-supplied models."""
 
 from contextlib import nullcontext
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -12,12 +12,17 @@ from vertebrae.extractors._identity import (
 )
 from vertebrae.extractors._outputs import validate_named_output_mapping
 from vertebrae.extractors._utils import (
+    materialize_named_outputs,
     optional_dependency_versions,
+    resolve_output_specs,
     snapshot_mapping,
+    spec_to_recipe,
     validate_bool,
     validate_nonblank_string,
     validate_optional_nonblank_string,
+    validate_ordinary_output_projection,
 )
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.spatial import (
     SpatialEmbeddingOutput,
     SpatialOutputSpec,
@@ -28,7 +33,6 @@ from vertebrae.extractors.structured import (
     StructuredOutputSpec,
     _per_parent_structured_values,
 )
-from vertebrae.utils.validation import ensure_numeric_matrix
 
 
 class TorchExtractor:
@@ -39,6 +43,7 @@ class TorchExtractor:
         model: A locally loaded ``torch.nn.Module`` or compatible callable object.
         collate_fn: Callable that converts a batch of raw inputs into model inputs.
         output_fn: Optional callable that converts raw model output into embeddings.
+        outputs: Optional named ordinary embedding-output declarations.
         device: Optional device string passed to ``model.to(...)`` and batch items.
         modality: Input modality metadata.
         extractor_type: Extractor family metadata.
@@ -55,6 +60,7 @@ class TorchExtractor:
         model: Any,
         collate_fn: Callable[[Any], Any],
         output_fn: Optional[Callable[[Any], Any]] = None,
+        outputs: Optional[Sequence[Dict[str, Any]]] = None,
         device: Optional[str] = None,
         modality: str = "unknown",
         extractor_type: str = "custom_torch",
@@ -96,6 +102,7 @@ class TorchExtractor:
         self.model = model
         self.collate_fn = collate_fn
         self.output_fn = output_fn
+        self._output_specs = resolve_output_specs(outputs, implicit_flatten=False)
         self.device = validate_optional_nonblank_string(device, "device")
         self.modality = validate_nonblank_string(modality, "modality")
         self.extractor_type = validate_nonblank_string(extractor_type, "extractor_type")
@@ -146,18 +153,41 @@ class TorchExtractor:
     def transform(self, X: Any) -> np.ndarray:
         """Apply the collate function, run the model, and validate embeddings."""
 
+        if len(self._output_specs) != 1:
+            raise ValueError(
+                "TorchExtractor.transform() is only available when exactly one output "
+                "is configured. Use Benchmark/Evaluator or transform_many()."
+            )
+        outputs = self.transform_many(X)
+        return outputs[0].embeddings
+
+    def output_specs(self) -> List[EmbeddingOutputSpec]:
+        """Return the declared ordinary embedding outputs."""
+
+        return list(self._output_specs)
+
+    def transform_many(self, X: Any) -> List[EmbeddingOutput]:
+        """Apply the model once and materialize every declared embedding output."""
+
         torch_module = self._load_torch()
         self._maybe_move_model(torch_module)
         batch = self.collate_fn(X)
         if self.device is not None and self.move_batch_to_device:
             batch = self._move_to_device(batch, torch_module)
         model_output = self._call_model_for_extraction(batch, torch_module)
-        embeddings = self.output_fn(model_output) if self.output_fn is not None else model_output
-        embeddings = self._tensor_to_numpy(embeddings)
-        return ensure_numeric_matrix(
-            embeddings,
-            f"TorchExtractor '{self.name}' output",
+        projected = self.output_fn(model_output) if self.output_fn is not None else model_output
+        projected = validate_ordinary_output_projection(
+            projected,
+            self._output_specs,
+            f"TorchExtractor '{self.name}'",
+        )
+        return materialize_named_outputs(
+            projected,
+            self._output_specs,
+            owner=f"TorchExtractor '{self.name}'",
             allow_sparse=self.allow_sparse,
+            fallback_output=model_output,
+            allow_1d=False,
         )
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
@@ -244,6 +274,7 @@ class TorchExtractor:
             "model_class": self.model.__class__.__module__ + "." + self.model.__class__.__name__,
             "collate_fn": _callable_name(self.collate_fn),
             "output_fn": _callable_name(self.output_fn) if self.output_fn is not None else None,
+            "outputs": [spec_to_recipe(spec) for spec in self._output_specs],
             "device": self.device,
             "recipe_data": self.recipe_data,
             "allow_sparse": self.allow_sparse,

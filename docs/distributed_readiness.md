@@ -27,8 +27,8 @@ NFKD-normalized lowercase ASCII display form, but identity comes from the full d
 of the exact, unnormalized UTF-8 output name retained in the manifest.
 
 This key layout intentionally does not read pre-layout named-output, structured, or
-segmentation caches. The package is pre-release, so no legacy fallback or migration is
-provided; rerunning materialization creates canonical artifacts. Some human-readable
+segmentation caches. No fallback or migration is provided; rerunning materialization
+creates canonical artifacts. Some human-readable
 namespace prefixes for single-output, retrieval, zero-shot, label, group, scoring, and
 compression artifacts remain familiar, but their authoritative component fingerprints
 use identity schema v2 and therefore intentionally produce new keys.
@@ -397,8 +397,9 @@ requires a complete embedding artifact before scoring.
 Memory admission is handled separately from scheduling. `MemoryConfig` uses `psutil`
 to derive an available-memory budget unless an explicit byte limit is supplied. For
 streaming-safe extractors, the benchmark probes a small first batch, estimates the
-final embedding artifact and dense scoring input, and reuses that probe as the first
-materialized batch when no subsampling is needed. If the full plan would exceed the
+final embedding artifact and its actual dense or sparse scoring representation, and
+reuses that probe as the first materialized batch when no subsampling is needed. If
+the full plan would exceed the
 budget, the local runner records a warning and switches to the largest fitting
 target-preserving subsample: class/label-aware for categorical targets and
 non-constant-target-aware for regression. Result metadata records the original and
@@ -406,6 +407,10 @@ final row counts plus separate manual, automatic, and cumulative subsample rates
 an automatic second stage never overwrites the earlier user-requested stage. This keeps
 single-GPU sequential embedding and CPU-distributed analysis workflows from
 overcommitting memory.
+
+For multi-label overlap scoring, the scoring estimate includes the expected sparse
+row expansion derived from mean label cardinality. Separatix separately enforces its
+configured dense-operation limit and densification policy.
 
 The metric backend remains fixed: all scoring goes through MiniBatchKMeans-backed
 `overlapindex.OverlapIndex` or `overlapindex.ContinuousOverlapIndex` via the

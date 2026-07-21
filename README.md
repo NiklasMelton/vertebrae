@@ -1,17 +1,14 @@
 # Vertebrae
 
-<table>
-  <tr>
-    <td width="100" valign="top">
-      <a href="https://github.com/NiklasMelton/vertebrae">
-        <img
-          src="https://github.com/NiklasMelton/vertebrae/blob/develop/img/vertebrae_logo.png?raw=true"
-          alt="Vertebrae logo"
-          width="140"
-        />
-      </a>
-    </td>
-    <td valign="top">
+<p align="center">
+  <a href="https://github.com/NiklasMelton/vertebrae">
+    <img
+      src="https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/vertebrae_logo.png"
+      alt="Vertebrae logo"
+      height="300"
+    />
+  </a>
+</p>
 
 `vertebrae` is a Python package for evaluating feature extractors and
 transfer-learning backbones on labeled datasets. It supports dense and sparse
@@ -23,17 +20,40 @@ JAX/Flax, tree ensembles, graph models, and hosted embedding APIs. It can also
 evaluate labeled embedding units such as document regions, tokens, frames,
 keypoints, depth cells, and latent slots emitted directly by a model.
 
-The package uses the `overlapindex` library as its primary separation metric and
-adds a `separatix` complexity diagnostic to reports when an evaluated embedding
+The package uses [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) as
+its primary separation metric and adds a
+[Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic to
+reports when an evaluated embedding
 clears a configurable overlap-quality threshold. The full evaluation flow wraps
 those diagnostics with practical dataset handling, named target and hierarchy
 views, caching, memory-aware subsampling, stability analysis, artifact-backed
-execution, custom embedding metrics, and report generation.
+execution, custom embedding metrics, report generation, and repeated monitoring
+of live representations during training.
 
-</tr>
-</table>
+SciPy sparse matrices and sparse arrays are normalized to CSR and remain sparse
+through classification, multi-label, regression, and stability scoring, and when
+passed into Separatix. Multi-label targets may also be supplied as sparse binary
+indicator matrices.
 
+## Evaluation flow
 
+The benchmark protocols share extraction, artifact, compression, and reporting
+infrastructure while keeping their scoring semantics separate.
+
+```mermaid
+flowchart TB
+    data["Dataset and protocol metadata"] --> extract["Extract or load embeddings<br/>single or multi-output; row-aligned when needed"]
+    extract --> artifacts["Reusable raw artifacts<br/>and optional compression variants"]
+    artifacts --> protocol{"Configured evaluation protocol"}
+
+    protocol --> labeled["Labeled embeddings<br/>OverlapIndex, stability, gated Separatix"]
+    protocol --> retrieval["Exact query-gallery retrieval<br/>NDCG, recall, precision, mAP, MRR"]
+    protocol --> zero_shot["Fixed-prompt zero-shot<br/>top-k classification and sample overlap"]
+
+    labeled --> results["Practical results<br/>Python objects, DataFrames, JSON, Markdown"]
+    retrieval --> results
+    zero_shot --> results
+```
 
 ## Installation
 
@@ -78,6 +98,12 @@ pip install "vertebrae[torch]"
 pip install "vertebrae[timm]"
 pip install "vertebrae[torchvision]"
 pip install "vertebrae[openclip]"
+```
+
+Optional dependencies for the Fashion-MNIST visual example suite:
+
+```bash
+pip install "vertebrae[visuals]"
 ```
 
 Optional local Keras model support:
@@ -256,6 +282,14 @@ result = Evaluator(
 
 Supported compression methods include `pca`, `incremental_pca`,
 `truncated_svd`, random projections, `prefix_truncate`, and `quantize`.
+
+The network-free-after-download
+[`fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py)
+also illustrates the storage-quality tradeoffs of PCA and quantization on a
+trained penultimate embedding. Each point shows the measured OverlapIndex score
+against encoded bytes per sample; the dashed line marks the non-dominated frontier.
+
+![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](img/visuals/fashion-mnist-compression-frontier.png)
 
 ### Scikit-learn pipelines
 
@@ -530,6 +564,80 @@ downloads a laptop-sized Caltech-101 subset with a few related category pairs,
 compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
 embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
 
+### Representation monitoring during training
+
+`RepresentationMonitor` repeatedly runs a fresh labeled `Benchmark` against live
+extractors while your code retains control of training, cadence, checkpoints, and
+optimization. Named outputs make it possible to inspect representation separation as
+a function of both training progress and layer depth.
+
+```python
+from vertebrae import (
+    ConsoleReporter,
+    EvaluationHistoryConfig,
+    RepresentationMonitor,
+)
+
+monitor = RepresentationMonitor(
+    fixed_probe_dataset,
+    [live_torch_extractor],
+    history_config=EvaluationHistoryConfig(
+        storage="disk",
+        path="representation-history.jsonl",
+    ),
+    reporters=[ConsoleReporter()],
+)
+
+for epoch in range(epochs):
+    train_one_epoch(model)
+    monitor.evaluate(epoch=epoch, metadata={"loss": training_loss})
+
+history = monitor.history.to_dataframe()
+```
+
+Every call executes the configured benchmark stack and always recomputes embeddings,
+even if an enabled cache is supplied. Use a fixed held-out probe dataset and control
+evaluation cost through cadence, stability, and Separatix settings. The append-only
+JSONL format supports protocol-validated resume and read-only loading. Restoring the
+matching live model, optimizer, epoch, and step remains the caller's responsibility.
+See the
+[representation monitoring guide](docs/monitoring.md) and the network-free
+`examples/representation_monitoring.py` Torch workflow.
+
+The network-free-after-download
+[`fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py)
+trains a compact two-block convolutional network and applies the same protocol
+to real Fashion-MNIST evaluations. It carves a fixed, stratified validation set
+out before training, leaves the official test set untouched, and disables
+Separatix and stability repeats so each figure focuses on the raw OverlapIndex
+diagnostic. For complementary visual examples of the underlying metrics, see the
+[OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) and
+[Separatix](https://github.com/NiklasMelton/Separatix) repositories.
+
+#### Representation trajectories
+
+Two spatial convolutional representations and the learned 128-dimensional embedding
+are evaluated before training and every two optimizer steps over three epochs. The same
+layer identities and colors connect the network diagram to the monitoring curves.
+Fashion-MNIST's visually related apparel classes make it possible to compare how local
+features and the task-specific embedding evolve at different depths.
+
+![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](img/visuals/fashion-mnist-representation-monitoring.png)
+
+#### Hierarchical label views
+
+The same representations are evaluated against nested department, garment-group, and
+exact-class label views before and after training.
+
+![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](img/visuals/fashion-mnist-hierarchy-heatmap.png)
+
+Reproduce the monitoring, hierarchy, and compression figures with:
+
+```bash
+poetry install -E visuals
+poetry run python examples/fashion_mnist_visual_suite.py
+```
+
 ### Retrieval and matching
 
 `RetrievalBenchmark` evaluates frozen query embeddings against an explicit gallery
@@ -622,6 +730,19 @@ Dense segmentation evaluation scores spatial feature cells after they are aligne
 to semantic mask labels. It measures representation organization for retained
 tokens; it is not an IoU, mask-accuracy, or boundary-quality metric.
 
+Both dense spatial outputs and other structured model outputs become ordinary
+labeled embedding rows before scoring:
+
+```mermaid
+flowchart TB
+    spatial_source["Spatial path<br/>image, semantic mask, declared feature grid"] --> spatial_align["Assign cells by mask coverage<br/>filter ambiguity and sample deterministically"]
+    structured_source["Structured path<br/>parent sample, unit annotations, emitted rows"] --> structured_align["Select and align emitted rows<br/>to declared unit annotations"]
+
+    spatial_align --> rows["Materialized BenchmarkDataset rows<br/>embeddings, targets, parent groups, provenance"]
+    structured_align --> rows
+    rows --> scoring["Standard labeled-embedding scoring<br/>OverlapIndex, stability, gated Separatix"]
+```
+
 ```python
 from vertebrae import (
     Benchmark,
@@ -711,7 +832,8 @@ alongside the runnable
 
 - precomputed dense or sparse embeddings,
 - NumPy arrays and pandas DataFrames,
-- single-label classification, multi-label classification, and explicit regression targets,
+- single-label classification, multi-label classification (including sparse binary
+  indicators), and explicit regression targets,
 - hierarchy label views and named target views for scoring the same embeddings against
   different targets,
 - graph-node, graph-edge, entity, pair, triplet-derived, and generic labeled-unit
@@ -735,6 +857,7 @@ alongside the runnable
 - local Keras modules through `KerasExtractor`,
 - local ONNX Runtime sessions through `ONNXExtractor`,
 - single-output and multi-output extractor evaluation,
+- repeated time-by-layer representation monitoring for live extractors,
 - single-extractor evaluation,
 - multi-extractor comparisons,
 - JSON and Markdown reports,
@@ -785,7 +908,7 @@ object contains those weights. Importable callable identities include referenced
 modules, helper callables, and exact global configuration; optional backend versions
 also participate in extractor recipes. Raw-cache
 eligibility propagates to compression and every derived artifact: disabling raw
-caching or using an unsafe identity cannot produce a reusable derived cache. Legacy
+caching or using an unsafe identity cannot produce a reusable derived cache. Superseded
 cache identity and array/composite manifest schemas are intentionally not read;
 standalone JSON and label store APIs remain current.
 
@@ -1025,4 +1148,6 @@ repeatable `vertebrae score --metric module:callable` options. Run
 
 ## License
 
-MIT
+The source code is licensed under the GNU Affero General Public License
+v3.0 or later (AGPLv3-or-later). Commercial licenses are available; please
+contact the maintainer through GitHub.

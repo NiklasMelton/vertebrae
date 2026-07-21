@@ -43,7 +43,7 @@ from vertebrae.scoring.zero_shot import ZeroShotScorer, ZeroShotScoreResult
 from vertebrae.utils.embedding_batches import encode_endpoint_batches, take_endpoint_rows
 from vertebrae.utils.semantic_labels import LABEL_ENCODING, portable_json, validate_label_catalog
 from vertebrae.utils.serialization import make_json_safe
-from vertebrae.utils.validation import is_sparse_matrix
+from vertebrae.utils.validation import is_sparse_matrix, sparse_storage_format
 
 
 def _embedding_metadata_from_array_manifest(array_manifest: Any) -> dict[str, Any]:
@@ -238,7 +238,7 @@ def materialize_zero_shot_embedding_shard(
         "dtype": str(embeddings.dtype),
         "sparse": sparse,
         "nnz": int(embeddings.nnz) if sparse else None,
-        "storage_format": embeddings.getformat() if sparse else "dense",
+        "storage_format": sparse_storage_format(embeddings) if sparse else "dense",
         "cache_eligible": job.cache_eligible,
         "cache_status": job.cache_status,
         "compression_pair_id": None,
@@ -385,7 +385,9 @@ def compress_zero_shot_embedding_artifacts(
             "dtype": str(values.dtype),
             "sparse": is_sparse_matrix(values),
             "nnz": int(values.nnz) if is_sparse_matrix(values) else None,
-            "storage_format": values.getformat() if is_sparse_matrix(values) else "dense",
+            "storage_format": (
+                sparse_storage_format(values) if is_sparse_matrix(values) else "dense"
+            ),
             "compression": metadata,
             "compression_pair_id": compression_pair_id,
             "compression_source_key": (

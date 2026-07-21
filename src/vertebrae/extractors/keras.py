@@ -1,6 +1,6 @@
 """Optional Keras module extractor for local user-supplied models."""
 
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 
@@ -11,13 +11,18 @@ from vertebrae.extractors._identity import (
 )
 from vertebrae.extractors._outputs import validate_named_output_mapping
 from vertebrae.extractors._utils import (
+    materialize_named_outputs,
     optional_dependency_versions,
+    resolve_output_specs,
     snapshot_mapping,
+    spec_to_recipe,
     validate_bool,
     validate_choice,
     validate_nonblank_string,
     validate_optional_nonblank_string,
+    validate_ordinary_output_projection,
 )
+from vertebrae.extractors.base import EmbeddingOutput, EmbeddingOutputSpec
 from vertebrae.extractors.spatial import (
     SpatialEmbeddingOutput,
     SpatialOutputSpec,
@@ -28,7 +33,6 @@ from vertebrae.extractors.structured import (
     StructuredOutputSpec,
     _per_parent_structured_values,
 )
-from vertebrae.utils.validation import ensure_numeric_matrix
 
 
 class KerasExtractor:
@@ -39,6 +43,7 @@ class KerasExtractor:
         model: A locally loaded Keras model or compatible callable object.
         collate_fn: Callable that converts raw inputs into model inputs.
         output_fn: Optional callable that converts raw model output into embeddings.
+        outputs: Optional named ordinary embedding-output declarations.
         call_method: Whether to use ``model(...)`` or ``model.predict(...)``.
         call_kwargs: Extra keyword arguments passed when ``call_method="call"``.
         predict_kwargs: Extra keyword arguments passed when ``call_method="predict"``.
@@ -55,6 +60,7 @@ class KerasExtractor:
         model: Any,
         collate_fn: Optional[Callable[[Any], Any]] = None,
         output_fn: Optional[Callable[[Any], Any]] = None,
+        outputs: Optional[Sequence[Dict[str, Any]]] = None,
         call_method: str = "call",
         call_kwargs: Optional[Dict[str, Any]] = None,
         predict_kwargs: Optional[Dict[str, Any]] = None,
@@ -84,6 +90,7 @@ class KerasExtractor:
         self.model = model
         self.collate_fn = collate_fn or np.asarray
         self.output_fn = output_fn
+        self._output_specs = resolve_output_specs(outputs, implicit_flatten=False)
         self.call_method = call_method
         self.call_kwargs = {"training": False}
         self.call_kwargs.update(snapshot_mapping(call_kwargs, "call_kwargs"))
@@ -139,15 +146,38 @@ class KerasExtractor:
     def transform(self, X: Any) -> np.ndarray:
         """Apply the collate function, run the model, and validate embeddings."""
 
+        if len(self._output_specs) != 1:
+            raise ValueError(
+                "KerasExtractor.transform() is only available when exactly one output "
+                "is configured. Use Benchmark/Evaluator or transform_many()."
+            )
+        outputs = self.transform_many(X)
+        return outputs[0].embeddings
+
+    def output_specs(self) -> List[EmbeddingOutputSpec]:
+        """Return the declared ordinary embedding outputs."""
+
+        return list(self._output_specs)
+
+    def transform_many(self, X: Any) -> List[EmbeddingOutput]:
+        """Apply the model once and materialize every declared embedding output."""
+
         self._load_keras()
         batch = self.collate_fn(X)
         model_output = self._call_model(batch)
-        embeddings = self.output_fn(model_output) if self.output_fn is not None else model_output
-        embeddings = self._to_numpy(embeddings)
-        return ensure_numeric_matrix(
-            embeddings,
-            f"KerasExtractor '{self.name}' output",
+        projected = self.output_fn(model_output) if self.output_fn is not None else model_output
+        projected = validate_ordinary_output_projection(
+            projected,
+            self._output_specs,
+            f"KerasExtractor '{self.name}'",
+        )
+        return materialize_named_outputs(
+            projected,
+            self._output_specs,
+            owner=f"KerasExtractor '{self.name}'",
             allow_sparse=self.allow_sparse,
+            fallback_output=model_output,
+            allow_1d=False,
         )
 
     def fit_transform(self, X: Any, y: Any = None) -> np.ndarray:
@@ -222,6 +252,7 @@ class KerasExtractor:
             "model_class": self.model.__class__.__module__ + "." + self.model.__class__.__name__,
             "collate_fn": _callable_name(self.collate_fn),
             "output_fn": _callable_name(self.output_fn) if self.output_fn is not None else None,
+            "outputs": [spec_to_recipe(spec) for spec in self._output_specs],
             "call_method": self.call_method,
             "call_kwargs": self.call_kwargs,
             "predict_kwargs": self.predict_kwargs,

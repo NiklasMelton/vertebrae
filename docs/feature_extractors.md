@@ -88,6 +88,8 @@ independent even when their readable slugs match.
 
 Native multi-output support is available for:
 
+- `TorchExtractor`
+- `KerasExtractor`
 - `HFTextExtractor`
 - `HFAudioExtractor`
 - `HFMultimodalExtractor`
@@ -114,6 +116,53 @@ extractor = HFVisionExtractor(
     ],
 )
 ```
+
+Local Torch and Keras models use the same explicit ordinary `outputs` mapping. These
+adapters do not discover internal layers or install hooks; the model or `output_fn`
+must expose every declared representation:
+
+```python
+extractor = TorchExtractor(
+    name="local_encoder",
+    model=model,
+    collate_fn=collate_fn,
+    output_fn=lambda raw: {
+        "middle": raw["middle"],
+        "final": raw["final"],
+    },
+    outputs=[
+        {
+            "name": "middle",
+            "selector": "middle",
+            "hidden_layer": 2,
+            "pooling": "mean",
+        },
+        {
+            "name": "final",
+            "selector": "final",
+            "hidden_layer": 4,
+            "pooling": "cls",
+        },
+    ],
+)
+```
+
+The same constructor shape applies to `KerasExtractor`. Each batch invokes the model
+once, applies `output_fn` once, and materializes all named outputs. Selectors are
+dotted paths and may address sequence positions with numeric components. `flatten`
+defaults to `True` for explicit declarations. `hidden_layer`, `pooling`, `flatten`,
+and `metadata` are explicit provenance and become part of the extractor recipe and
+cache identity.
+
+When `outputs` is omitted, the legacy single-output path remains strict: the model or
+`output_fn` must return a 2D numeric matrix and higher-rank arrays are rejected rather
+than flattened. Declare an output explicitly to opt into flattening. When multiple
+outputs omit selectors, the model or `output_fn` must return a mapping whose keys
+exactly match the declared names. In a mixed configuration, every selector-free
+output must still be present by name in the mapping.
+
+`transform()` remains the ergonomic single-output path. With multiple declarations it
+raises with guidance to use `Benchmark`, `Evaluator`, or `transform_many()`.
 
 For paired image-text models, `HFMultimodalExtractor` works with aligned
 structured dataset inputs and explicit named branch or fused outputs:
@@ -144,9 +193,10 @@ extractor = HFMultimodalExtractor(
 
 Extractor recipes are serialized into result metadata and cache keys. Scoring consumes
 numeric embeddings and labels, not live model objects. Embeddings may be dense NumPy
-arrays or scipy sparse matrices. Sparse embeddings are stored as `.npz` artifacts and
-converted to dense arrays only at the MiniBatchKMeans-backed OverlapIndex scoring
-boundary, with `OverlapScoringConfig.max_dense_bytes` guarding memory use.
+arrays, scipy sparse matrices, or scipy sparse arrays. Sparse embeddings are
+normalized to CSR, stored as `.npz` artifacts, and remain sparse through
+MiniBatchKMeans-backed overlap scoring and when passed into Separatix. Separatix may
+perform bounded internal densification for diagnostics that inherently require it.
 
 Cache identity schema v2 hashes the complete typed extractor recipe. Callable and
 live-model extractors accept an explicit `cache_identity`. Without one, cache reuse is
@@ -288,8 +338,9 @@ shape mismatches instead of relying on NumPy broadcasting.
 
 When output shape is not known ahead of time, streaming-safe extractors are probed on a
 small first batch. The inferred embedding dimension and dtype are used with
-`MemoryConfig` to estimate whether the full embedding artifact and dense scoring input
-fit in memory before the full job runs.
+`MemoryConfig` to estimate whether the full embedding artifact and its actual dense or
+sparse scoring representation fit in memory before the full job runs. Result metadata
+also retains the hypothetical dense footprint for capacity planning.
 
 ## Resource profiling adapters
 

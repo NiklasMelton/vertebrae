@@ -37,7 +37,7 @@ from vertebrae.utils.semantic_labels import (
     validate_label_catalog,
 )
 from vertebrae.utils.serialization import json_dumps_strict
-from vertebrae.utils.validation import is_sparse_matrix
+from vertebrae.utils.validation import is_sparse_matrix, sparse_storage_format
 
 
 class LocalArtifactStore:
@@ -89,9 +89,9 @@ class LocalArtifactStore:
                 manifest_path = path / ARRAY_MANIFEST_FILENAME
                 if not manifest_path.exists():
                     return False
-                legacy_manifest, target = self._resolve_manifest_target(path)
+                standalone_manifest, target = self._resolve_manifest_target(path)
                 return target is not None and (
-                    int(target.stat().st_size) == legacy_manifest.size_bytes
+                    int(target.stat().st_size) == standalone_manifest.size_bytes
                 )
         except FileNotFoundError:
             return False
@@ -116,11 +116,12 @@ class LocalArtifactStore:
             if sparse_value:
                 from scipy import sparse
 
-                sparse.save_npz(prepared, arr)
-                shape = tuple(int(size) for size in arr.shape)
-                dtype = str(arr.dtype)
-                sparse_format = str(arr.getformat())
-                nnz = int(arr.nnz)
+                matrix = sparse.csr_matrix(arr, copy=False)
+                sparse.save_npz(prepared, matrix)
+                shape = tuple(int(size) for size in matrix.shape)
+                dtype = str(matrix.dtype)
+                sparse_format = "csr"
+                nnz = int(matrix.nnz)
             else:
                 array = np.asarray(arr)
                 with prepared.open("wb") as file:
@@ -235,14 +236,14 @@ class LocalArtifactStore:
                 manifest = artifact_manifest.array
                 target = path / manifest.filename
             else:
-                legacy_manifest, legacy_target = self._resolve_manifest_target(path)
-                if legacy_target is None:
+                standalone_manifest, standalone_target = self._resolve_manifest_target(path)
+                if standalone_target is None:
                     raise FileNotFoundError(
                         f"Array manifest for key {key} references missing file "
-                        f"{legacy_manifest.filename}."
+                        f"{standalone_manifest.filename}."
                     )
-                manifest = legacy_manifest
-                target = legacy_target
+                manifest = standalone_manifest
+                target = standalone_target
             if not target.exists():
                 raise FileNotFoundError(
                     f"Array manifest for key {key} references missing file {manifest.filename}."
@@ -261,14 +262,14 @@ class LocalArtifactStore:
                 manifest = artifact_manifest.array
                 target = path / manifest.filename
             else:
-                legacy_manifest, legacy_target = self._resolve_manifest_target(path)
-                if legacy_target is None:
+                standalone_manifest, standalone_target = self._resolve_manifest_target(path)
+                if standalone_target is None:
                     raise FileNotFoundError(
                         f"Array manifest for key {key} references missing file "
-                        f"{legacy_manifest.filename}."
+                        f"{standalone_manifest.filename}."
                     )
-                manifest = legacy_manifest
-                target = legacy_target
+                manifest = standalone_manifest
+                target = standalone_target
             if not target.exists():
                 raise FileNotFoundError(
                     f"Array manifest for key {key} references missing file {manifest.filename}."
@@ -1048,7 +1049,10 @@ class LocalArtifactStore:
             raise ValueError("Loaded array shape does not match its committed manifest.")
         if str(value.dtype) != manifest.dtype:
             raise ValueError("Loaded array dtype does not match its committed manifest.")
-        if manifest.storage_format == "npz" and value.getformat() != manifest.sparse_format:
+        if (
+            manifest.storage_format == "npz"
+            and sparse_storage_format(value) != manifest.sparse_format
+        ):
             raise ValueError("Loaded sparse format does not match its committed manifest.")
         if manifest.storage_format == "npz" and int(value.nnz) != manifest.nnz:
             raise ValueError("Loaded sparse nnz does not match its committed manifest.")

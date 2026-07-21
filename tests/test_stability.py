@@ -100,17 +100,19 @@ def test_stability_preserves_sparse_embeddings_until_scoring(
     assert observed == [True, True]
 
 
-def test_sparse_stability_retains_scoring_dense_memory_guard(fake_overlapindex):
+def test_sparse_stability_does_not_apply_dense_memory_guard(fake_overlapindex):
     embeddings = sparse.csr_matrix(np.eye(4))
     labels = np.asarray(["a", "a", "b", "b"])
 
-    with pytest.raises(ValueError, match="max_dense_bytes"):
-        run_stability_analysis(
-            embeddings,
-            labels,
-            OverlapScoringConfig(k=1, max_dense_bytes=1),
-            StabilityConfig(repeats=1),
-        )
+    result = run_stability_analysis(
+        embeddings,
+        labels,
+        OverlapScoringConfig(k=1, max_dense_bytes=1),
+        StabilityConfig(repeats=1),
+    )
+
+    assert len(result["scores"]) == 1
+    assert fake_overlapindex.calls[-1]["fit_X_sparse"] is True
 
 
 def test_single_label_subsample_stability_is_target_aware(fake_overlapindex):

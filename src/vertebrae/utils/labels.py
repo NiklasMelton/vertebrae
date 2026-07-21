@@ -22,9 +22,11 @@ MULTI_LABEL_TARGET = "multi_label"
 REGRESSION_TARGET = "regression"
 
 
-def coerce_label_input(labels: Any) -> np.ndarray:
+def coerce_label_input(labels: Any) -> Any:
     """Coerce user-provided labels without breaking ragged multi-label rows."""
 
+    if _is_sparse(labels):
+        return labels
     if isinstance(labels, np.ndarray):
         return labels
     if not hasattr(labels, "__len__") and not isinstance(labels, (str, bytes)):
@@ -58,7 +60,6 @@ def normalize_targets(
     are returned as a one- or two-dimensional float array.
     """
 
-    labels = coerce_label_input(y)
     names = normalize_label_names(label_names)
     resolved_target_names = _normalize_target_names(target_names)
     _validate_target_mode(
@@ -66,6 +67,19 @@ def normalize_targets(
         label_names=names,
         target_names=resolved_target_names,
     )
+    if _is_sparse(y):
+        if target_type == REGRESSION_TARGET:
+            raise ValueError("Regression targets must be dense numeric arrays.")
+        if target_type == SINGLE_LABEL_TARGET:
+            raise ValueError("single_label targets must be one-dimensional.")
+        normalized = _labels_from_sparse_indicator(y, names)
+        resolved_names = names if names is not None else tuple(range(y.shape[1]))
+        return normalized, _target_metadata(
+            MULTI_LABEL_TARGET,
+            normalized,
+            label_names=resolved_names,
+        )
+    labels = coerce_label_input(y)
     if target_type == REGRESSION_TARGET:
         normalized, metadata = _normalize_regression_targets(
             labels,
@@ -241,7 +255,7 @@ def metric_labels(
     label_names: Optional[Iterable[Any]] = None,
     target_type: str = "auto",
     target_names: Optional[Iterable[Any]] = None,
-) -> Tuple[np.ndarray, Dict[str, Any]]:
+) -> Tuple[Any, Dict[str, Any]]:
     """Return labels in the shape expected by metric libraries."""
 
     labels, metadata = normalize_targets(
@@ -251,7 +265,14 @@ def metric_labels(
         target_names=target_names,
     )
     if metadata["target_type"] == MULTI_LABEL_TARGET:
-        return multilabel_indicator(labels, metadata["label_names"]), metadata
+        return (
+            multilabel_indicator(
+                labels,
+                metadata["label_names"],
+                sparse_output=True,
+            ),
+            metadata,
+        )
     if metadata["target_type"] == REGRESSION_TARGET:
         return np.asarray(labels, dtype=float), metadata
     return labels, metadata
@@ -407,14 +428,37 @@ def decode_label_artifact_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return decoded
 
 
-def multilabel_indicator(y: Any, label_names: Optional[Iterable[Any]] = None) -> np.ndarray:
-    """Convert a multi-label target to a dense binary indicator matrix."""
+def multilabel_indicator(
+    y: Any,
+    label_names: Optional[Iterable[Any]] = None,
+    *,
+    sparse_output: bool = False,
+) -> Any:
+    """Convert a multi-label target to a dense or CSR binary indicator matrix."""
 
     labels, metadata = normalize_targets(y, label_names=label_names)
     if metadata["target_type"] != MULTI_LABEL_TARGET:
         raise ValueError("multilabel_indicator requires a multi-label target.")
     resolved_names = tuple(metadata["label_names"])
     positions = {semantic_label_key(label): index for index, label in enumerate(resolved_names)}
+    if sparse_output:
+        from scipy import sparse
+
+        row_indices: List[int] = []
+        column_indices: List[int] = []
+        for row_index, labelset in enumerate(labels):
+            for label in labelset:
+                row_indices.append(row_index)
+                column_indices.append(positions[semantic_label_key(label)])
+        return sparse.csr_matrix(
+            (
+                np.ones(len(row_indices), dtype=np.uint8),
+                (row_indices, column_indices),
+            ),
+            shape=(len(labels), len(resolved_names)),
+            dtype=np.uint8,
+        )
+
     indicator = np.zeros((len(labels), len(resolved_names)), dtype=int)
     for row_index, labelset in enumerate(labels):
         for label in labelset:
@@ -894,6 +938,43 @@ def _labels_from_indicator(
     return normalized
 
 
+def _labels_from_sparse_indicator(
+    labels: Any,
+    label_names: Optional[Sequence[Any]],
+) -> np.ndarray:
+    from scipy import sparse
+
+    if labels.ndim != 2:
+        raise ValueError("Indicator labels must be two-dimensional.")
+    resolved_names = label_names if label_names is not None else tuple(range(labels.shape[1]))
+    if len(resolved_names) != labels.shape[1]:
+        raise ValueError(
+            "label_names length must match the indicator label columns; "
+            f"got {len(resolved_names)} names for {labels.shape[1]} columns."
+        )
+    indicator = sparse.csr_matrix(labels, copy=True)
+    if not np.issubdtype(indicator.dtype, np.number) and indicator.dtype != bool:
+        raise ValueError("Indicator labels must contain only 0/1 or boolean values.")
+    indicator.sum_duplicates()
+    indicator.eliminate_zeros()
+    indicator.sort_indices()
+    if indicator.data.size and (
+        not bool(np.all(np.isfinite(indicator.data))) or not bool(np.all(indicator.data == 1))
+    ):
+        raise ValueError("Indicator labels must contain only 0/1 or boolean values.")
+    rows: List[Tuple[Any, ...]] = []
+    for row_index in range(indicator.shape[0]):
+        start = indicator.indptr[row_index]
+        stop = indicator.indptr[row_index + 1]
+        active = tuple(resolved_names[index] for index in indicator.indices[start:stop])
+        if not active:
+            raise ValueError(f"Multi-label sample {row_index} must contain at least one label.")
+        rows.append(active)
+    normalized = np.empty(indicator.shape[0], dtype=object)
+    normalized[:] = rows
+    return normalized
+
+
 def _normalize_label_sequences(
     rows: Iterable[Any],
     label_names: Optional[Sequence[Any]],
@@ -989,6 +1070,14 @@ def _has_missing_single_labels(labels: np.ndarray) -> bool:
         if labels.dtype.kind in {"f", "c"}:
             return bool(np.isnan(labels).any())
         return any(_is_missing_label(label) for label in labels)
+
+
+def _is_sparse(value: Any) -> bool:
+    try:
+        from scipy import sparse
+    except ImportError:
+        return False
+    return bool(sparse.issparse(value))
 
 
 def _single_label_subsample_indices(

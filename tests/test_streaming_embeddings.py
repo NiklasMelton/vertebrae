@@ -365,7 +365,7 @@ def test_embedding_config_no_longer_accepts_partial_shards():
         )
 
 
-@pytest.mark.parametrize("change", ["width", "dtype", "sparse_format"])
+@pytest.mark.parametrize("change", ["width", "dtype"])
 def test_streaming_benchmark_rejects_batch_contract_changes(
     tmp_path,
     fake_overlapindex,
@@ -385,10 +385,7 @@ def test_streaming_benchmark_rejects_batch_contract_changes(
         if change == "dtype":
             dtype = np.float32 if first else np.float64
             return np.ones((len(batch), 2), dtype=dtype)
-        from scipy import sparse
-
-        matrix = np.ones((len(batch), 2), dtype=np.float32)
-        return sparse.csr_matrix(matrix) if first else sparse.csc_matrix(matrix)
+        raise AssertionError(f"Unexpected contract change: {change}")
 
     extractor = CallableExtractor(
         "changing_contract",
@@ -403,3 +400,36 @@ def test_streaming_benchmark_rejects_batch_contract_changes(
             cache_config=CacheConfig(enabled=False, cache_dir=str(tmp_path)),
             embedding_config=EmbeddingConfig(batch_size=3),
         ).run()
+
+
+def test_streaming_benchmark_normalizes_sparse_batch_formats(tmp_path, fake_overlapindex):
+    dataset = BenchmarkDataset.from_arrays(
+        np.arange(24).reshape(8, 3),
+        ["a"] * 4 + ["b"] * 4,
+        modality="tabular",
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    def transform_batch(batch):
+        from scipy import sparse
+
+        matrix = np.ones((len(batch), 2), dtype=np.float32)
+        return (
+            sparse.csr_array(matrix)
+            if int(np.asarray(batch)[0, 0]) == 0
+            else sparse.csc_matrix(matrix)
+        )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=CallableExtractor(
+            "normalized_sparse_contract",
+            transform_batch,
+            streaming_safe=True,
+        ),
+        stability_config=StabilityConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False, cache_dir=str(tmp_path)),
+        embedding_config=EmbeddingConfig(batch_size=3),
+    ).run()
+
+    assert result.extractor_results[0].embedding_metadata["storage_format"] == "csr"

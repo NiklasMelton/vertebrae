@@ -1,11 +1,13 @@
 # scoring
 
-All overlap scoring in `vertebrae` goes through one internal adapter:
-`OverlapIndexScorer`.
+All [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) scoring in
+`vertebrae` goes through one internal adapter: `OverlapIndexScorer`.
 
-`vertebrae` can also run a default Separatix complexity diagnostic through the
-internal `SeparatixScorer` adapter. Separatix does not affect extractor ranking;
-it adds classifier-complexity guidance on top of the overlap result when enabled.
+`vertebrae` can also run a default
+[Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic
+through the internal `SeparatixScorer` adapter. Separatix does not affect
+extractor ranking; it adds classifier-complexity guidance on top of the overlap
+result when enabled.
 When a dataset declares groups, vertebrae forwards them to Separatix so supervised
 evaluation and structural evidence respect those independence units. A grouped
 diagnostic that lacks sufficient cross-group class support is recorded as skipped;
@@ -13,8 +15,9 @@ vertebrae never retries it with a row-level split.
 
 ## Fixed metric backend
 
-`vertebrae` depends on the external `overlapindex` package and does not reimplement
-OverlapIndex. Currently, the backend is fixed internally to MiniBatchKMeans:
+`vertebrae` depends on the external
+[OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) package and does not
+reimplement it. Currently, the backend is fixed internally to MiniBatchKMeans:
 
 ```python
 OverlapIndex(
@@ -56,7 +59,9 @@ Key fields:
 - `kmeans_kwargs`: extra keyword arguments forwarded to MiniBatchKMeans.
 - `offline_chunk_size`: chunk size passed to `OverlapIndex.fit_offline(...)`.
 - `normalize_embeddings`: enables L2 row normalization before scoring.
-- `max_dense_bytes`: caps sparse-to-dense conversion size at the scoring boundary.
+- `max_dense_bytes`: fallback limit for downstream dense-only diagnostics, including
+  Separatix when its own limit is not set. Sparse overlap scoring does not densify
+  the full embedding matrix.
 - `exclude_classes`: class id or ids retained during fitting and detailed
   diagnostics but omitted from global macro and weighted aggregation.
 
@@ -108,11 +113,12 @@ The scorer accepts numeric embedding matrices with single-label, multi-label, or
 explicit regression targets.
 
 - Dense inputs are scored directly.
-- Sparse inputs are validated, then densified only at the OverlapIndex boundary.
+- SciPy sparse matrices and sparse arrays are validated and normalized to CSR while
+  retaining sparse storage through OverlapIndex.
 - Single-label targets are encoded as one-dimensional semantic keys before being
   passed to OverlapIndex, then translated back through the label catalog for reports.
-- Multi-label targets are normalized to a dense 0/1 indicator matrix before calling
-  OverlapIndex.
+- Multi-label targets, including sparse binary indicators supplied by the user, are
+  normalized to a CSR 0/1 indicator before calling OverlapIndex.
 - Regression targets are passed to ContinuousOverlapIndex as finite numeric 1D or
   2D targets.
 - When `normalize_embeddings=True`, embeddings are L2-normalized row-wise before
@@ -151,8 +157,7 @@ stability:
 - summaries report mean, standard deviation, min, max, and percentile interval.
 
 Dense and scipy sparse embeddings are both preserved across repeats and subsample
-slices. Sparse matrices are densified only inside the overlap scoring adapter, where
-`OverlapScoringConfig.max_dense_bytes` remains the admission limit.
+slices. Sparse matrices remain CSR through every repeated OverlapIndex call.
 
 Subsample stability is also available when requested through `StabilityConfig`.
 It is target-aware by definition:
@@ -185,8 +190,8 @@ Scoring seeds and sampling seeds use independent deterministic streams. Subsampl
 results record `sampling_seeds`, `effective_sample_counts`, and
 `effective_subsample_fractions` so the sampling plan can be reproduced and audited.
 `StabilityConfig.stratified` has been removed: categorical subsampling cannot opt
-out of target preservation. Because `vertebrae` is unreleased alpha software, old
-serialized configurations containing that field are intentionally unsupported.
+out of target preservation. Serialized configurations containing that field are
+intentionally unsupported.
 
 `vertebrae` reports these as stability summaries and stability intervals. They are
 not formal confidence intervals unless a different statistical protocol is added
@@ -194,7 +199,8 @@ explicitly in a future release.
 
 ## Separatix diagnostics
 
-Use `SeparatixConfig` to control the optional complexity diagnostic stage:
+Use `SeparatixConfig` to control the optional
+[Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic stage:
 
 ```python
 from vertebrae import SeparatixConfig
@@ -203,6 +209,7 @@ config = SeparatixConfig(
     enabled=True,
     overlap_threshold=0.80,
     random_state=42,
+    densify_policy="warn_and_sample",
 )
 ```
 
@@ -213,7 +220,7 @@ Current behavior:
 - By default it only runs when the overlap gate passes.
 - Classification and multi-label datasets use `overlap_threshold`.
 - Regression datasets use `regression_overlap_threshold`.
-- Multi-label targets are passed to Separatix as dense 0/1 indicator matrices with
+- Multi-label targets are passed to Separatix as CSR 0/1 indicator matrices with
   `target_mode="multilabel"`.
 - Regression targets are passed with `target_mode="regression"`.
 - Optional Separatix MLP probes can be enabled with `mlp_probes=True`.
@@ -225,8 +232,17 @@ Current behavior:
   evidence, evaluation context, and skips.
 
 Separatix follows the same normalization convention as overlap scoring when
-`normalize_embeddings=True`. Sparse inputs remain sparse at the vertebrae boundary,
-and Separatix uses its own densification policy internally.
+`normalize_embeddings=True`. Sparse inputs remain sparse at the vertebrae boundary.
+`densify_policy` controls unavoidable dense-only diagnostics:
+
+- `"warn_and_sample"` (default) samples within the effective whole-MiB budget derived
+  from `max_dense_bytes` and records warnings;
+- `"skip"` records the unavailable diagnostic without densifying;
+- `"fail"` raises when a required dense operation cannot fit.
+
+`SeparatixResult.preprocessing`, `densification_events`, `skipped_diagnostics`, and
+`warnings` expose the sparse and memory audit directly; the complete upstream report
+remains available through `SeparatixResult.report`.
 
 Separatix is the only downstream-complexity and probe-style diagnostic path in
 vertebrae. Ranking remains based on overlap scores; Separatix probe fields are
@@ -250,7 +266,8 @@ describe different evidence.
 `Benchmark` can score the same full embedding batch with one or more custom metrics.
 Every metric must return one finite aggregate `score`; that score is the only value
 eligible for ranking. Metrics may also return JSON-safe diagnostics, warnings, and
-metadata.
+metadata. Vertebrae preserves sparse embeddings at this boundary; a custom metric
+that densifies them is responsible for enforcing its own memory limit.
 
 Classification labels and independence groups cross the metric boundary as marked
 semantic-key strings in both local and artifact-backed runs. This makes custom-metric

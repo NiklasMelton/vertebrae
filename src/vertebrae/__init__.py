@@ -152,6 +152,15 @@ from vertebrae.extractors.structured import (
     StructuredEmbeddingOutput,
     StructuredOutputSpec,
 )
+from vertebrae.monitoring import (
+    ConsoleReporter,
+    EvaluationContext,
+    EvaluationHistory,
+    EvaluationHistoryConfig,
+    EvaluationRecord,
+    EvaluationReporter,
+    RepresentationMonitor,
+)
 from vertebrae.profiling import (
     AdapterOperationResult,
     ArtifactFootprint,
@@ -235,6 +244,7 @@ __all__ = [
     "compress_embedding_artifact_key",
     "compress_embeddings",
     "ContinuousOverlapScoringConfig",
+    "ConsoleReporter",
     "create_artifact_store",
     "create_execution_backend",
     "DaskBackend",
@@ -265,6 +275,11 @@ __all__ = [
     "embedding_output_shard_key",
     "embedding_shard_key",
     "Evaluator",
+    "EvaluationContext",
+    "EvaluationHistory",
+    "EvaluationHistoryConfig",
+    "EvaluationRecord",
+    "EvaluationReporter",
     "ExtractorResult",
     "GCSArtifactStore",
     "groups_artifact_key",
@@ -311,6 +326,7 @@ __all__ = [
     "RayBackend",
     "RegionAnnotation",
     "ResourceSpec",
+    "RepresentationMonitor",
     "ResourceProfilingConfig",
     "ResourceProfileAdapter",
     "BaseResourceProfileAdapter",
