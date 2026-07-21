@@ -36,7 +36,7 @@ indicator matrices.
 ## Visual examples
 
 The network-free-after-download
-[`fashion_mnist_visual_suite.py`](examples/fashion_mnist_visual_suite.py) example
+[`fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py) example
 trains a compact two-block convolutional network and generates these figures from real
 Fashion-MNIST evaluations. It carves a fixed, stratified validation set out before
 training, leaves the official test set untouched, and disables Separatix and stability
