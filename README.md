@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/NiklasMelton/vertebrae">
     <img
-      src="https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/vertebrae_logo.png"
+      src="https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/vertebrae_logo.png"
       alt="Vertebrae logo"
       height="300"
     />
@@ -289,7 +289,7 @@ also illustrates the storage-quality tradeoffs of PCA and quantization on a
 trained penultimate embedding. Each point shows the measured OverlapIndex score
 against encoded bytes per sample; the dashed line marks the non-dominated frontier.
 
-![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](img/visuals/fashion-mnist-compression-frontier.png)
+![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/visuals/fashion-mnist-compression-frontier.png)
 
 ### Scikit-learn pipelines
 
@@ -622,14 +622,14 @@ layer identities and colors connect the network diagram to the monitoring curves
 Fashion-MNIST's visually related apparel classes make it possible to compare how local
 features and the task-specific embedding evolve at different depths.
 
-![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](img/visuals/fashion-mnist-representation-monitoring.png)
+![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/visuals/fashion-mnist-representation-monitoring.png)
 
 #### Hierarchical label views
 
 The same representations are evaluated against nested department, garment-group, and
 exact-class label views before and after training.
 
-![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](img/visuals/fashion-mnist-hierarchy-heatmap.png)
+![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/visuals/fashion-mnist-hierarchy-heatmap.png)
 
 Reproduce the monitoring, hierarchy, and compression figures with:
 
