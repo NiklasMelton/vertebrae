@@ -31,7 +31,7 @@ def main() -> None:
         modality="tabular",
         metadata={
             "example": "sklearn_wine_pipeline",
-            "source": "sklearn.datasets.load_wine",
+            "dataset_source": "sklearn.datasets.load_wine",
         },
         identity=DatasetIdentity.ephemeral(),
     )
