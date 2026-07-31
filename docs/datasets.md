@@ -112,7 +112,7 @@ text_dataset = BenchmarkDataset.from_arrays(
     X=texts,
     y=labels,
     modality="text",
-    metadata={"source": "support_tickets"},
+    metadata={"dataset_source": "support_tickets"},
     identity=DatasetIdentity.declared("example-dataset", "1"),
 )
 ```
@@ -546,10 +546,10 @@ Relational embedding constructors use modality `"embeddings"` and preserve a
 `"pair"`, or `"triplet"`.
 
 `metadata` is preserved through benchmarking so reports can retain source context
-such as dataset name, split, backbone provenance, or collection notes. Structural keys
-such as sample indices, groups, target views, hierarchy data, unit/relational IDs, and
-provenance are reserved; pass those values through their dedicated APIs rather than
-attempting to replace them in user metadata.
+such as `dataset_source`, split, backbone provenance, or collection notes. Structural
+keys such as `source`, sample indices, groups, target views, hierarchy data,
+unit/relational IDs, and provenance are reserved; pass those values through their
+dedicated APIs rather than attempting to replace them in user metadata.
 
 Multi-modal datasets also preserve:
 
