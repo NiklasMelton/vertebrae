@@ -27,6 +27,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_overfitting.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
@@ -84,6 +85,13 @@ Each script writes reports to `examples/output/`.
   and layer-by-hierarchy figures.
   The first run downloads Fashion-MNIST through torchvision; install all required
   optional dependencies with `poetry install -E visuals`.
+- `fashion_mnist_overfitting.py`: compare clean-label and noisy-label CNNs that start from
+  identical weights and receive identical images, mini-batch order, optimizer settings,
+  and schedules. Per-layer OverlapIndex panels evaluate both models on the same clean
+  validation probe and the same corrupted-target subset, separating transferable class
+  geometry from alignment with deliberately incorrect labels. Loss defines the shaded
+  overfitting region independently of OverlapIndex. The first run downloads Fashion-MNIST
+  through torchvision and requires the `visuals` extra.
 - `keras_local_model.py`: demonstrate `KerasExtractor` with content-digested provenance
   for a locally saved Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export

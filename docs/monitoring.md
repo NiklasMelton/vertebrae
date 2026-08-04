@@ -214,6 +214,15 @@ convolutional representations and its 128-dimensional embedding from
 initialization through three epochs at optimizer-step cadence, evaluates only against
 a stratified held-out validation set, disables Separatix and stability repeats, and
 renders the network architecture beside the layer-wise OverlapIndex trajectories.
+
+[`examples/fashion_mnist_overfitting.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_overfitting.py)
+extends that monitoring pattern into a paired memorization experiment. Clean-label and
+noisy-label CNNs start from identical weights and receive the same images, mini-batch
+order, optimizer settings, and schedule. Both models are monitored on the same clean
+validation probe and the same subset of deliberately corrupted training targets, making
+per-layer differences attributable to the training-target treatment. The plot marks the
+noisy model's minimum clean validation loss and shades the later region, so its
+overfitting label is defined independently of the representation metric being observed.
 The upstream [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) and
 [Separatix](https://github.com/NiklasMelton/Separatix) repositories also have
 their own visual examples that users may find informative.

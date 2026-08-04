@@ -624,6 +624,67 @@ features and the task-specific embedding evolve at different depths.
 
 ![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-representation-monitoring.png)
 
+#### Paired overfitting monitor
+
+The companion
+[`fashion_mnist_overfitting.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_overfitting.py)
+trains clean-label and noisy-label CNNs from identical weights with identical images,
+mini-batch order, optimizer settings, and schedules. It compares their layer-wise
+OverlapIndex on a shared clean validation probe and a shared corrupted-target probe,
+showing both transferable class geometry and alignment with deliberately incorrect
+labels. Minimum clean validation loss for the noisy treatment defines the shaded
+overfitting region without using OverlapIndex as its own ground truth.
+
+
+The paired experiment uses a stratified 1,000-example training subset and a disjoint,
+clean 2,000-example validation probe. Forty percent of the training labels are replaced
+with a deterministic, different class label. A clean-label control and noisy-label
+treatment start from identical parameters and see the same images, mini-batch order,
+Adam configuration, and 20-epoch schedule. The only training difference is which target
+each model receives.
+
+`RepresentationMonitor` evaluates pooled outputs from both convolutional blocks and the
+128-dimensional embedding at initialization and after every epoch. Each model is scored
+on the same two datasets: the clean validation probe measures transferable class
+geometry, while a corruption probe containing only deliberately relabeled training rows
+measures alignment with their incorrect targets. Both conditions use a fixed `k=5` so
+their OverlapIndex values are directly comparable within a probe. Separatix and stability
+repeats are disabled here to keep the visual focused; clean validation cross-entropy,
+rather than OverlapIndex, determines the shaded overfitting region.
+
+The result localizes memorization in the representation hierarchy. From epoch 10 to 20,
+the noisy model's embedding OverlapIndex on the corruption probe grows from `0.039` to
+`0.313`, while the clean control remains near zero. Over the same interval, clean
+validation embedding OverlapIndex improves from `0.669` to `0.718` for the control but
+stalls near `0.63` for the noisy treatment. The early convolutional features remain
+similar, the second block begins to fall behind the control, and the final embedding
+develops substantial geometry around arbitrary targets. The clean control has a modest
+late validation-loss increase of its own, so it is a reference trajectory rather than a
+claim of perfectly non-overfitting training; the noisy treatment's loss and accuracy
+degradation are much larger.
+
+![Clean-label control and noisy-label treatment compared across Fashion-MNIST representation layers and probes](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-paired-overfitting-monitoring.png)
+
+In a real training loop, use a fixed, representative validation probe and evaluate the
+same named layers at meaningful checkpoints. Define overfitting from held-out loss or
+another deployment-relevant metric, then use layer-wise OverlapIndex to determine where
+the representation changes. A reference run, last-known-good checkpoint, or frozen
+backbone provides the counterfactual that a single trajectory lacks. Audited noisy-label,
+hard-example, domain, or demographic slices can serve as additional probes.
+
+| Monitoring pattern | Practical interpretation | Possible response |
+|---|---|---|
+| Held-out loss worsens while clean-probe OI stays near the reference | The classifier head or confidence may be overfitting while transferable geometry remains intact | Early-stop, calibrate, or regularize/retrain the head |
+| Late-layer clean-probe OI falls behind the reference | Task-specific representation geometry is degrading | Increase regularization or augmentation, freeze earlier layers, or restore an earlier checkpoint |
+| OI rises on a suspected-noise probe while clean-probe OI stalls or falls | The representation is organizing around noisy or spurious targets | Audit labels, deduplicate data, reweight the slice, or use noise-robust training |
+| Early layers remain stable but the embedding diverges | Overfitting is localized near the task head | Reuse/freeze the backbone and replace or retrain later layers |
+
+OverlapIndex should not be treated as an overfitting detector by itself. Absolute values
+from probes with different label semantics or sample composition should not be compared
+directly. Its practical value is explaining whether externally observed overfitting is
+head-level or representation-level, which layers are affected, and what target structure
+those layers are learning.
+
 #### Hierarchical label views
 
 The same representations are evaluated against nested department, garment-group, and
@@ -631,11 +692,12 @@ exact-class label views before and after training.
 
 ![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-hierarchy-heatmap.png)
 
-Reproduce the monitoring, hierarchy, and compression figures with:
+Reproduce the visual suites with:
 
 ```bash
 poetry install -E visuals
 poetry run python examples/fashion_mnist_visual_suite.py
+poetry run python examples/fashion_mnist_overfitting.py
 ```
 
 ### Retrieval and matching
