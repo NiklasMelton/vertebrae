@@ -202,13 +202,13 @@ score, and Separatix recommendation or skip state. Reporting is opt-in; the defa
 silent.
 
 See the network-free
-[`examples/representation_monitoring.py`](../examples/representation_monitoring.py)
+[`examples/representation_monitoring.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/representation_monitoring.py)
 workflow for a complete local Torch training loop with two named representations,
 caller-managed checkpoint restoration via `--resume`, strict JSONL resume, and a
 final epoch-by-layer pivot.
 
 For a visual real-data workflow,
-[`examples/fashion_mnist_visual_suite.py`](../examples/fashion_mnist_visual_suite.py)
+[`examples/fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py)
 trains a compact two-block PyTorch CNN on Fashion-MNIST, monitors two pooled
 convolutional representations and its 128-dimensional embedding from
 initialization through three epochs at optimizer-step cadence, evaluates only against

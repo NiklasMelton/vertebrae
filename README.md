@@ -168,7 +168,7 @@ ordering, targets, groups, or annotations change. Manifest identity hashes only 
 caller-provided source manifest. Full content hashing and ephemeral UUID identity are
 available only through the explicit `DatasetIdentity.from_content()` and
 `DatasetIdentity.ephemeral()` constructors. Path-based datasets are never scanned or
-hashed automatically. See [Dataset identity](docs/datasets.md#dataset-identity).
+hashed automatically. See [Dataset identity](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/datasets.md#dataset-identity).
 
 Sparse matrices are supported as embedding inputs as well.
 
@@ -289,7 +289,7 @@ also illustrates the storage-quality tradeoffs of PCA and quantization on a
 trained penultimate embedding. Each point shows the measured OverlapIndex score
 against encoded bytes per sample; the dashed line marks the non-dominated frontier.
 
-![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/visuals/fashion-mnist-compression-frontier.png)
+![Fashion-MNIST embedding compression frontier comparing storage and OverlapIndex](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-compression-frontier.png)
 
 ### Scikit-learn pipelines
 
@@ -601,7 +601,7 @@ evaluation cost through cadence, stability, and Separatix settings. The append-o
 JSONL format supports protocol-validated resume and read-only loading. Restoring the
 matching live model, optimizer, epoch, and step remains the caller's responsibility.
 See the
-[representation monitoring guide](docs/monitoring.md) and the network-free
+[representation monitoring guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md) and the network-free
 `examples/representation_monitoring.py` Torch workflow.
 
 The network-free-after-download
@@ -622,14 +622,14 @@ layer identities and colors connect the network diagram to the monitoring curves
 Fashion-MNIST's visually related apparel classes make it possible to compare how local
 features and the task-specific embedding evolve at different depths.
 
-![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/visuals/fashion-mnist-representation-monitoring.png)
+![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-representation-monitoring.png)
 
 #### Hierarchical label views
 
 The same representations are evaluated against nested department, garment-group, and
 exact-class label views before and after training.
 
-![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/visuals/fashion-mnist-hierarchy-heatmap.png)
+![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-hierarchy-heatmap.png)
 
 Reproduce the monitoring, hierarchy, and compression figures with:
 
@@ -669,7 +669,7 @@ Relevance can be a NumPy/scipy query-by-gallery matrix or sparse
 nested-list matrices explicitly with `RetrievalDataset.from_relevance_matrix(...)`.
 Every query must retain an eligible positive after exclusions. Reports include NDCG, precision, recall,
 hit rate, MRR, mAP, and similarity diagnostics. See
-[the retrieval guide](docs/retrieval.md) for branch-aware extractors,
+[the retrieval guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/retrieval.md) for branch-aware extractors,
 bidirectional scoring, exclusions, compression, and artifact workflows.
 
 ### Fixed-prompt zero-shot alignment
@@ -893,9 +893,9 @@ All CLI pickle inputs, including fitted-extractor bundles, are trusted-input-onl
 Artifact-backed embedding workers are transform-only: the driver or
 `fit-extractor` fits once on the complete selected dataset before shard dispatch.
 
-Reusable artifacts use cache identity schema v2: hashes cover complete typed values.
-Array manifest v2 commits immutable digest-named array data, while composite artifact
-manifest v2 commits an array plus metadata or labels plus metadata as one coherent
+Reusable artifacts use cache identity schema: hashes cover complete typed values.
+Array manifest commits immutable digest-named array data, while composite artifact
+manifest commits an array plus metadata or labels plus metadata as one coherent
 publication. Readers validate component sizes and SHA-256 digests as well as array
 shape, dtype, storage format, and sparse `nnz`.
 
@@ -1069,7 +1069,7 @@ its labels cross the three embedding clusters, and the report correctly flags th
 weak result. The structured-depth result evaluates continuous target structure; it
 is not an RMSE or depth-estimation benchmark.
 
-See [results and reports](docs/results_and_reports.md) for the complete schema and
+See [results and reports](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/results_and_reports.md) for the complete schema and
 the additional metadata retained for multi-output, structured, relational, and
 zero-shot workflows.
 

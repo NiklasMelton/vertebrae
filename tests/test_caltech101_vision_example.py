@@ -46,6 +46,25 @@ def test_select_caltech101_subset_uses_directory_names_as_labels(tmp_path):
     assert samples == sorted(samples, key=lambda sample: (sample.label, sample.path.name))
 
 
+def test_build_caltech101_dataset_preserves_descriptive_source(tmp_path):
+    samples = [
+        caltech_example.CaltechImageSample(label="crab", path=tmp_path / "crab_1.jpg"),
+        caltech_example.CaltechImageSample(label="crab", path=tmp_path / "crab_2.jpg"),
+        caltech_example.CaltechImageSample(label="watch", path=tmp_path / "watch_1.jpg"),
+        caltech_example.CaltechImageSample(label="watch", path=tmp_path / "watch_2.jpg"),
+    ]
+
+    dataset = caltech_example.build_caltech101_dataset(
+        samples=samples,
+        data_dir=tmp_path,
+        class_names=("crab", "watch"),
+        samples_per_class=2,
+    )
+
+    assert dataset.metadata["source"] == "image_paths"
+    assert dataset.metadata["dataset_source"] == "Caltech-101 subset"
+
+
 def test_ensure_caltech101_categories_reuses_existing_directory(tmp_path):
     categories_dir = tmp_path / "101_ObjectCategories"
     categories_dir.mkdir()
