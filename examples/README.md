@@ -27,6 +27,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/tiny_shakespeare_transformer_visual_suite.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_overfitting.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
@@ -85,6 +86,20 @@ Each script writes reports to `examples/output/`.
   and layer-by-hierarchy figures.
   The first run downloads Fashion-MNIST through torchvision; install all required
   optional dependencies with `poetry install -E visuals`.
+- `tiny_shakespeare_transformer_visual_suite.py`: checksum and cache the 1.1 MB Tiny
+  Shakespeare corpus, then train either the four-block `fast` character GPT or the
+  4.82-million-parameter `quality` profile (`--profile quality`) with six blocks, width
+  256, 256-character contexts, and dropout. Four hidden representations are evaluated
+  against the exact next character on a fixed held-out validation probe. The probe
+  deterministically retains every character with at least two eligible occurrences (up
+  to 256 rows per class); classes below the configurable macro-support threshold remain
+  in per-token diagnostics but are excluded from macro aggregation. A separate naturally
+  distributed validation pass reports cross-entropy, perplexity, and top-1 accuracy.
+  Final generation, compression, and reports use the best-validation checkpoint. The
+  suite also compares PCA and quantization and writes monitoring, compression-frontier,
+  and complete per-character heatmap figures. Install `poetry install -E text-visuals`;
+  the default `--device auto` smoke-tests CUDA/ROCm, MPS, and XPU before its CPU fallback,
+  while `--no-download` requires an already checksum-valid cache.
 - `fashion_mnist_overfitting.py`: compare clean-label and noisy-label CNNs that start from
   identical weights and receive identical images, mini-batch order, optimizer settings,
   and schedules. Per-layer OverlapIndex panels evaluate both models on the same clean

@@ -106,6 +106,12 @@ Optional dependencies for the Fashion-MNIST visual example suite:
 pip install "vertebrae[visuals]"
 ```
 
+Optional dependencies for the Tiny Shakespeare transformer visual suite:
+
+```bash
+pip install "vertebrae[text-visuals]"
+```
+
 Optional local Keras model support:
 
 ```bash
@@ -699,6 +705,85 @@ poetry install -E visuals
 poetry run python examples/fashion_mnist_visual_suite.py
 poetry run python examples/fashion_mnist_overfitting.py
 ```
+
+#### Tiny Shakespeare transformer representations
+
+[`tiny_shakespeare_transformer_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/tiny_shakespeare_transformer_visual_suite.py)
+offers fast and quality character-GPT profiles on the contiguous first 90% of Tiny
+Shakespeare. The following 5% supplies both a fixed, class-balanced representation
+probe and a naturally distributed language-model validation set; the final 5% remains
+untouched. The vocabulary is constructed from training text only, and the downloaded
+1.1 MB corpus is accepted only when its SHA-256 checksum matches the pinned source.
+
+Each probe row contains only its preceding validation context and is labeled with the
+immediately following character. Every validation character with at least two eligible
+positions remains in per-token diagnostics, with at most 256 deterministic positions
+per character. Characters with fewer than 50 natural validation occurrences are passed
+through `exclude_classes`: they remain visible in the heatmap and their per-class
+scores remain serialized, but they do not contribute to the headline macro score.
+With the default 64-character context and support settings, the checksum-pinned corpus
+produces 11,429 probe rows across 59 scored characters: 51 contribute to the macro
+score, eight remain diagnostic-only because they have fewer than 50 eligible validation
+positions, and one validation singleton is omitted because overlap scoring requires two
+examples. The JSON metadata records those counts, supports, character identities, and
+source offsets so the selection is auditable.
+
+The fast profile evaluates token-plus-position embeddings, blocks 1 and 2, and final
+normalized block 4. The quality profile evaluates token-plus-position, blocks 2 and 4,
+and final normalized block 6. Both run at initialization and every 1,000 steps.
+OverlapIndex uses the fixed probe and `k="auto"` with the library defaults (`min_k=10`,
+`max_k=50`, and five samples per cluster), so resolved per-character `k` values do not
+change between checkpoints. Cross-entropy, perplexity, and top-1 accuracy answer a
+different question: they measure next-character prediction on every naturally
+distributed validation window. They should not be interpreted as substitutes for the
+probe's representation geometry.
+
+![Tiny Shakespeare causal GPT architecture, layer-wise OverlapIndex trajectories, and validation cross-entropy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-representation-monitoring.png)
+
+In the checked 5,000-step CPU run, validation cross-entropy fell from `4.1555` to
+`1.6097` (perplexity `63.78` to `5.00`) while top-1 accuracy rose from `0.8%` to
+`51.6%`. The final normalized block's macro OverlapIndex increased from `0.173` to
+`0.351`; the token-plus-position representation changed little, which helps localize
+the learned next-character geometry to the transformer blocks.
+
+![Tiny Shakespeare final-representation PCA and quantization frontier](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-compression-frontier.png)
+
+![Tiny Shakespeare complete per-character OverlapIndex heatmap before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-next-token-heatmap.png)
+
+`--device auto` smoke-tests CUDA/ROCm, Apple MPS, and Intel XPU with a forward/backward
+step before falling back to CPU. An explicit backend fails rather than silently moving
+the run elsewhere. The selected backend and device name, Torch version, wall time, and
+host/device memory measurements are persisted with each result.
+
+The profiles are:
+
+| Profile | Architecture | Context / batch | Default steps | Monitored states |
+|---|---|---:|---:|---|
+| `fast` | 4 blocks, 4 heads, width 128, MLP 512, no dropout | 64 / 12 | 30,000 | token+position, blocks 1/2, final block 4 |
+| `quality` | 6 blocks, 8 heads, width 256, MLP 1024, dropout 0.1 | 256 / 32 | 10,000 | token+position, blocks 2/4, final block 6 |
+
+The quality profile has about 4.82 million parameters and samples 8,192 training
+characters per optimizer step, or about 81.9 million across its default run. Every
+validation checkpoint remains in monitoring history, but final generation, compression,
+and benchmark outputs restore the checkpoint with the lowest validation cross-entropy.
+The selected step and both best/last validation metrics are recorded in JSON metadata.
+
+Run it with:
+
+```bash
+poetry install -E text-visuals
+poetry run python examples/tiny_shakespeare_transformer_visual_suite.py --profile quality
+```
+
+The checked figures above came from the earlier 5,000-step fast baseline and can be
+reproduced with `--profile fast --steps 5000`. Profile defaults can be selectively
+overridden with `--steps`, `--context-length`, or `--train-batch-size`.
+
+Use `--no-download` for an offline run after the checksum-valid corpus has been cached
+under `examples/data/tiny_shakespeare/`. The script writes PNG/SVG monitoring,
+compression-frontier, and complete next-token heatmap figures plus CSV history,
+initial/final benchmark JSON, compression JSON, and deterministic initial/trained text
+generations under `examples/output/`.
 
 ### Retrieval and matching
 
