@@ -701,7 +701,7 @@ dense target matrix.
 
 For dense semantic, instance, or panoptic evaluation, use `SegmentationDataset`
 and the spatial extractor contracts documented in
-[segmentation.md](segmentation.md).
+[segmentation.md](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/segmentation.md).
 Segmentation subsets preserve original image positions in `sample_indices`,
 including through nested subsets. Materialized token groups and provenance use
 those original positions so image identity remains stable after filtering.

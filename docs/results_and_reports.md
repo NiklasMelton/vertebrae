@@ -165,7 +165,7 @@ result rather than being expanded into wide DataFrame cells.
 `RepresentationMonitor` uses this same row builder with `include_invalid=True`, then
 adds `evaluation_index`, status, evaluation identifiers, `recorded_at`,
 `context_metadata.<key>`, and failure fields. See
-[representation monitoring](monitoring.md) for memory and JSONL history behavior.
+[representation monitoring](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md) for memory and JSONL history behavior.
 Failed snapshots use the same canonical result columns with null values, including
 configured `metric.<name>` and standard `runtime.<stage>` columns.
 
