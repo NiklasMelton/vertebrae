@@ -893,9 +893,9 @@ All CLI pickle inputs, including fitted-extractor bundles, are trusted-input-onl
 Artifact-backed embedding workers are transform-only: the driver or
 `fit-extractor` fits once on the complete selected dataset before shard dispatch.
 
-Reusable artifacts use cache identity schema v2: hashes cover complete typed values.
-Array manifest v2 commits immutable digest-named array data, while composite artifact
-manifest v2 commits an array plus metadata or labels plus metadata as one coherent
+Reusable artifacts use cache identity schema: hashes cover complete typed values.
+Array manifest commits immutable digest-named array data, while composite artifact
+manifest commits an array plus metadata or labels plus metadata as one coherent
 publication. Readers validate component sizes and SHA-256 digests as well as array
 shape, dtype, storage format, and sparse `nnz`.
 
