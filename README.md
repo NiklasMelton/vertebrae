@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/NiklasMelton/vertebrae">
     <img
-      src="https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/vertebrae_logo.png"
+      src="https://raw.githubusercontent.com/NiklasMelton/vertebrae/main/img/vertebrae_logo.png"
       alt="Vertebrae logo"
       height="300"
     />
