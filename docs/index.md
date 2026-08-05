@@ -8,6 +8,8 @@ from the repository README, existing Markdown guides, and generated API referenc
 :caption: Guides
 
 Project Overview <overview>
+Installation <installation>
+Workflows <workflows>
 Datasets <datasets>
 Dense Segmentation <segmentation>
 Feature Extractors <feature_extractors>
