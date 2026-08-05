@@ -691,6 +691,170 @@ directly. Its practical value is explaining whether externally observed overfitt
 head-level or representation-level, which layers are affected, and what target structure
 those layers are learning.
 
+#### Demonstrated use case: auditing shortcut learning with named target views
+
+A model can look excellent on its headline metric while organizing its representation
+around the wrong semantics. The
+[`colored_fashion_mnist_shortcut.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/colored_fashion_mnist_shortcut.py)
+experiment demonstrates how named target views, a controlled reference run, and an
+external behavioral intervention can expose that failure mode.
+
+The practical question is deliberately simple: if garment color predicts garment class
+during training, does a CNN learn the garment or the color shortcut? Accuracy alone
+cannot answer this on the training distribution. Likewise, high class OI alone cannot
+answer it if class and color are correlated in the representation probe. The experiment
+therefore separates three jobs:
+
+1. A paired control isolates the effect of the class-color correlation.
+2. A decorrelated audit probe asks what each layer organizes.
+3. Counterfactual recoloring asks whether the learned organization changes behavior.
+
+##### Experimental design
+
+Two compact CNNs begin from identical parameters and receive the same 2,000 training
+garments, class targets, mini-batch order, optimizer, and 12-epoch schedule. The only
+difference is the color environment:
+
+| Training regime | Color assignment | What it controls |
+|---|---|---|
+| Independent-color control | Every color has equal support within every garment class | Shows what the network learns when color is visible but useless for the task |
+| Shortcut treatment | The class's canonical color is used with 85% probability | Gives the network an easy nuisance feature that predicts the intended target |
+
+Color is applied as a moderate tint rather than replacing the grayscale garment. The
+shape evidence is therefore present in every environment. The held-out 2,000-garment
+probe is rendered four ways: color removed, canonical/correlated, independently colored,
+and with a fixed reversed mapping. The following are the same garment pixels under those
+interventions.
+
+![Colored Fashion-MNIST exemplars showing grayscale, canonical, independent, and reversed-color interventions](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_exemplars.png)
+
+The representation audit uses exactly balanced class×color cells and registers two
+named target views on those same rows:
+
+- `intended_class`: the garment category that the classifier should learn;
+- `nuisance_color`: the tint that should not determine the prediction.
+
+Balancing is essential. On a 95%-correlated probe, class and color are nearly duplicate
+partitions, so even an untrained color-sensitive representation can receive high OI for
+both. The balanced probe makes garment and color statistically independent, allowing
+each OI trajectory to describe distinct geometry. It uses one tint per held-out image
+to avoid duplicate-image structure; the behavioral audit can safely recolor every image
+with all ten hues because it measures predictions rather than representation geometry.
+
+The reported run repeats the paired experiment across five training seeds. Within each
+seed, control and treatment remain matched; the plots show the mean and one standard
+deviation across seeds. Separatix and OI stability repeats are disabled here so the
+uncertainty represents variation from training the models, not repeated scoring of one
+fixed representation.
+
+##### What the ordinary evaluation would conclude
+
+If evaluation stopped at the correlated environment, the shortcut model would win:
+
+| Model | Correlated ID | Balanced colors | Reversed colors | Color removed |
+|---|---:|---:|---:|---:|
+| Independent-color control | 82.63% ± 1.87 | 82.76% ± 1.49 | 82.81% ± 1.56 | 82.73% ± 1.68 |
+| Shortcut treatment | **91.42% ± 0.70** | 68.95% ± 2.43 | 47.27% ± 4.02 | 78.25% ± 1.77 |
+
+The treatment gains 8.79 percentage points in-distribution. That apparent improvement
+reverses when color stops carrying the training relationship: it trails the control by
+13.81 points on balanced colors and by 35.54 points on the reversed mapping. Removing
+color is less harmful than supplying misleading color, which is strong evidence that the
+model is responding to the nuisance rather than merely requiring additional RGB signal.
+
+The bottom row of the monitoring figure supplies this behavioral evidence independently
+of OI. The upper rows then explain where the representation differs.
+
+![Five-seed colored Fashion-MNIST named-target OI trajectories and counterfactual accuracy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_monitoring.png)
+
+##### What named target views reveal
+
+At epoch 12, the balanced audit probe produces the following OI macro scores:
+
+| Layer | Intended class: control | Intended class: shortcut | Nuisance color: control | Nuisance color: shortcut |
+|---|---:|---:|---:|---:|
+| Conv block 1 | 0.307 ± 0.012 | 0.263 ± 0.015 | 0.031 ± 0.012 | 0.076 ± 0.014 |
+| Conv block 2 | 0.477 ± 0.033 | 0.266 ± 0.030 | 0.009 ± 0.003 | 0.194 ± 0.056 |
+| Final embedding | 0.675 ± 0.016 | 0.557 ± 0.022 | 0.000 ± 0.000 | 0.020 ± 0.010 |
+
+The control increasingly organizes later layers around garment class while suppressing
+color. The shortcut treatment develops weaker garment geometry at every measured layer
+and retains much more color organization, especially in the second convolutional block.
+This localizes the main representational effect before the classifier head.
+
+The result is subtler than “color OI rises everywhere.” Color is visible at
+initialization, and both networks suppress some of it. The meaningful comparison is that
+independent-color training suppresses the nuisance far more completely, while correlated
+training preserves it and sacrifices robust garment structure. The paired-effect plot
+makes that treatment-minus-control comparison explicit: negative intended-target effects
+mean weaker semantic organization, while positive nuisance-target effects mean retained
+color structure.
+
+![Paired treatment-minus-control effects for intended garment and nuisance color OverlapIndex](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_paired_effects.png)
+
+Final-embedding color OI remains low even though the treatment is behaviorally
+color-sensitive. This is not a contradiction. OI asks whether colors form globally
+separated clusters; a classifier can exploit a weaker or class-conditional color
+direction without arranging the whole embedding into ten clean color clusters. OI
+localizes representation geometry, while counterfactual accuracy establishes whether a
+feature affects decisions. Neither should be substituted for the other.
+
+##### Exhaustive recoloring confirms the harm
+
+The final behavioral audit renders every held-out garment in all ten colors. This makes
+robustness a per-example intervention rather than a result that depends on one random
+balanced assignment:
+
+| Behavioral diagnostic | Control | Shortcut treatment | Treatment − control |
+|---|---:|---:|---:|
+| Accuracy across all colors | 82.70% ± 1.64 | 68.28% ± 2.33 | −14.42 points |
+| Garments correct under every color | 81.23% ± 1.76 | 37.03% ± 3.10 | −44.20 points |
+| Prediction changes under recoloring | 3.42% ± 0.74 | 62.17% ± 3.22 | +58.75 points |
+| Errors that follow the displayed color's associated class | 11.26% ± 0.15 | 28.49% ± 1.87 | +17.22 points |
+| 10th-percentile class×color accuracy | 65.98% ± 5.95 | 6.75% ± 6.14 | −59.23 points |
+| Mean of the five weakest class×color cells | 40.96% ± 16.24 | 0.16% ± 0.21 | −40.80 points |
+
+The average degradation is important, but the lower tail is more operationally useful:
+some garment-color combinations are nearly unusable even though aggregate ID accuracy
+exceeds 91%. A minimum cell score would be too brittle, so the example reports the 10th
+percentile and the mean of the five weakest cells together with their seed-level values.
+
+##### How to apply this pattern
+
+This experiment is intentionally synthetic, but the workflow transfers directly to
+real representation audits:
+
+1. Name the intended target and each suspected nuisance explicitly—product category and
+   photography style, diagnosis and acquisition site, speaker content and microphone,
+   or activity and device identity.
+2. Build a fixed audit slice where intended and nuisance targets are sufficiently
+   decorrelated. Named views do not remove confounding by themselves.
+3. Compare against a controlled reference model, previous checkpoint, or training
+   regime so that naturally visible nuisance information is not mistaken for learned
+   reliance.
+4. Monitor the same named layers over time. Use OI to identify which semantics organize
+   which layers, and compare changes within the same target/probe protocol.
+5. Intervene on the nuisance independently and measure task behavior. Representation
+   separability is diagnostic evidence, not a causal performance metric.
+6. Repeat training seeds and report paired effects. OI stability intervals characterize
+   scoring sensitivity; they do not replace variation across trained models.
+
+The central lesson is not that separability is bad. High separability is valuable only
+with respect to the semantics the application actually needs. Named target views make
+that distinction visible; a decorrelated probe and counterfactual behavior make it
+credible.
+
+Reproduce the reported run with the `visuals` extra:
+
+```bash
+poetry install -E visuals
+poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
+```
+
+The script writes seed-level history, raw and summarized final metrics, the aggregate
+monitoring figure, the paired-effect figure, and documentation-ready PNG/SVG exemplar
+grids. Use `--repeats 1` while iterating; increase it only for reported results.
+
 #### Hierarchical label views
 
 The same representations are evaluated against nested department, garment-group, and
@@ -704,6 +868,7 @@ Reproduce the visual suites with:
 poetry install -E visuals
 poetry run python examples/fashion_mnist_visual_suite.py
 poetry run python examples/fashion_mnist_overfitting.py
+poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
 ```
 
 #### Tiny Shakespeare transformer representations

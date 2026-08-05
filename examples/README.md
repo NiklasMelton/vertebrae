@@ -107,6 +107,17 @@ Each script writes reports to `examples/output/`.
   geometry from alignment with deliberately incorrect labels. Loss defines the shaded
   overfitting region independently of OverlapIndex. The first run downloads Fashion-MNIST
   through torchvision and requires the `visuals` extra.
+- `colored_fashion_mnist_shortcut.py`: create a controlled colored Fashion-MNIST
+  shortcut-learning experiment with paired, identically initialized control and
+  treatment CNNs. The control receives colors balanced within every class; only the
+  treatment receives class-correlated colors. Every layer is evaluated against the
+  named `intended_class` and `nuisance_color` views on a separate balanced audit probe.
+  Three paired seeds are aggregated by default. Correlated, balanced, reversed-color,
+  grayscale, and exhaustive all-color tests measure accuracy, prediction flips,
+  color-following errors, and robust class×color cell summaries. The script also writes
+  aggregate monitoring, paired-effect, and documentation-ready PNG/SVG exemplar figures.
+  The first run downloads Fashion-MNIST through torchvision and requires the `visuals`
+  extra; use `--repeats 1` for a quick smoke run.
 - `keras_local_model.py`: demonstrate `KerasExtractor` with content-digested provenance
   for a locally saved Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export
