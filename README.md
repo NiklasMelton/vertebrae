@@ -47,24 +47,23 @@ This makes OverlapIndex useful for questions such as:
 
 ### Separable does not necessarily mean linearly separable
 
-Classes may occupy distinct regions of an embedding and still require curved, local,
-or otherwise nonlinear decision boundaries. In other words, a high separation score is
-evidence that target information is organized in the representation; it is not proof
-that a linear probe can recover that information. The distinction matters because
-choosing a classifier is a question about decision-boundary complexity, not just
-whether class regions overlap.
+One common way to evaluate a pretrained backbone is to freeze it and train a linear
+head on the target task. This is an inexpensive and useful baseline, but a weak linear
+result only shows that the target structure was not readily accessible through that
+linear decision rule and training protocol. It does not prove that the embedding lacks
+useful separation.
 
-That is why vertebrae complements OverlapIndex with
-[Separatix](https://github.com/NiklasMelton/Separatix). Once an embedding clears a
-configurable overlap-quality threshold, Separatix evaluates evidence about linear and
-nonlinear classifier families and reports whether a simple linear model is likely to be
-sufficient or whether a smoother nonlinear, kernel, or local model is worth testing.
-The overlap gate keeps this advice in context: when the representation itself is weak,
-changing classifier complexity may be less useful than improving the data or backbone.
-Separatix is a diagnostic and its probe results do not change the OverlapIndex score or
-the default ranking.
+Classes can be well separated while requiring curved, local, or otherwise nonlinear
+boundaries. OverlapIndex helps determine whether that separation exists. When it does,
+[Separatix](https://github.com/NiklasMelton/Separatix) provides evidence
+about whether a linear model is likely sufficient or whether nonlinear approaches are
+worth testing. Together, they help distinguish a poor representation from a promising
+representation whose geometry is simply non-trivial.
 
-### What OverlapIndex can—and cannot—tell you
+Separatix remains a diagnostic. Its probe evidence does not change the OverlapIndex
+score or the default ranking, and neither diagnostic guarantees downstream performance.
+
+### What OverlapIndex can and cannot tell you
 
 OverlapIndex can show whether labels are reflected in the observed embedding geometry,
 how that structure differs across classes and class pairs, and whether it is stable
@@ -79,8 +78,8 @@ not establish robustness, calibration, fairness, causality, or usefulness for an
 unmeasured target. Scores are also conditional on the evaluated dataset, labels,
 sampling, embedding normalization, and OverlapIndex configuration; compare candidates
 under the same protocol rather than treating a score as a universal model rating.
-Vertebrae deliberately reports representation diagnostics beside—not in place of—task,
-retrieval, zero-shot, or domain-specific metrics.
+Vertebrae deliberately reports representation diagnostics beside, not in place of,
+task, retrieval, zero-shot, or domain-specific metrics.
 
 ## Why vertebrae?
 
@@ -154,8 +153,8 @@ result.save_markdown("report.md")
 ```
 
 That run gives you a global overlap score, detailed weak-class evidence, a stability
-summary, and—when the overlap gate passes—Separatix guidance about downstream
-classifier complexity.
+summary, and Separatix guidance about downstream classifier complexity when the overlap
+gate passes.
 
 Every root dataset requires an explicit `DatasetIdentity`. A declared identity is the
 recommended production choice; change its revision whenever the dataset content,
@@ -499,7 +498,7 @@ claim that classifier behavior improved.
 ![Fashion-MNIST deployment-shift atlas with layer retention, behavior, class effects, and confusion onset](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-corruption-atlas.png)
 
 The run finds three distinct stories. Severe noise retains `0.89` of clean embedding
-OI with accuracy `0.733`. Severe contrast damages the backbone—first- and second-block
+OI with accuracy `0.733`. Severe contrast damages the backbone: first- and second-block
 retention fall to `0.11` and `0.37`, with accuracy `0.299`. Rotation preserves early
 features but damages the task representation: block 2 retains `0.92`, the embedding
 retains `0.73`, and accuracy falls to `0.407`. Those patterns suggest different fixes,
@@ -513,24 +512,31 @@ comparison caveats.
 The companion
 [`fashion_mnist_overfitting.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_overfitting.py)
 trains clean-label and noisy-label CNNs from identical weights with identical images,
-mini-batch order, optimizer settings, and schedules. It compares their layer-wise
-OverlapIndex on a shared clean validation probe and a shared corrupted-target probe,
-showing both transferable class geometry and alignment with deliberately incorrect
-labels. Minimum clean validation loss for the noisy treatment defines the shaded
-overfitting region without using OverlapIndex as its own ground truth.
+mini-batch order, optimizer settings, and schedules. Forty percent of a 1,000-example
+training subset receives a deterministic wrong label. The models are then compared on
+the same clean validation and corrupted-target probes, while held-out loss defines the
+shaded overfitting region independently of OI.
 
+The important story begins after the noisy model reaches its best validation loss.
+From epochs 10 to 20, its final-embedding OI on the corrupted targets rises from `0.039`
+to `0.313`, while the clean control remains near zero on those arbitrary labels. At the
+same time, the noisy model's clean-probe OI stalls near `0.63`, while the control
+continues from `0.669` to `0.718`. The noisy model is not merely fitting the wrong
+answers at its output. Its late representation is increasingly reorganizing around
+those answers while making no further progress on transferable garment structure.
 
-Forty percent of a 1,000-example training subset receives a deterministic wrong label;
-both models are then compared on the same clean validation and corrupted-target probes.
-Held-out loss defines overfitting independently of OI. From epochs 10 to 20, noisy-model
-embedding OI on the corruption probe grows from `0.039` to `0.313`, while clean-probe OI
-stalls near `0.63` instead of reaching the control's `0.718`. Early features remain
-similar, but the final embedding develops geometry around arbitrary targets.
+The layer comparison localizes that tradeoff. Early features remain similar, the
+second block begins to diverge, and the strongest arbitrary-target geometry appears in
+the final embedding. For a practitioner, that pattern argues against discarding the
+entire backbone. It points instead toward restoring an earlier checkpoint, preserving
+the reusable early features, auditing the corrupted labels, and focusing regularized or
+noise-robust retraining on the later representation stages.
 
 ![Clean-label control and noisy-label treatment compared across Fashion-MNIST representation layers and probes](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-paired-overfitting-monitoring.png)
 
-OI is not an overfitting detector by itself; it explains where an independently observed
-failure appears in the representation hierarchy. The
+OI is not an overfitting detector by itself. Held-out loss establishes the failure;
+OverlapIndex reveals what geometry the model learned and where that learning entered
+the representation hierarchy. The
 [full monitoring case study](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md#paired-overfitting-monitor)
 preserves the control design, interpretation table, and practical response patterns.
 
@@ -571,7 +577,7 @@ distinct geometry. Five paired seeds measure variation across trained models.
 
 ##### What the ordinary evaluation would conclude
 
-The treatment appears better in-distribution—`91.42%` versus `82.63%`—but trails the
+The treatment appears better in-distribution at `91.42%` versus `82.63%`, but trails the
 control by 13.81 points on balanced colors and 35.54 points under reversal.
 
 ![Five-seed colored Fashion-MNIST named-target OI trajectories and counterfactual accuracy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_monitoring.png)
@@ -710,7 +716,7 @@ prototype locations used for cosine-similarity classification move.
 
 The left panel shows the central result. The sample representation has a fixed macro
 OverlapIndex of `0.892`, while zero-shot accuracy changes from `73.2%` with bare labels
-to `93.8%` with photo prompts—a `20.6` percentage-point improvement without changing
+to `93.8%` with photo prompts, a `20.6` percentage-point improvement without changing
 the image representation. Weak initial zero-shot accuracy therefore did not imply weak
 transfer features in this run; the original text prototypes addressed otherwise strong
 image structure poorly.
