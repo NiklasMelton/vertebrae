@@ -132,10 +132,13 @@ def test_fashion_mnist_overfitting_holds_validation_rows_out_before_training(tmp
 def test_best_validation_epoch_uses_the_first_global_minimum():
     module = _load_example_module()
 
-    assert module._best_validation_epoch(
-        epochs=[0, 2, 4, 6, 8],
-        losses=[2.3, 1.4, 0.9, 0.9, 1.2],
-    ) == 4
+    assert (
+        module._best_validation_epoch(
+            epochs=[0, 2, 4, 6, 8],
+            losses=[2.3, 1.4, 0.9, 0.9, 1.2],
+        )
+        == 4
+    )
 
     with pytest.raises(ValueError, match="equal length"):
         module._best_validation_epoch(epochs=[0, 1], losses=[1.0])
@@ -144,9 +147,7 @@ def test_best_validation_epoch_uses_the_first_global_minimum():
 def test_readme_paired_overfitting_asset_is_present_and_renderable():
     root = Path(__file__).resolve().parents[1]
     readme = (root / "README.md").read_text(encoding="utf-8")
-    relative_png = (
-        Path("img") / "visuals" / "fashion-mnist-paired-overfitting-monitoring.png"
-    )
+    relative_png = Path("img") / "visuals" / "fashion-mnist-paired-overfitting-monitoring.png"
     png_path = root / relative_png
     svg_path = png_path.with_suffix(".svg")
 

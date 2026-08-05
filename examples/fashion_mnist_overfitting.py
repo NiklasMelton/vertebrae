@@ -662,12 +662,8 @@ def _checkpoint_metrics(
         "noisy_training_accuracy_clean": noisy_training_accuracy_clean,
         "noisy_validation_loss": noisy_validation_loss,
         "noisy_validation_accuracy": noisy_validation_accuracy,
-        "clean_accuracy_generalization_gap": (
-            clean_training_accuracy - clean_validation_accuracy
-        ),
-        "noisy_accuracy_generalization_gap": (
-            noisy_training_accuracy - noisy_validation_accuracy
-        ),
+        "clean_accuracy_generalization_gap": (clean_training_accuracy - clean_validation_accuracy),
+        "noisy_accuracy_generalization_gap": (noisy_training_accuracy - noisy_validation_accuracy),
     }
 
 

@@ -236,9 +236,7 @@ def evaluate_prompt_sets(
             template_ids=template_ids,
             sample_ids=protocol.sample_ids(),
         )
-        evaluations.append(
-            PromptSetEvaluation(name, dict(class_prompts), zero_shot)
-        )
+        evaluations.append(PromptSetEvaluation(name, dict(class_prompts), zero_shot))
     return image_embeddings, overlap, evaluations
 
 
@@ -298,9 +296,7 @@ def plot_prompt_structure_comparison(rows: Sequence[Mapping[str, Any]], path: Pa
         name: markers[index % len(markers)] for index, name in enumerate(prompt_names)
     }
     colors = plt.get_cmap("Dark2").colors
-    color_by_prompt = {
-        name: colors[index % len(colors)] for index, name in enumerate(prompt_names)
-    }
+    color_by_prompt = {name: colors[index % len(colors)] for index, name in enumerate(prompt_names)}
     overlap_values = {float(row["overlap_index"]) for row in global_rows}
     if len(overlap_values) != 1:
         raise ValueError("Global comparison rows must share one fixed Overlap Index value.")

@@ -204,8 +204,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     clean_oi = {row["layer"]: row["overlap_index"] for row in clean_rows}
     clean_class_oi = {
-        (row["layer"], row["class_name"]): row["class_overlap_index"]
-        for row in clean_class_rows
+        (row["layer"], row["class_name"]): row["class_overlap_index"] for row in clean_class_rows
     }
 
     for corruption in _CORRUPTION_ORDER:
@@ -239,17 +238,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     torch=torch,
                 )
             for row in rows:
-                row["oi_retention"] = _safe_retention(
-                    row["overlap_index"], clean_oi[row["layer"]]
-                )
+                row["oi_retention"] = _safe_retention(row["overlap_index"], clean_oi[row["layer"]])
             for row in per_class:
                 row["class_oi_retention"] = _safe_retention(
                     row["class_overlap_index"],
                     clean_class_oi[(row["layer"], row["class_name"])],
                 )
                 row["class_oi_delta"] = (
-                    row["class_overlap_index"]
-                    - clean_class_oi[(row["layer"], row["class_name"])]
+                    row["class_overlap_index"] - clean_class_oi[(row["layer"], row["class_name"])]
                 )
             summary_rows.extend(rows)
             class_rows.extend(per_class)
@@ -400,8 +396,7 @@ def _corrupt_images(
         return np.asarray(values, dtype=np.float32).copy()
 
     raw = (
-        torch.as_tensor(values, dtype=torch.float32).reshape(-1, 1, 28, 28)
-        * _NORMALIZATION_STD
+        torch.as_tensor(values, dtype=torch.float32).reshape(-1, 1, 28, 28) * _NORMALIZATION_STD
         + _NORMALIZATION_MEAN
     ).clamp(0.0, 1.0)
     amount = _SEVERITY_VALUES[corruption][severity_index]
@@ -534,9 +529,7 @@ def _behavior_metrics(
             batch_x = torch.as_tensor(values[start : start + batch_size], dtype=torch.float32)
             batch_y = torch.as_tensor(labels[start : start + batch_size], dtype=torch.long)
             logits = model(batch_x)["logits"]
-            total_loss += float(
-                torch.nn.functional.cross_entropy(logits, batch_y, reduction="sum")
-            )
+            total_loss += float(torch.nn.functional.cross_entropy(logits, batch_y, reduction="sum"))
             predictions.append(logits.argmax(dim=1).cpu().numpy())
     model.train(previous_mode)
     combined = np.concatenate(predictions).astype(np.int64, copy=False)
@@ -629,10 +622,7 @@ def _practitioner_summary(summary: Any) -> str:
     )
     earliest_layer = retention.mean(axis=0).reindex(_LAYER_ORDER).idxmin()
     worst_behavior = (
-        severe.loc[:, ["corruption", "accuracy"]]
-        .drop_duplicates()
-        .sort_values("accuracy")
-        .iloc[0]
+        severe.loc[:, ["corruption", "accuracy"]].drop_duplicates().sort_values("accuracy").iloc[0]
     )
     return (
         "Atlas summary: the largest mean severe-shift OI loss occurred at "
