@@ -106,6 +106,14 @@ timm = ["torch", "timm"]
 torchvision = ["torch", "torchvision"]
 visuals = ["torch", "torchvision", "matplotlib"]
 text-visuals = ["torch", "matplotlib"]
+backbone-selection = [
+    "torch",
+    "torchvision",
+    "transformers",
+    "timm",
+    "open-clip-torch",
+    "matplotlib",
+]
 openclip = ["torch", "open-clip-torch"]
 mlp = ["torch"]
 keras = ["keras"]
