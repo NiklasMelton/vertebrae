@@ -828,6 +828,52 @@ zero-shot rank and ordinary sample-embedding overlap are reported side by side; 
 are not combined into a universal backbone score. See `docs/zero_shot.md` and the
 network-free `examples/zero_shot_callable.py` workflow.
 
+#### Flagship example: zero-shot versus transfer structure
+
+The OpenCLIP CIFAR-10 experiment in
+`examples/zero_shot_transfer_structure.py` separates sample structure from text
+alignment. It encodes a balanced set of 500 images exactly once with the frozen
+OpenCLIP image encoder, producing one fixed image-embedding matrix. OverlapIndex is
+then calculated once from that matrix and the CIFAR-10 labels.
+
+The same image matrix is reused with three explicit prompt protocols. Only the text
+changes: `cat`, `a photo of a cat`, or
+`a low-resolution CIFAR-10 image of a cat`, for example. Each string passes
+through the same frozen text encoder and produces a different class prototype. Model
+weights, image embeddings, and the shared embedding space remain unchanged; only the
+prototype locations used for cosine-similarity classification move.
+
+![Fixed OpenCLIP image structure compared with prompt-sensitive zero-shot accuracy and per-class F1](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/zero-shot-transfer-structure.png)
+
+The left panel shows the central result. The sample representation has a fixed macro
+OverlapIndex of `0.892`, while zero-shot accuracy changes from `73.2%` with bare labels
+to `93.8%` with photo prompts—a `20.6` percentage-point improvement without changing
+the image representation. Weak initial zero-shot accuracy therefore did not imply weak
+transfer features in this run; the original text prototypes addressed otherwise strong
+image structure poorly.
+
+The right panel shows the same distinction per class. Rows are ordered by their fixed
+per-class OverlapIndex. Colored markers are zero-shot F1 under each prompt protocol,
+the gray segment is the prompt-driven F1 range, and the percentage-point annotation
+quantifies prompt sensitivity. `automobile`, for example, has strong structure
+(`OI: 0.96`) but an `87`-point F1 range across prompts. Per-class OverlapIndex and F1
+should not be compared as interchangeable values: they answer different questions
+despite both being bounded scores.
+
+For practitioners, the two signals suggest different next actions:
+
+| sample structure | zero-shot alignment | practical next step |
+| --- | --- | --- |
+| strong | weak or prompt-sensitive | Keep the backbone; improve class wording, use a predeclared prompt ensemble, or train a supervised head. |
+| strong | strong and stable | The frozen representation is both transferable and naturally text-addressable for this protocol. |
+| weak | strong | Zero-shot classification works, but inspect whether the feature geometry is robust enough for broader transfer. |
+| weak | weak | Investigate another backbone, domain adaptation, or a different data representation. |
+
+Prompt alternatives should be declared before evaluation or chosen on a separate
+validation set. Trying many prompts against test labels and reporting only the winner
+turns prompt design into test-set tuning. The experiment is intentionally diagnostic:
+it does not combine OverlapIndex and zero-shot accuracy into one model-quality score.
+
 Use `ZeroShotCandidate(extractor, sample_branch, text_branch)` when compared models
 use different branch names. OpenCLIP keeps its image-only ordinary default while its
 native `text_branch` remains available for zero-shot. Callable adapters cache only

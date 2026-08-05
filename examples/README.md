@@ -130,6 +130,10 @@ Each script writes reports to `examples/output/`.
   subset with related category pairs using DINOv2, a tiny supervised ViT baseline,
   and an optional gated DINOv3 extractor. Downloads the dataset archive when it
   is not already present locally.
+- `zero_shot_transfer_structure.py`: flagship CIFAR-10 OpenCLIP experiment that
+  encodes images once, varies only explicit text prompt sets, and contrasts fixed
+  global/per-class OverlapIndex with prompt-sensitive zero-shot accuracy/F1. Requires
+  `openclip` and `visuals` extras; downloads CIFAR-10 and the checkpoint on first use.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
 
@@ -148,6 +152,14 @@ Run the Hugging Face vision example after installing optional dependencies:
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E hf
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_mnist.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/caltech101_vision_foundation_models.py
+```
+
+Run the zero-shot versus transfer-structure experiment after installing its OpenCLIP
+and visualization extras:
+
+```bash
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E openclip -E visuals
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/zero_shot_transfer_structure.py
 ```
 
 To include DINOv3 in the Caltech-101 example, accept the model terms on Hugging
