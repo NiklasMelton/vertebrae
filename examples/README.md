@@ -27,6 +27,9 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_corruption_atlas.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/tiny_shakespeare_transformer_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_overfitting.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
@@ -80,10 +83,49 @@ Each script writes reports to `examples/output/`.
   Fashion-MNIST subset with a fixed held-out validation set, monitor hidden
   pooled convolutional representations and a 128-dimensional embedding every two
   optimizer steps, compare compression variants, evaluate nested product-category
-  views, and generate the README's representation-monitoring, compression-frontier,
-  and layer-by-hierarchy figures.
+  views, save a reusable trained checkpoint, and generate the README's
+  representation-monitoring, compression-frontier, and layer-by-hierarchy figures.
   The first run downloads Fashion-MNIST through torchvision; install all required
   optional dependencies with `poetry install -E visuals`.
+- `fashion_mnist_corruption_atlas.py`: reuse that trained checkpoint (or train it once
+  when absent), then evaluate a fixed official-test probe under blur, Gaussian noise,
+  occlusion, contrast reduction, and rotation at four increasing severities. The atlas
+  aligns layer-wise OverlapIndex retention with accuracy and cross-entropy, shows which
+  classes lose embedding geometry under severe shift, and marks the first corruption
+  tier where each classifier-confusion pair materially increases. CSV protocol tables
+  make the visual drill-down reproducible.
+- `tiny_shakespeare_transformer_visual_suite.py`: checksum and cache the 1.1 MB Tiny
+  Shakespeare corpus, then train either the four-block `fast` character GPT or the
+  4.82-million-parameter `quality` profile (`--profile quality`) with six blocks, width
+  256, 256-character contexts, and dropout. Four hidden representations are evaluated
+  against the exact next character on a fixed held-out validation probe. The probe
+  deterministically retains every character with at least two eligible occurrences (up
+  to 256 rows per class); classes below the configurable macro-support threshold remain
+  in per-token diagnostics but are excluded from macro aggregation. A separate naturally
+  distributed validation pass reports cross-entropy, perplexity, and top-1 accuracy.
+  Final generation, compression, and reports use the best-validation checkpoint. The
+  suite also compares PCA and quantization and writes monitoring, compression-frontier,
+  and complete per-character heatmap figures. Install `poetry install -E text-visuals`;
+  the default `--device auto` smoke-tests CUDA/ROCm, MPS, and XPU before its CPU fallback,
+  while `--no-download` requires an already checksum-valid cache.
+- `fashion_mnist_overfitting.py`: compare clean-label and noisy-label CNNs that start from
+  identical weights and receive identical images, mini-batch order, optimizer settings,
+  and schedules. Per-layer OverlapIndex panels evaluate both models on the same clean
+  validation probe and the same corrupted-target subset, separating transferable class
+  geometry from alignment with deliberately incorrect labels. Loss defines the shaded
+  overfitting region independently of OverlapIndex. The first run downloads Fashion-MNIST
+  through torchvision and requires the `visuals` extra.
+- `colored_fashion_mnist_shortcut.py`: create a controlled colored Fashion-MNIST
+  shortcut-learning experiment with paired, identically initialized control and
+  treatment CNNs. The control receives colors balanced within every class; only the
+  treatment receives class-correlated colors. Every layer is evaluated against the
+  named `intended_class` and `nuisance_color` views on a separate balanced audit probe.
+  Three paired seeds are aggregated by default. Correlated, balanced, reversed-color,
+  grayscale, and exhaustive all-color tests measure accuracy, prediction flips,
+  color-following errors, and robust class×color cell summaries. The script also writes
+  aggregate monitoring, paired-effect, and documentation-ready PNG/SVG exemplar figures.
+  The first run downloads Fashion-MNIST through torchvision and requires the `visuals`
+  extra; use `--repeats 1` for a quick smoke run.
 - `keras_local_model.py`: demonstrate `KerasExtractor` with content-digested provenance
   for a locally saved Keras model and user-supplied `collate_fn` / `output_fn`.
 - `onnx_extractor.py`: demonstrate `ONNXExtractor` against a local ONNX export
@@ -107,6 +149,10 @@ Each script writes reports to `examples/output/`.
   subset with related category pairs using DINOv2, a tiny supervised ViT baseline,
   and an optional gated DINOv3 extractor. Downloads the dataset archive when it
   is not already present locally.
+- `zero_shot_transfer_structure.py`: flagship CIFAR-10 OpenCLIP experiment that
+  encodes images once, varies only explicit text prompt sets, and contrasts fixed
+  global/per-class OverlapIndex with prompt-sensitive zero-shot accuracy/F1. Requires
+  `openclip` and `visuals` extras; downloads CIFAR-10 and the checkpoint on first use.
 - `sentence_transformer_extractor.py`: sentence-transformers API example. Requires
   optional dependencies and a local or downloadable model.
 
@@ -125,6 +171,14 @@ Run the Hugging Face vision example after installing optional dependencies:
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E hf
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_vision_mnist.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/caltech101_vision_foundation_models.py
+```
+
+Run the zero-shot versus transfer-structure experiment after installing its OpenCLIP
+and visualization extras:
+
+```bash
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry install -E openclip -E visuals
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/zero_shot_transfer_structure.py
 ```
 
 To include DINOv3 in the Caltech-101 example, accept the model terms on Hugging

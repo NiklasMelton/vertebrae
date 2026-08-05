@@ -106,6 +106,12 @@ Optional dependencies for the Fashion-MNIST visual example suite:
 pip install "vertebrae[visuals]"
 ```
 
+Optional dependencies for the Tiny Shakespeare transformer visual suite:
+
+```bash
+pip install "vertebrae[text-visuals]"
+```
+
 Optional local Keras model support:
 
 ```bash
@@ -624,6 +630,297 @@ features and the task-specific embedding evolve at different depths.
 
 ![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-representation-monitoring.png)
 
+#### Corruption and deployment-shift atlas
+
+The companion
+[`fashion_mnist_corruption_atlas.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_corruption_atlas.py)
+reuses the saved trained checkpoint and turns the untouched official test split into a
+model-release probe. It evaluates clean images plus blur, Gaussian noise, occlusion,
+contrast reduction, and rotation at four increasing severities without training another
+model. A fixed `k=5` makes OverlapIndex retention comparable across conditions within
+each layer.
+
+The atlas is organized around three practitioner questions: **what failed, where did it
+start, and who was affected?** The top row reports OI retention, defined within each
+layer as `corrupted OI / clean OI`. A value near `1.0` means that the layer preserves its
+clean class geometry; `0.7` means that roughly 30% of that layer's clean OI has been
+lost. Retention above `1.0` can occur when a corruption makes some classes more compact,
+but it does not imply that classifier behavior improved. The middle row therefore keeps
+ordinary accuracy and cross-entropy beside OI. The bottom row shows which classes lose
+penultimate-layer geometry and the earliest severity at which each class-pair confusion
+increases by five percentage points. In the pair panel, light cells are early failures
+and dark cells require more severe corruption.
+
+![Fashion-MNIST deployment-shift atlas with layer retention, behavior, class effects, and confusion onset](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-corruption-atlas.png)
+
+The documentation run exposes three different robustness stories. Noise is relatively
+well tolerated: at the severe tier, the embedding retains `0.89` of clean OI and accuracy
+remains `0.733`. Contrast reduction is a backbone failure. Severe contrast leaves only
+`0.11` of first-block OI, `0.37` of second-block OI, and `0.299` accuracy, so replacing
+or recalibrating only the classifier head is unlikely to solve it. Contrast-aware input
+normalization, augmentation, or backbone fine-tuning is the more plausible response.
+Occlusion is similarly broad: both convolutional layers fall to roughly `0.24` retention
+and accuracy reaches `0.448`, suggesting missing-region augmentation or explicit
+occlusion handling rather than a head-only repair.
+
+Rotation is different. The first block retains its clean OI and the second block retains
+`0.92`, while the embedding falls to `0.73` and accuracy to `0.407`. Early visual
+features still exist, but the task-specific representation does not preserve them under
+rotation. That pattern supports reusing the early backbone while fine-tuning later blocks
+with rotation augmentation. The class panels make the remediation still more specific:
+mild occlusion first increases Sandal/Sneaker interference, while mild rotation first
+increases Sneaker/Ankle boot interference. A footwear-sensitive application could add
+targeted examples and a pair-specific release gate instead of relying only on aggregate
+accuracy.
+
+The same protocol can be adapted to a production model:
+
+1. Freeze one candidate checkpoint and choose a fixed, representative labeled probe.
+2. Apply deployment-relevant shifts to the same rows at meaningful severity levels.
+3. Extract several named layers and score every condition with the same OI configuration.
+4. Plot within-layer retention beside the product metric, then drill into per-class and
+   pairwise results.
+5. Turn the observed failure boundary into a regression test for later checkpoints.
+
+| Observed pattern | Practical interpretation | Likely next experiment |
+|---|---|---|
+| Accuracy worsens while early-layer OI stays near `1.0` and late-layer OI falls | Useful low-level features remain, but task-specific geometry is fragile | Retrain the head or later blocks; test calibration and targeted augmentation |
+| OI falls first in early layers | The shift affects preprocessing or backbone feature extraction | Change normalization/augmentation or fine-tune the backbone |
+| OI declines before the headline metric moves | Representation margins may be eroding before behavior crosses an alert threshold | Treat OI as an early warning and expand the deployment probe |
+| Accuracy falls while OI remains stable across layers | Class structure remains available, but the decision rule or confidence may be failing | Refit the head, inspect calibration, and audit decision thresholds |
+| Damage concentrates in a class or pair | Aggregate quality is hiding a slice-specific risk | Add targeted data and class- or pair-specific acceptance criteria |
+
+These conclusions are probe-specific diagnostics, not universal corruption rankings.
+Retention should be compared within the same layer using aligned rows, labels, and
+scoring settings; absolute OI values from unrelated probes should not be treated as
+directly comparable. Production severity tiers should also come from real sensor,
+environment, and user-behavior ranges rather than this illustrative Fashion-MNIST grid.
+
+#### Paired overfitting monitor
+
+The companion
+[`fashion_mnist_overfitting.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_overfitting.py)
+trains clean-label and noisy-label CNNs from identical weights with identical images,
+mini-batch order, optimizer settings, and schedules. It compares their layer-wise
+OverlapIndex on a shared clean validation probe and a shared corrupted-target probe,
+showing both transferable class geometry and alignment with deliberately incorrect
+labels. Minimum clean validation loss for the noisy treatment defines the shaded
+overfitting region without using OverlapIndex as its own ground truth.
+
+
+The paired experiment uses a stratified 1,000-example training subset and a disjoint,
+clean 2,000-example validation probe. Forty percent of the training labels are replaced
+with a deterministic, different class label. A clean-label control and noisy-label
+treatment start from identical parameters and see the same images, mini-batch order,
+Adam configuration, and 20-epoch schedule. The only training difference is which target
+each model receives.
+
+`RepresentationMonitor` evaluates pooled outputs from both convolutional blocks and the
+128-dimensional embedding at initialization and after every epoch. Each model is scored
+on the same two datasets: the clean validation probe measures transferable class
+geometry, while a corruption probe containing only deliberately relabeled training rows
+measures alignment with their incorrect targets. Both conditions use a fixed `k=5` so
+their OverlapIndex values are directly comparable within a probe. Separatix and stability
+repeats are disabled here to keep the visual focused; clean validation cross-entropy,
+rather than OverlapIndex, determines the shaded overfitting region.
+
+The result localizes memorization in the representation hierarchy. From epoch 10 to 20,
+the noisy model's embedding OverlapIndex on the corruption probe grows from `0.039` to
+`0.313`, while the clean control remains near zero. Over the same interval, clean
+validation embedding OverlapIndex improves from `0.669` to `0.718` for the control but
+stalls near `0.63` for the noisy treatment. The early convolutional features remain
+similar, the second block begins to fall behind the control, and the final embedding
+develops substantial geometry around arbitrary targets. The clean control has a modest
+late validation-loss increase of its own, so it is a reference trajectory rather than a
+claim of perfectly non-overfitting training; the noisy treatment's loss and accuracy
+degradation are much larger.
+
+![Clean-label control and noisy-label treatment compared across Fashion-MNIST representation layers and probes](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-paired-overfitting-monitoring.png)
+
+In a real training loop, use a fixed, representative validation probe and evaluate the
+same named layers at meaningful checkpoints. Define overfitting from held-out loss or
+another deployment-relevant metric, then use layer-wise OverlapIndex to determine where
+the representation changes. A reference run, last-known-good checkpoint, or frozen
+backbone provides the counterfactual that a single trajectory lacks. Audited noisy-label,
+hard-example, domain, or demographic slices can serve as additional probes.
+
+| Monitoring pattern | Practical interpretation | Possible response |
+|---|---|---|
+| Held-out loss worsens while clean-probe OI stays near the reference | The classifier head or confidence may be overfitting while transferable geometry remains intact | Early-stop, calibrate, or regularize/retrain the head |
+| Late-layer clean-probe OI falls behind the reference | Task-specific representation geometry is degrading | Increase regularization or augmentation, freeze earlier layers, or restore an earlier checkpoint |
+| OI rises on a suspected-noise probe while clean-probe OI stalls or falls | The representation is organizing around noisy or spurious targets | Audit labels, deduplicate data, reweight the slice, or use noise-robust training |
+| Early layers remain stable but the embedding diverges | Overfitting is localized near the task head | Reuse/freeze the backbone and replace or retrain later layers |
+
+OverlapIndex should not be treated as an overfitting detector by itself. Absolute values
+from probes with different label semantics or sample composition should not be compared
+directly. Its practical value is explaining whether externally observed overfitting is
+head-level or representation-level, which layers are affected, and what target structure
+those layers are learning.
+
+#### Demonstrated use case: auditing shortcut learning with named target views
+
+A model can look excellent on its headline metric while organizing its representation
+around the wrong semantics. The
+[`colored_fashion_mnist_shortcut.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/colored_fashion_mnist_shortcut.py)
+experiment demonstrates how named target views, a controlled reference run, and an
+external behavioral intervention can expose that failure mode.
+
+The practical question is deliberately simple: if garment color predicts garment class
+during training, does a CNN learn the garment or the color shortcut? Accuracy alone
+cannot answer this on the training distribution. Likewise, high class OI alone cannot
+answer it if class and color are correlated in the representation probe. The experiment
+therefore separates three jobs:
+
+1. A paired control isolates the effect of the class-color correlation.
+2. A decorrelated audit probe asks what each layer organizes.
+3. Counterfactual recoloring asks whether the learned organization changes behavior.
+
+##### Experimental design
+
+Two compact CNNs begin from identical parameters and receive the same 2,000 training
+garments, class targets, mini-batch order, optimizer, and 12-epoch schedule. The only
+difference is the color environment:
+
+| Training regime | Color assignment | What it controls |
+|---|---|---|
+| Independent-color control | Every color has equal support within every garment class | Shows what the network learns when color is visible but useless for the task |
+| Shortcut treatment | The class's canonical color is used with 85% probability | Gives the network an easy nuisance feature that predicts the intended target |
+
+Color is applied as a moderate tint rather than replacing the grayscale garment. The
+shape evidence is therefore present in every environment. The held-out 2,000-garment
+probe is rendered four ways: color removed, canonical/correlated, independently colored,
+and with a fixed reversed mapping. The following are the same garment pixels under those
+interventions.
+
+![Colored Fashion-MNIST exemplars showing grayscale, canonical, independent, and reversed-color interventions](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_exemplars.png)
+
+The representation audit uses exactly balanced class×color cells and registers two
+named target views on those same rows:
+
+- `intended_class`: the garment category that the classifier should learn;
+- `nuisance_color`: the tint that should not determine the prediction.
+
+Balancing is essential. On a 95%-correlated probe, class and color are nearly duplicate
+partitions, so even an untrained color-sensitive representation can receive high OI for
+both. The balanced probe makes garment and color statistically independent, allowing
+each OI trajectory to describe distinct geometry. It uses one tint per held-out image
+to avoid duplicate-image structure; the behavioral audit can safely recolor every image
+with all ten hues because it measures predictions rather than representation geometry.
+
+The reported run repeats the paired experiment across five training seeds. Within each
+seed, control and treatment remain matched; the plots show the mean and one standard
+deviation across seeds. Separatix and OI stability repeats are disabled here so the
+uncertainty represents variation from training the models, not repeated scoring of one
+fixed representation.
+
+##### What the ordinary evaluation would conclude
+
+If evaluation stopped at the correlated environment, the shortcut model would win:
+
+| Model | Correlated ID | Balanced colors | Reversed colors | Color removed |
+|---|---:|---:|---:|---:|
+| Independent-color control | 82.63% ± 1.87 | 82.76% ± 1.49 | 82.81% ± 1.56 | 82.73% ± 1.68 |
+| Shortcut treatment | **91.42% ± 0.70** | 68.95% ± 2.43 | 47.27% ± 4.02 | 78.25% ± 1.77 |
+
+The treatment gains 8.79 percentage points in-distribution. That apparent improvement
+reverses when color stops carrying the training relationship: it trails the control by
+13.81 points on balanced colors and by 35.54 points on the reversed mapping. Removing
+color is less harmful than supplying misleading color, which is strong evidence that the
+model is responding to the nuisance rather than merely requiring additional RGB signal.
+
+The bottom row of the monitoring figure supplies this behavioral evidence independently
+of OI. The upper rows then explain where the representation differs.
+
+![Five-seed colored Fashion-MNIST named-target OI trajectories and counterfactual accuracy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_monitoring.png)
+
+##### What named target views reveal
+
+At epoch 12, the balanced audit probe produces the following OI macro scores:
+
+| Layer | Intended class: control | Intended class: shortcut | Nuisance color: control | Nuisance color: shortcut |
+|---|---:|---:|---:|---:|
+| Conv block 1 | 0.307 ± 0.012 | 0.263 ± 0.015 | 0.031 ± 0.012 | 0.076 ± 0.014 |
+| Conv block 2 | 0.477 ± 0.033 | 0.266 ± 0.030 | 0.009 ± 0.003 | 0.194 ± 0.056 |
+| Final embedding | 0.675 ± 0.016 | 0.557 ± 0.022 | 0.000 ± 0.000 | 0.020 ± 0.010 |
+
+The control increasingly organizes later layers around garment class while suppressing
+color. The shortcut treatment develops weaker garment geometry at every measured layer
+and retains much more color organization, especially in the second convolutional block.
+This localizes the main representational effect before the classifier head.
+
+The result is subtler than “color OI rises everywhere.” Color is visible at
+initialization, and both networks suppress some of it. The meaningful comparison is that
+independent-color training suppresses the nuisance far more completely, while correlated
+training preserves it and sacrifices robust garment structure. The paired-effect plot
+makes that treatment-minus-control comparison explicit: negative intended-target effects
+mean weaker semantic organization, while positive nuisance-target effects mean retained
+color structure.
+
+![Paired treatment-minus-control effects for intended garment and nuisance color OverlapIndex](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_paired_effects.png)
+
+Final-embedding color OI remains low even though the treatment is behaviorally
+color-sensitive. This is not a contradiction. OI asks whether colors form globally
+separated clusters; a classifier can exploit a weaker or class-conditional color
+direction without arranging the whole embedding into ten clean color clusters. OI
+localizes representation geometry, while counterfactual accuracy establishes whether a
+feature affects decisions. Neither should be substituted for the other.
+
+##### Exhaustive recoloring confirms the harm
+
+The final behavioral audit renders every held-out garment in all ten colors. This makes
+robustness a per-example intervention rather than a result that depends on one random
+balanced assignment:
+
+| Behavioral diagnostic | Control | Shortcut treatment | Treatment − control |
+|---|---:|---:|---:|
+| Accuracy across all colors | 82.70% ± 1.64 | 68.28% ± 2.33 | −14.42 points |
+| Garments correct under every color | 81.23% ± 1.76 | 37.03% ± 3.10 | −44.20 points |
+| Prediction changes under recoloring | 3.42% ± 0.74 | 62.17% ± 3.22 | +58.75 points |
+| Errors that follow the displayed color's associated class | 11.26% ± 0.15 | 28.49% ± 1.87 | +17.22 points |
+| 10th-percentile class×color accuracy | 65.98% ± 5.95 | 6.75% ± 6.14 | −59.23 points |
+| Mean of the five weakest class×color cells | 40.96% ± 16.24 | 0.16% ± 0.21 | −40.80 points |
+
+The average degradation is important, but the lower tail is more operationally useful:
+some garment-color combinations are nearly unusable even though aggregate ID accuracy
+exceeds 91%. A minimum cell score would be too brittle, so the example reports the 10th
+percentile and the mean of the five weakest cells together with their seed-level values.
+
+##### How to apply this pattern
+
+This experiment is intentionally synthetic, but the workflow transfers directly to
+real representation audits:
+
+1. Name the intended target and each suspected nuisance explicitly—product category and
+   photography style, diagnosis and acquisition site, speaker content and microphone,
+   or activity and device identity.
+2. Build a fixed audit slice where intended and nuisance targets are sufficiently
+   decorrelated. Named views do not remove confounding by themselves.
+3. Compare against a controlled reference model, previous checkpoint, or training
+   regime so that naturally visible nuisance information is not mistaken for learned
+   reliance.
+4. Monitor the same named layers over time. Use OI to identify which semantics organize
+   which layers, and compare changes within the same target/probe protocol.
+5. Intervene on the nuisance independently and measure task behavior. Representation
+   separability is diagnostic evidence, not a causal performance metric.
+6. Repeat training seeds and report paired effects. OI stability intervals characterize
+   scoring sensitivity; they do not replace variation across trained models.
+
+The central lesson is not that separability is bad. High separability is valuable only
+with respect to the semantics the application actually needs. Named target views make
+that distinction visible; a decorrelated probe and counterfactual behavior make it
+credible.
+
+Reproduce the reported run with the `visuals` extra:
+
+```bash
+poetry install -E visuals
+poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
+```
+
+The script writes seed-level history, raw and summarized final metrics, the aggregate
+monitoring figure, the paired-effect figure, and documentation-ready PNG/SVG exemplar
+grids. Use `--repeats 1` while iterating; increase it only for reported results.
+
 #### Hierarchical label views
 
 The same representations are evaluated against nested department, garment-group, and
@@ -631,12 +928,94 @@ exact-class label views before and after training.
 
 ![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-hierarchy-heatmap.png)
 
-Reproduce the monitoring, hierarchy, and compression figures with:
+Reproduce the visual suites with:
 
 ```bash
 poetry install -E visuals
 poetry run python examples/fashion_mnist_visual_suite.py
+poetry run python examples/fashion_mnist_corruption_atlas.py
+poetry run python examples/fashion_mnist_overfitting.py
+poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
 ```
+
+#### Tiny Shakespeare transformer representations
+
+[`tiny_shakespeare_transformer_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/tiny_shakespeare_transformer_visual_suite.py)
+offers fast and quality character-GPT profiles on the contiguous first 90% of Tiny
+Shakespeare. The following 5% supplies both a fixed, class-balanced representation
+probe and a naturally distributed language-model validation set; the final 5% remains
+untouched. The vocabulary is constructed from training text only, and the downloaded
+1.1 MB corpus is accepted only when its SHA-256 checksum matches the pinned source.
+
+Each probe row contains only its preceding validation context and is labeled with the
+immediately following character. Every validation character with at least two eligible
+positions remains in per-token diagnostics, with at most 256 deterministic positions
+per character. Characters with fewer than 50 natural validation occurrences are passed
+through `exclude_classes`: they remain visible in the heatmap and their per-class
+scores remain serialized, but they do not contribute to the headline macro score.
+With the default 64-character context and support settings, the checksum-pinned corpus
+produces 11,429 probe rows across 59 scored characters: 51 contribute to the macro
+score, eight remain diagnostic-only because they have fewer than 50 eligible validation
+positions, and one validation singleton is omitted because overlap scoring requires two
+examples. The JSON metadata records those counts, supports, character identities, and
+source offsets so the selection is auditable.
+
+The fast profile evaluates token-plus-position embeddings, blocks 1 and 2, and final
+normalized block 4. The quality profile evaluates token-plus-position, blocks 2 and 4,
+and final normalized block 6. Both run at initialization and every 1,000 steps.
+OverlapIndex uses the fixed probe and `k="auto"` with the library defaults (`min_k=10`,
+`max_k=50`, and five samples per cluster), so resolved per-character `k` values do not
+change between checkpoints. Cross-entropy, perplexity, and top-1 accuracy answer a
+different question: they measure next-character prediction on every naturally
+distributed validation window. They should not be interpreted as substitutes for the
+probe's representation geometry.
+
+![Tiny Shakespeare causal GPT architecture, layer-wise OverlapIndex trajectories, and validation cross-entropy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-representation-monitoring.png)
+
+In the checked 5,000-step CPU run, validation cross-entropy fell from `4.1555` to
+`1.6097` (perplexity `63.78` to `5.00`) while top-1 accuracy rose from `0.8%` to
+`51.6%`. The final normalized block's macro OverlapIndex increased from `0.173` to
+`0.351`; the token-plus-position representation changed little, which helps localize
+the learned next-character geometry to the transformer blocks.
+
+![Tiny Shakespeare final-representation PCA and quantization frontier](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-compression-frontier.png)
+
+![Tiny Shakespeare complete per-character OverlapIndex heatmap before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-next-token-heatmap.png)
+
+`--device auto` smoke-tests CUDA/ROCm, Apple MPS, and Intel XPU with a forward/backward
+step before falling back to CPU. An explicit backend fails rather than silently moving
+the run elsewhere. The selected backend and device name, Torch version, wall time, and
+host/device memory measurements are persisted with each result.
+
+The profiles are:
+
+| Profile | Architecture | Context / batch | Default steps | Monitored states |
+|---|---|---:|---:|---|
+| `fast` | 4 blocks, 4 heads, width 128, MLP 512, no dropout | 64 / 12 | 30,000 | token+position, blocks 1/2, final block 4 |
+| `quality` | 6 blocks, 8 heads, width 256, MLP 1024, dropout 0.1 | 256 / 32 | 10,000 | token+position, blocks 2/4, final block 6 |
+
+The quality profile has about 4.82 million parameters and samples 8,192 training
+characters per optimizer step, or about 81.9 million across its default run. Every
+validation checkpoint remains in monitoring history, but final generation, compression,
+and benchmark outputs restore the checkpoint with the lowest validation cross-entropy.
+The selected step and both best/last validation metrics are recorded in JSON metadata.
+
+Run it with:
+
+```bash
+poetry install -E text-visuals
+poetry run python examples/tiny_shakespeare_transformer_visual_suite.py --profile quality
+```
+
+The checked figures above came from the earlier 5,000-step fast baseline and can be
+reproduced with `--profile fast --steps 5000`. Profile defaults can be selectively
+overridden with `--steps`, `--context-length`, or `--train-batch-size`.
+
+Use `--no-download` for an offline run after the checksum-valid corpus has been cached
+under `examples/data/tiny_shakespeare/`. The script writes PNG/SVG monitoring,
+compression-frontier, and complete next-token heatmap figures plus CSV history,
+initial/final benchmark JSON, compression JSON, and deterministic initial/trained text
+generations under `examples/output/`.
 
 ### Retrieval and matching
 
@@ -680,6 +1059,52 @@ model's shared embedding space. It trains no head and requires explicit prompts.
 zero-shot rank and ordinary sample-embedding overlap are reported side by side; they
 are not combined into a universal backbone score. See `docs/zero_shot.md` and the
 network-free `examples/zero_shot_callable.py` workflow.
+
+#### Flagship example: zero-shot versus transfer structure
+
+The OpenCLIP CIFAR-10 experiment in
+`examples/zero_shot_transfer_structure.py` separates sample structure from text
+alignment. It encodes a balanced set of 500 images exactly once with the frozen
+OpenCLIP image encoder, producing one fixed image-embedding matrix. OverlapIndex is
+then calculated once from that matrix and the CIFAR-10 labels.
+
+The same image matrix is reused with three explicit prompt protocols. Only the text
+changes: `cat`, `a photo of a cat`, or
+`a low-resolution CIFAR-10 image of a cat`, for example. Each string passes
+through the same frozen text encoder and produces a different class prototype. Model
+weights, image embeddings, and the shared embedding space remain unchanged; only the
+prototype locations used for cosine-similarity classification move.
+
+![Fixed OpenCLIP image structure compared with prompt-sensitive zero-shot accuracy and per-class F1](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/zero-shot-transfer-structure.png)
+
+The left panel shows the central result. The sample representation has a fixed macro
+OverlapIndex of `0.892`, while zero-shot accuracy changes from `73.2%` with bare labels
+to `93.8%` with photo prompts—a `20.6` percentage-point improvement without changing
+the image representation. Weak initial zero-shot accuracy therefore did not imply weak
+transfer features in this run; the original text prototypes addressed otherwise strong
+image structure poorly.
+
+The right panel shows the same distinction per class. Rows are ordered by their fixed
+per-class OverlapIndex. Colored markers are zero-shot F1 under each prompt protocol,
+the gray segment is the prompt-driven F1 range, and the percentage-point annotation
+quantifies prompt sensitivity. `automobile`, for example, has strong structure
+(`OI: 0.96`) but an `87`-point F1 range across prompts. Per-class OverlapIndex and F1
+should not be compared as interchangeable values: they answer different questions
+despite both being bounded scores.
+
+For practitioners, the two signals suggest different next actions:
+
+| sample structure | zero-shot alignment | practical next step |
+| --- | --- | --- |
+| strong | weak or prompt-sensitive | Keep the backbone; improve class wording, use a predeclared prompt ensemble, or train a supervised head. |
+| strong | strong and stable | The frozen representation is both transferable and naturally text-addressable for this protocol. |
+| weak | strong | Zero-shot classification works, but inspect whether the feature geometry is robust enough for broader transfer. |
+| weak | weak | Investigate another backbone, domain adaptation, or a different data representation. |
+
+Prompt alternatives should be declared before evaluation or chosen on a separate
+validation set. Trying many prompts against test labels and reporting only the winner
+turns prompt design into test-set tuning. The experiment is intentionally diagnostic:
+it does not combine OverlapIndex and zero-shot accuracy into one model-quality score.
 
 Use `ZeroShotCandidate(extractor, sample_branch, text_branch)` when compared models
 use different branch names. OpenCLIP keeps its image-only ordinary default while its

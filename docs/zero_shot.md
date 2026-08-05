@@ -113,6 +113,41 @@ Poor zero-shot performance can reflect taxonomy wording, domain terminology, pro
 coverage, or a weak text branch. It does not prove that sample embeddings are poor
 features for a separately trained downstream model.
 
+## Flagship experiment: zero-shot versus transfer structure
+
+[`examples/zero_shot_transfer_structure.py`](../examples/zero_shot_transfer_structure.py)
+turns the two-axis interpretation into a reproducible real-image experiment. It uses
+a deterministic balanced CIFAR-10 test slice and OpenCLIP, encodes the image endpoint
+once, and scores OverlapIndex once. It then scores three fully declared text protocols
+against that same in-memory image embedding matrix: bare class names, a photo template,
+and a CIFAR-10-context template. No prompt selection is performed after labels are
+scored.
+
+```bash
+poetry install -E openclip -E visuals
+poetry run python examples/zero_shot_transfer_structure.py
+```
+
+The example writes `zero_shot_transfer_structure.png` and an auditable CSV of every
+plotted point. The first panel states the fixed macro sample OverlapIndex and compares
+zero-shot accuracy with horizontal prompt-set bars, including the full accuracy range
+caused by wording alone. The second panel sorts classes by per-class OverlapIndex and
+connects each class's zero-shot F1 values; its two-line row label reports the unchanged
+OverlapIndex while an in-bounds annotation shows the prompt-driven F1 range. This
+avoids implying that the experiment expects a correlation between overlap and F1 while
+keeping both metrics visible. It makes the practical next step legible:
+
+- high overlap with prompt-sensitive, weak zero-shot scores suggests improving class
+  descriptions or training a supervised head;
+- high overlap with consistently weak prompts suggests that the image features may
+  still transfer well even though this text branch is a poor fit;
+- low overlap across prompt sets is evidence to investigate another backbone or data
+  representation before spending effort on prompt wording.
+
+The CIFAR-10 subset size, dataset cache directory, OpenCLIP model/checkpoint, and
+device are configurable through the environment variables documented at the top of
+the script. It downloads CIFAR-10 and the checkpoint on first use.
+
 ## Memory-bounded exact scoring
 
 `ZeroShotConfig.sample_batch_size` controls how many samples are compared with the
