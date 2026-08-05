@@ -215,6 +215,15 @@ initialization through three epochs at optimizer-step cadence, evaluates only ag
 a stratified held-out validation set, disables Separatix and stability repeats, and
 renders the network architecture beside the layer-wise OverlapIndex trajectories.
 
+[`examples/fashion_mnist_corruption_atlas.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_corruption_atlas.py)
+reuses the suite's trained checkpoint as a model-release audit. A fixed, stratified
+official-test probe is evaluated clean and under blur, noise, occlusion, contrast
+reduction, and rotation at four increasing severities. Layer-wise OverlapIndex retention
+localizes representation damage; accuracy and cross-entropy quantify behavior; and the
+class and pairwise panels identify affected labels and the first new confusions. The
+protocol uses the same fixed `k=5` for every condition so layer retention is comparable
+within this probe.
+
 [`examples/fashion_mnist_overfitting.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_overfitting.py)
 extends that monitoring pattern into a paired memorization experiment. Clean-label and
 noisy-label CNNs start from identical weights and receive the same images, mini-batch

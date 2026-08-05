@@ -27,6 +27,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_corruption_atlas.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/tiny_shakespeare_transformer_visual_suite.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_overfitting.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.py
@@ -82,10 +83,17 @@ Each script writes reports to `examples/output/`.
   Fashion-MNIST subset with a fixed held-out validation set, monitor hidden
   pooled convolutional representations and a 128-dimensional embedding every two
   optimizer steps, compare compression variants, evaluate nested product-category
-  views, and generate the README's representation-monitoring, compression-frontier,
-  and layer-by-hierarchy figures.
+  views, save a reusable trained checkpoint, and generate the README's
+  representation-monitoring, compression-frontier, and layer-by-hierarchy figures.
   The first run downloads Fashion-MNIST through torchvision; install all required
   optional dependencies with `poetry install -E visuals`.
+- `fashion_mnist_corruption_atlas.py`: reuse that trained checkpoint (or train it once
+  when absent), then evaluate a fixed official-test probe under blur, Gaussian noise,
+  occlusion, contrast reduction, and rotation at four increasing severities. The atlas
+  aligns layer-wise OverlapIndex retention with accuracy and cross-entropy, shows which
+  classes lose embedding geometry under severe shift, and marks the first corruption
+  tier where each classifier-confusion pair materially increases. CSV protocol tables
+  make the visual drill-down reproducible.
 - `tiny_shakespeare_transformer_visual_suite.py`: checksum and cache the 1.1 MB Tiny
   Shakespeare corpus, then train either the four-block `fast` character GPT or the
   4.82-million-parameter `quality` profile (`--profile quality`) with six blocks, width

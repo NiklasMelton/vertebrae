@@ -630,6 +630,72 @@ features and the task-specific embedding evolve at different depths.
 
 ![Fashion-MNIST network architecture with OverlapIndex trajectories for three hidden representations](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-representation-monitoring.png)
 
+#### Corruption and deployment-shift atlas
+
+The companion
+[`fashion_mnist_corruption_atlas.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_corruption_atlas.py)
+reuses the saved trained checkpoint and turns the untouched official test split into a
+model-release probe. It evaluates clean images plus blur, Gaussian noise, occlusion,
+contrast reduction, and rotation at four increasing severities without training another
+model. A fixed `k=5` makes OverlapIndex retention comparable across conditions within
+each layer.
+
+The atlas is organized around three practitioner questions: **what failed, where did it
+start, and who was affected?** The top row reports OI retention, defined within each
+layer as `corrupted OI / clean OI`. A value near `1.0` means that the layer preserves its
+clean class geometry; `0.7` means that roughly 30% of that layer's clean OI has been
+lost. Retention above `1.0` can occur when a corruption makes some classes more compact,
+but it does not imply that classifier behavior improved. The middle row therefore keeps
+ordinary accuracy and cross-entropy beside OI. The bottom row shows which classes lose
+penultimate-layer geometry and the earliest severity at which each class-pair confusion
+increases by five percentage points. In the pair panel, light cells are early failures
+and dark cells require more severe corruption.
+
+![Fashion-MNIST deployment-shift atlas with layer retention, behavior, class effects, and confusion onset](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-corruption-atlas.png)
+
+The documentation run exposes three different robustness stories. Noise is relatively
+well tolerated: at the severe tier, the embedding retains `0.89` of clean OI and accuracy
+remains `0.733`. Contrast reduction is a backbone failure. Severe contrast leaves only
+`0.11` of first-block OI, `0.37` of second-block OI, and `0.299` accuracy, so replacing
+or recalibrating only the classifier head is unlikely to solve it. Contrast-aware input
+normalization, augmentation, or backbone fine-tuning is the more plausible response.
+Occlusion is similarly broad: both convolutional layers fall to roughly `0.24` retention
+and accuracy reaches `0.448`, suggesting missing-region augmentation or explicit
+occlusion handling rather than a head-only repair.
+
+Rotation is different. The first block retains its clean OI and the second block retains
+`0.92`, while the embedding falls to `0.73` and accuracy to `0.407`. Early visual
+features still exist, but the task-specific representation does not preserve them under
+rotation. That pattern supports reusing the early backbone while fine-tuning later blocks
+with rotation augmentation. The class panels make the remediation still more specific:
+mild occlusion first increases Sandal/Sneaker interference, while mild rotation first
+increases Sneaker/Ankle boot interference. A footwear-sensitive application could add
+targeted examples and a pair-specific release gate instead of relying only on aggregate
+accuracy.
+
+The same protocol can be adapted to a production model:
+
+1. Freeze one candidate checkpoint and choose a fixed, representative labeled probe.
+2. Apply deployment-relevant shifts to the same rows at meaningful severity levels.
+3. Extract several named layers and score every condition with the same OI configuration.
+4. Plot within-layer retention beside the product metric, then drill into per-class and
+   pairwise results.
+5. Turn the observed failure boundary into a regression test for later checkpoints.
+
+| Observed pattern | Practical interpretation | Likely next experiment |
+|---|---|---|
+| Accuracy worsens while early-layer OI stays near `1.0` and late-layer OI falls | Useful low-level features remain, but task-specific geometry is fragile | Retrain the head or later blocks; test calibration and targeted augmentation |
+| OI falls first in early layers | The shift affects preprocessing or backbone feature extraction | Change normalization/augmentation or fine-tune the backbone |
+| OI declines before the headline metric moves | Representation margins may be eroding before behavior crosses an alert threshold | Treat OI as an early warning and expand the deployment probe |
+| Accuracy falls while OI remains stable across layers | Class structure remains available, but the decision rule or confidence may be failing | Refit the head, inspect calibration, and audit decision thresholds |
+| Damage concentrates in a class or pair | Aggregate quality is hiding a slice-specific risk | Add targeted data and class- or pair-specific acceptance criteria |
+
+These conclusions are probe-specific diagnostics, not universal corruption rankings.
+Retention should be compared within the same layer using aligned rows, labels, and
+scoring settings; absolute OI values from unrelated probes should not be treated as
+directly comparable. Production severity tiers should also come from real sensor,
+environment, and user-behavior ranges rather than this illustrative Fashion-MNIST grid.
+
 #### Paired overfitting monitor
 
 The companion
@@ -867,6 +933,7 @@ Reproduce the visual suites with:
 ```bash
 poetry install -E visuals
 poetry run python examples/fashion_mnist_visual_suite.py
+poetry run python examples/fashion_mnist_corruption_atlas.py
 poetry run python examples/fashion_mnist_overfitting.py
 poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
 ```
