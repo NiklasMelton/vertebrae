@@ -10,35 +10,97 @@
   </a>
 </p>
 
-`vertebrae` is a Python package for evaluating feature extractors and
-transfer-learning backbones on labeled datasets. It supports dense and sparse
-precomputed embeddings, scikit-learn pipelines, custom callable extractors, ONNX
-models, local PyTorch and Keras modules, segmentation token workflows, optional
-embedding compression, and optional model families spanning Hugging Face,
-sentence-transformers, timm, torchvision, OpenCLIP/SigLIP, TensorFlow Hub,
-JAX/Flax, tree ensembles, graph models, and hosted embedding APIs. It can also
-evaluate labeled embedding units such as document regions, tokens, frames,
-keypoints, depth cells, and latent slots emitted directly by a model.
+`vertebrae` helps answer a question that accuracy and loss leave open: **does a
+model's representation organize the data around the distinctions you care about?**
+It evaluates frozen embeddings separately from the choice, training, and tuning of a
+downstream head. Use it to compare backbones, inspect intermediate layers, find weak
+classes, audit nuisance structure, monitor training or distribution shift, and decide
+whether compression preserved useful geometry.
 
-The package uses [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) as
-its primary separation metric and adds a
-[Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic to
-reports when an evaluated embedding
-clears a configurable overlap-quality threshold. The full evaluation flow wraps
-those diagnostics with practical dataset handling, named target and hierarchy
-views, caching, memory-aware subsampling, stability analysis, artifact-backed
-execution, custom embedding metrics, report generation, and repeated monitoring
-of live representations during training.
+## Why representation analysis?
 
-SciPy sparse matrices and sparse arrays are normalized to CSR and remain sparse
-through classification, multi-label, regression, and stability scoring, and when
-passed into Separatix. Multi-label targets may also be supplied as sparse binary
-indicator matrices.
+A task metric evaluates the behavior of a complete system. Accuracy, F1, RMSE, and
+cross-entropy are indispensable, but their values combine the representation with the
+head, optimizer, training budget, regularization, thresholds, calibration, and data
+split. Two embeddings can therefore produce similar task performance for very different
+reasons, while a good representation can be hidden by a poorly chosen head.
+
+[OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) provides a complementary
+view. For categorical targets, it summarizes how much the class-conditioned regions of
+an embedding overlap. Scores lie in `[0, 1]`: `1.0` indicates perfect observed class
+separation and `0.0` perfect observed class overlap. The global score makes controlled
+extractor comparisons convenient, while per-class and pairwise results show where the
+geometry succeeds or fails. Explicit regression targets use ContinuousOverlapIndex to
+ask the analogous question about whether nearby representation regions preserve
+continuous target structure.
+
+This makes OverlapIndex useful for questions such as:
+
+- Which backbone, layer, pooling strategy, or compression setting best preserves the
+  target structure in this dataset?
+- Is a failure concentrated in one class or pair of classes, or does it begin in an
+  earlier layer of the backbone?
+- Does the representation encode the intended target, a coarser hierarchy, or an
+  undesirable shortcut such as source, color, or acquisition site?
+- During training or deployment shift, does useful geometry degrade before the
+  headline model metric moves?
+
+### Separable does not necessarily mean linearly separable
+
+One common way to evaluate a pretrained backbone is to freeze it and train a linear
+head on the target task. This is an inexpensive and useful baseline, but a weak linear
+result only shows that the target structure was not readily accessible through that
+linear decision rule and training protocol. It does not prove that the embedding lacks
+useful separation.
+
+Classes can be well separated while requiring curved, local, or otherwise nonlinear
+boundaries. OverlapIndex helps determine whether that separation exists. When it does,
+[Separatix](https://github.com/NiklasMelton/Separatix) provides evidence
+about whether a linear model is likely sufficient or whether nonlinear approaches are
+worth testing. Together, they help distinguish a poor representation from a promising
+representation whose geometry is simply non-trivial.
+
+Separatix remains a diagnostic. Its probe evidence does not change the OverlapIndex
+score or the default ranking, and neither diagnostic guarantees downstream performance.
+
+### What OverlapIndex can and cannot tell you
+
+OverlapIndex can show whether labels are reflected in the observed embedding geometry,
+how that structure differs across classes and class pairs, and whether it is stable
+across prototype seeds or controlled subsamples. With named target and hierarchy views,
+the same embeddings can also reveal which of several possible concepts they organize.
+These signals can help localize a representation problem, shortlist a transfer-learning
+backbone, and avoid spending a full tuning budget on every candidate.
+
+It does **not** measure end-to-end predictive performance, replace a held-out task
+metric, or guarantee that a particular classifier will generalize. A high score does
+not establish robustness, calibration, fairness, causality, or usefulness for an
+unmeasured target. Scores are also conditional on the evaluated dataset, labels,
+sampling, embedding normalization, and OverlapIndex configuration; compare candidates
+under the same protocol rather than treating a score as a universal model rating.
+Vertebrae deliberately reports representation diagnostics beside, not in place of,
+task, retrieval, zero-shot, or domain-specific metrics.
+
+## Why vertebrae?
+
+OverlapIndex supplies the core representation signal; vertebrae turns it into a
+repeatable evaluation workflow. It handles dense and sparse embeddings, raw inputs and
+many extractor families, single- and multi-output models, classification, multi-label
+and regression targets, named target and hierarchy views, structured units, dense
+segmentation tokens, compression variants, stability analysis, caching, memory guards,
+artifact-backed execution, and JSON/Markdown reports. The result is a practical way to
+move from “this model scored well” to “this layer contains the right structure, these
+classes remain weak, and this is the next downstream model family worth trying.”
+
+The rest of this README follows that path: first run the core workflow, then compare
+representations, and finally use the visual case studies to connect changing geometry
+to training, compression, deployment shift, shortcuts, and task behavior.
 
 ## Evaluation flow
 
-The benchmark protocols share extraction, artifact, compression, and reporting
-infrastructure while keeping their scoring semantics separate.
+This separation of questions also shapes the package. The benchmark protocols share
+extraction, artifact, compression, and reporting infrastructure while keeping their
+scoring semantics separate.
 
 ```mermaid
 flowchart TB
@@ -67,90 +129,12 @@ For local development:
 poetry install --with dev
 ```
 
-Optional Hugging Face and sentence-transformers support:
+Model families, modality adapters, visual suites, distributed backends, and cloud
+stores are installed through optional extras. The
+[installation guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/installation.md)
+contains the complete mapping.
 
-```bash
-pip install "vertebrae[hf]"
-```
-
-Optional Hugging Face audio support only:
-
-```bash
-pip install "vertebrae[audio]"
-```
-
-Optional Hugging Face time-series support only:
-
-```bash
-pip install "vertebrae[timeseries]"
-```
-
-Optional Hugging Face video support only:
-
-```bash
-pip install "vertebrae[video]"
-```
-
-Optional local PyTorch model support:
-
-```bash
-pip install "vertebrae[torch]"
-pip install "vertebrae[timm]"
-pip install "vertebrae[torchvision]"
-pip install "vertebrae[openclip]"
-```
-
-Optional dependencies for the Fashion-MNIST visual example suite:
-
-```bash
-pip install "vertebrae[visuals]"
-```
-
-Optional dependencies for the Tiny Shakespeare transformer visual suite:
-
-```bash
-pip install "vertebrae[text-visuals]"
-```
-
-Optional local Keras model support:
-
-```bash
-pip install "vertebrae[keras]"
-pip install "vertebrae[tensorflow]"
-pip install "vertebrae[tensorflow-hub]"
-```
-
-Optional ONNX Runtime support:
-
-```bash
-pip install "vertebrae[onnx]"
-```
-
-Optional JAX/Flax, tree ensemble, and graph model support:
-
-```bash
-pip install "vertebrae[jax]"
-pip install "vertebrae[trees]"
-pip install "vertebrae[graph]"
-```
-
-Optional distributed execution backends:
-
-```bash
-pip install "vertebrae[ray]"
-pip install "vertebrae[dask]"
-pip install "vertebrae[distributed]"
-```
-
-Optional cloud artifact stores:
-
-```bash
-pip install "vertebrae[s3]"
-pip install "vertebrae[gcs]"
-pip install "vertebrae[cloud]"
-```
-
-## Quick Start
+## Quick start
 
 ### Precomputed embeddings
 
@@ -167,6 +151,10 @@ print(result.to_dataframe())
 result.save_json("result.json")
 result.save_markdown("report.md")
 ```
+
+That run gives you a global overlap score, detailed weak-class evidence, a stability
+summary, and Separatix guidance about downstream classifier complexity when the overlap
+gate passes.
 
 Every root dataset requires an explicit `DatasetIdentity`. A declared identity is the
 recommended production choice; change its revision whenever the dataset content,
@@ -204,8 +192,8 @@ dataset = BenchmarkDataset.from_embeddings(
 result = Evaluator(dataset=dataset, extractor=PrecomputedExtractor()).run()
 ```
 
-OverlapIndex receives a dense multi-label indicator target internally, and
-Separatix runs with `target_mode="multilabel"`.
+OverlapIndex receives a sparse binary indicator target internally, and Separatix runs
+with `target_mode="multilabel"`.
 
 Regression targets are supported when explicitly requested so numeric class
 identifiers are not accidentally interpreted as continuous targets:
@@ -363,184 +351,22 @@ extractor = TorchExtractor(
 result = Evaluator(dataset=dataset, extractor=extractor).run()
 ```
 
-### Local Keras models
+Torch extraction defaults to evaluation plus inference mode and restores the model's
+prior state afterward. `checkpoint_paths` contributes provenance, but an already-loaded
+live object still needs a maintained `cache_identity` for reusable caching.
+
+### Hugging Face vision and named outputs
+
+One backbone may emit several named embeddings in a single evaluation. This is useful
+for comparing intermediate and final layers without duplicating extractor classes:
 
 ```python
-import numpy as np
-
-from vertebrae import BenchmarkDataset, Evaluator, DatasetIdentity
-from vertebrae.extractors import KerasExtractor
-
-
-def collate_fn(batch):
-    return np.asarray(batch, dtype=np.float32)
-
-
-dataset = BenchmarkDataset.from_arrays(features, labels, modality="tabular", identity=DatasetIdentity.declared("example-dataset", "1"))
-extractor = KerasExtractor(
-    name="local_keras",
-    model=model,
-    collate_fn=collate_fn,
-    call_method="call",
-    checkpoint_paths=["/path/to/model.keras"],
-    cache_identity="local-keras-model-v1",
-    recipe_data={"checkpoint": "/path/to/model.keras"},
-)
-
-result = Evaluator(dataset=dataset, extractor=extractor).run()
-```
-
-`checkpoint_paths` contributes content-digested provenance and profiling evidence; a
-path copied only into `recipe_data` is descriptive metadata. Because these adapters
-receive already-loaded live model objects, the path cannot prove that the in-memory
-weights match the file, so reusable caching still requires a maintained
-`cache_identity`. Torch extraction defaults to evaluation plus inference mode and
-restores the model's prior training state afterward. Notebook-local, nested, or
-otherwise nonportable adapter functions likewise require an explicit identity.
-
-### Hugging Face audio backbones
-
-```python
-from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
-from vertebrae.extractors import HFAudioExtractor
-
-dataset = BenchmarkDataset.from_audio_arrays(
-    audio=waveforms,
-    labels=labels,
-    sampling_rate=16_000,
-    identity=DatasetIdentity.declared("example-dataset", "1"),
-)
-extractor = HFAudioExtractor(
-    name="wav2vec2_base",
-    model_id="facebook/wav2vec2-base",
-    pooling="mean",
-)
-
-# This introductory model ID is intentionally unpinned, so do not reuse its output.
-result = Evaluator(
-    dataset=dataset,
-    extractor=extractor,
-    cache_config=CacheConfig(enabled=False),
-).run()
-```
-
-### Hugging Face multi-modal models
-
-```python
-from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
-from vertebrae.extractors import HFMultimodalExtractor
-
-dataset = BenchmarkDataset.from_multimodal(
-    inputs={"image": images, "caption": captions},
-    labels=labels,
-    modalities={"image": "image", "caption": "text"},
-    identity=DatasetIdentity.declared("example-dataset", "1"),
-)
-
-extractor = HFMultimodalExtractor(
-    name="clip_like",
-    model_id="openai/clip-vit-base-patch32",
-    input_modalities={"image": "image", "caption": "text"},
-    outputs=[
-        {"name": "image_branch", "source": "image", "model_output": "image_embeds"},
-        {"name": "text_branch", "source": "text", "model_output": "text_embeds"},
-        {"name": "fused", "source": "fused", "model_output": "pooler_output"},
-    ],
-)
-
-# This introductory model ID is intentionally unpinned, so do not reuse its output.
-result = Evaluator(
-    dataset=dataset,
-    extractor=extractor,
-    cache_config=CacheConfig(enabled=False),
-).run()
-```
-
-### Hugging Face time-series backbones
-
-```python
-from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
-from vertebrae.extractors import HFTimeSeriesExtractor
-
-dataset = BenchmarkDataset.from_time_series(
-    series=series,
-    labels=labels,
-    identity=DatasetIdentity.declared("example-dataset", "1"),
-)
-extractor = HFTimeSeriesExtractor(
-    name="patchtst",
-    model_id="some-local-or-hf-timeseries-model",
-    pooling="mean",
-)
-
-# This placeholder may resolve to mutable remote state.
-result = Evaluator(
-    dataset=dataset,
-    extractor=extractor,
-    cache_config=CacheConfig(enabled=False),
-).run()
-```
-
-### Hugging Face video backbones
-
-```python
-from vertebrae import BenchmarkDataset, CacheConfig, Evaluator, DatasetIdentity
-from vertebrae.extractors import HFVideoExtractor
-
-dataset = BenchmarkDataset.from_video_arrays(
-    frames=clips,
-    labels=labels,
-    frame_rate=24.0,
-    identity=DatasetIdentity.declared("example-dataset", "1"),
-)
-extractor = HFVideoExtractor(
-    name="videomae_base",
-    model_id="MCG-NJU/videomae-base",
-    pooling="mean",
-    num_frames=16,
-)
-
-# This introductory model ID is intentionally unpinned, so do not reuse its output.
-result = Evaluator(
-    dataset=dataset,
-    extractor=extractor,
-    cache_config=CacheConfig(enabled=False),
-).run()
-```
-
-### Multi-extractor comparison
-
-```python
-from vertebrae import Benchmark
-
-benchmark = Benchmark(dataset)
-benchmark.add_extractor(tfidf_extractor)
-benchmark.add_extractor(sentence_transformer_extractor)
-benchmark.add_extractor(custom_extractor)
-
-result = benchmark.run()
-print(result.to_dataframe())
-```
-
-You can also benchmark multiple embedding outputs from the same backbone without
-duplicating extractor classes. This is useful for comparing intermediate layers,
-pooling strategies, or multi-head outputs from one model. When the dataset has
-hierarchy metadata from `with_label_hierarchy(...)`, outputs can be routed to
-different hierarchy levels:
-
-```python
-from vertebrae import Benchmark, CacheConfig, LabelViewConfig
+from vertebrae import Benchmark, CacheConfig
 from vertebrae.extractors import HFVisionExtractor
 
 benchmark = Benchmark(
     dataset,
-    label_view_config=LabelViewConfig(
-        output_levels={
-            "mid_cls": "family",
-            "final_cls": "leaf",
-        },
-    ),
-    # The example model IDs below are intentionally unpinned.
+    # The introductory remote model name below is intentionally unpinned.
     cache_config=CacheConfig(enabled=False),
 )
 benchmark.add_extractor(
@@ -557,18 +383,42 @@ benchmark.add_extractor(
 )
 
 result = benchmark.run()
-print(result.to_dataframe()[["extractor", "label_view", "overlap_macro"]])
+print(result.to_dataframe()[["extractor", "overlap_macro"]])
 ```
 
-Each configured output is scored as its own result variant, so this run produces
-rows such as `mnist_vit:mid_cls[level=family]` and
-`mnist_vit:final_cls[level=leaf]`. See `examples/hf_vision_mnist.py` for a fuller
-example that compares multi-output Hugging Face vision embeddings alongside a
-classical scikit-learn image baseline.
-For a more realistic image workflow, `examples/caltech101_vision_foundation_models.py`
-downloads a laptop-sized Caltech-101 subset with a few related category pairs,
-compares DINOv2 with a tiny supervised ViT baseline, and can include gated DINOv3
-embeddings when `VERTABRAE_INCLUDE_DINOV3=1` is set.
+Each output is cached, compressed, scored, and reported independently. The
+[complete extractor guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/feature_extractors.md#hugging-face-adapters)
+covers Hugging Face text, vision, audio, multimodal, time-series, and video adapters,
+as well as Keras, ONNX, sentence-transformers, timm, torchvision, OpenCLIP/SigLIP,
+TensorFlow Hub, JAX/Flax, tree, graph, and hosted embedding integrations.
+
+### Multi-extractor comparison
+
+```python
+from vertebrae import Benchmark
+
+benchmark = Benchmark(dataset)
+benchmark.add_extractor(tfidf_extractor)
+benchmark.add_extractor(sentence_transformer_extractor)
+benchmark.add_extractor(custom_extractor)
+
+result = benchmark.run()
+print(result.to_dataframe())
+```
+
+Named outputs can also be routed to different target or hierarchy views. See
+[`hf_vision_mnist.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/hf_vision_mnist.py)
+for a complete layer comparison and
+[`caltech101_vision_foundation_models.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/caltech101_vision_foundation_models.py)
+for a more realistic DINOv2/ViT workflow.
+
+## Practical diagnostic stories
+
+The examples below make the opening distinction concrete. Each visual treats
+OverlapIndex as evidence about representation geometry and pairs it with an independent
+behavioral metric, controlled comparison, or intervention whenever the claim extends
+beyond geometry. Together they show not only which representation is stronger, but
+where structure appears, what it aligns with, and how that changes the next experiment.
 
 ### Representation monitoring during training
 
@@ -640,122 +490,55 @@ contrast reduction, and rotation at four increasing severities without training 
 model. A fixed `k=5` makes OverlapIndex retention comparable across conditions within
 each layer.
 
-The atlas is organized around three practitioner questions: **what failed, where did it
-start, and who was affected?** The top row reports OI retention, defined within each
-layer as `corrupted OI / clean OI`. A value near `1.0` means that the layer preserves its
-clean class geometry; `0.7` means that roughly 30% of that layer's clean OI has been
-lost. Retention above `1.0` can occur when a corruption makes some classes more compact,
-but it does not imply that classifier behavior improved. The middle row therefore keeps
-ordinary accuracy and cross-entropy beside OI. The bottom row shows which classes lose
-penultimate-layer geometry and the earliest severity at which each class-pair confusion
-increases by five percentage points. In the pair panel, light cells are early failures
-and dark cells require more severe corruption.
+The atlas asks **what failed, where did it start, and who was affected?** It places
+within-layer OI retention beside accuracy and cross-entropy, then drills into affected
+classes and the first new pairwise confusions. Retention is contextual evidence, not a
+claim that classifier behavior improved.
 
 ![Fashion-MNIST deployment-shift atlas with layer retention, behavior, class effects, and confusion onset](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-corruption-atlas.png)
 
-The documentation run exposes three different robustness stories. Noise is relatively
-well tolerated: at the severe tier, the embedding retains `0.89` of clean OI and accuracy
-remains `0.733`. Contrast reduction is a backbone failure. Severe contrast leaves only
-`0.11` of first-block OI, `0.37` of second-block OI, and `0.299` accuracy, so replacing
-or recalibrating only the classifier head is unlikely to solve it. Contrast-aware input
-normalization, augmentation, or backbone fine-tuning is the more plausible response.
-Occlusion is similarly broad: both convolutional layers fall to roughly `0.24` retention
-and accuracy reaches `0.448`, suggesting missing-region augmentation or explicit
-occlusion handling rather than a head-only repair.
-
-Rotation is different. The first block retains its clean OI and the second block retains
-`0.92`, while the embedding falls to `0.73` and accuracy to `0.407`. Early visual
-features still exist, but the task-specific representation does not preserve them under
-rotation. That pattern supports reusing the early backbone while fine-tuning later blocks
-with rotation augmentation. The class panels make the remediation still more specific:
-mild occlusion first increases Sandal/Sneaker interference, while mild rotation first
-increases Sneaker/Ankle boot interference. A footwear-sensitive application could add
-targeted examples and a pair-specific release gate instead of relying only on aggregate
-accuracy.
-
-The same protocol can be adapted to a production model:
-
-1. Freeze one candidate checkpoint and choose a fixed, representative labeled probe.
-2. Apply deployment-relevant shifts to the same rows at meaningful severity levels.
-3. Extract several named layers and score every condition with the same OI configuration.
-4. Plot within-layer retention beside the product metric, then drill into per-class and
-   pairwise results.
-5. Turn the observed failure boundary into a regression test for later checkpoints.
-
-| Observed pattern | Practical interpretation | Likely next experiment |
-|---|---|---|
-| Accuracy worsens while early-layer OI stays near `1.0` and late-layer OI falls | Useful low-level features remain, but task-specific geometry is fragile | Retrain the head or later blocks; test calibration and targeted augmentation |
-| OI falls first in early layers | The shift affects preprocessing or backbone feature extraction | Change normalization/augmentation or fine-tune the backbone |
-| OI declines before the headline metric moves | Representation margins may be eroding before behavior crosses an alert threshold | Treat OI as an early warning and expand the deployment probe |
-| Accuracy falls while OI remains stable across layers | Class structure remains available, but the decision rule or confidence may be failing | Refit the head, inspect calibration, and audit decision thresholds |
-| Damage concentrates in a class or pair | Aggregate quality is hiding a slice-specific risk | Add targeted data and class- or pair-specific acceptance criteria |
-
-These conclusions are probe-specific diagnostics, not universal corruption rankings.
-Retention should be compared within the same layer using aligned rows, labels, and
-scoring settings; absolute OI values from unrelated probes should not be treated as
-directly comparable. Production severity tiers should also come from real sensor,
-environment, and user-behavior ranges rather than this illustrative Fashion-MNIST grid.
+The run finds three distinct stories. Severe noise retains `0.89` of clean embedding
+OI with accuracy `0.733`. Severe contrast damages the backbone: first- and second-block
+retention fall to `0.11` and `0.37`, with accuracy `0.299`. Rotation preserves early
+features but damages the task representation: block 2 retains `0.92`, the embedding
+retains `0.73`, and accuracy falls to `0.407`. Those patterns suggest different fixes,
+from preprocessing/backbone work for contrast to later-block fine-tuning for rotation.
+The [monitoring guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md#corruption-and-deployment-shift-atlas)
+retains the complete interpretation table, pair findings, production checklist, and
+comparison caveats.
 
 #### Paired overfitting monitor
 
 The companion
 [`fashion_mnist_overfitting.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_overfitting.py)
 trains clean-label and noisy-label CNNs from identical weights with identical images,
-mini-batch order, optimizer settings, and schedules. It compares their layer-wise
-OverlapIndex on a shared clean validation probe and a shared corrupted-target probe,
-showing both transferable class geometry and alignment with deliberately incorrect
-labels. Minimum clean validation loss for the noisy treatment defines the shaded
-overfitting region without using OverlapIndex as its own ground truth.
+mini-batch order, optimizer settings, and schedules. Forty percent of a 1,000-example
+training subset receives a deterministic wrong label. The models are then compared on
+the same clean validation and corrupted-target probes, while held-out loss defines the
+shaded overfitting region independently of OI.
 
+The important story begins after the noisy model reaches its best validation loss.
+From epochs 10 to 20, its final-embedding OI on the corrupted targets rises from `0.039`
+to `0.313`, while the clean control remains near zero on those arbitrary labels. At the
+same time, the noisy model's clean-probe OI stalls near `0.63`, while the control
+continues from `0.669` to `0.718`. The noisy model is not merely fitting the wrong
+answers at its output. Its late representation is increasingly reorganizing around
+those answers while making no further progress on transferable garment structure.
 
-The paired experiment uses a stratified 1,000-example training subset and a disjoint,
-clean 2,000-example validation probe. Forty percent of the training labels are replaced
-with a deterministic, different class label. A clean-label control and noisy-label
-treatment start from identical parameters and see the same images, mini-batch order,
-Adam configuration, and 20-epoch schedule. The only training difference is which target
-each model receives.
-
-`RepresentationMonitor` evaluates pooled outputs from both convolutional blocks and the
-128-dimensional embedding at initialization and after every epoch. Each model is scored
-on the same two datasets: the clean validation probe measures transferable class
-geometry, while a corruption probe containing only deliberately relabeled training rows
-measures alignment with their incorrect targets. Both conditions use a fixed `k=5` so
-their OverlapIndex values are directly comparable within a probe. Separatix and stability
-repeats are disabled here to keep the visual focused; clean validation cross-entropy,
-rather than OverlapIndex, determines the shaded overfitting region.
-
-The result localizes memorization in the representation hierarchy. From epoch 10 to 20,
-the noisy model's embedding OverlapIndex on the corruption probe grows from `0.039` to
-`0.313`, while the clean control remains near zero. Over the same interval, clean
-validation embedding OverlapIndex improves from `0.669` to `0.718` for the control but
-stalls near `0.63` for the noisy treatment. The early convolutional features remain
-similar, the second block begins to fall behind the control, and the final embedding
-develops substantial geometry around arbitrary targets. The clean control has a modest
-late validation-loss increase of its own, so it is a reference trajectory rather than a
-claim of perfectly non-overfitting training; the noisy treatment's loss and accuracy
-degradation are much larger.
+The layer comparison localizes that tradeoff. Early features remain similar, the
+second block begins to diverge, and the strongest arbitrary-target geometry appears in
+the final embedding. For a practitioner, that pattern argues against discarding the
+entire backbone. It points instead toward restoring an earlier checkpoint, preserving
+the reusable early features, auditing the corrupted labels, and focusing regularized or
+noise-robust retraining on the later representation stages.
 
 ![Clean-label control and noisy-label treatment compared across Fashion-MNIST representation layers and probes](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-paired-overfitting-monitoring.png)
 
-In a real training loop, use a fixed, representative validation probe and evaluate the
-same named layers at meaningful checkpoints. Define overfitting from held-out loss or
-another deployment-relevant metric, then use layer-wise OverlapIndex to determine where
-the representation changes. A reference run, last-known-good checkpoint, or frozen
-backbone provides the counterfactual that a single trajectory lacks. Audited noisy-label,
-hard-example, domain, or demographic slices can serve as additional probes.
-
-| Monitoring pattern | Practical interpretation | Possible response |
-|---|---|---|
-| Held-out loss worsens while clean-probe OI stays near the reference | The classifier head or confidence may be overfitting while transferable geometry remains intact | Early-stop, calibrate, or regularize/retrain the head |
-| Late-layer clean-probe OI falls behind the reference | Task-specific representation geometry is degrading | Increase regularization or augmentation, freeze earlier layers, or restore an earlier checkpoint |
-| OI rises on a suspected-noise probe while clean-probe OI stalls or falls | The representation is organizing around noisy or spurious targets | Audit labels, deduplicate data, reweight the slice, or use noise-robust training |
-| Early layers remain stable but the embedding diverges | Overfitting is localized near the task head | Reuse/freeze the backbone and replace or retrain later layers |
-
-OverlapIndex should not be treated as an overfitting detector by itself. Absolute values
-from probes with different label semantics or sample composition should not be compared
-directly. Its practical value is explaining whether externally observed overfitting is
-head-level or representation-level, which layers are affected, and what target structure
-those layers are learning.
+OI is not an overfitting detector by itself. Held-out loss establishes the failure;
+OverlapIndex reveals what geometry the model learned and where that learning entered
+the representation hierarchy. The
+[full monitoring case study](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md#paired-overfitting-monitor)
+preserves the control design, interpretation table, and practical response patterns.
 
 #### Demonstrated use case: auditing shortcut learning with named target views
 
@@ -777,149 +560,56 @@ therefore separates three jobs:
 
 ##### Experimental design
 
-Two compact CNNs begin from identical parameters and receive the same 2,000 training
-garments, class targets, mini-batch order, optimizer, and 12-epoch schedule. The only
-difference is the color environment:
-
-| Training regime | Color assignment | What it controls |
-|---|---|---|
-| Independent-color control | Every color has equal support within every garment class | Shows what the network learns when color is visible but useless for the task |
-| Shortcut treatment | The class's canonical color is used with 85% probability | Gives the network an easy nuisance feature that predicts the intended target |
-
-Color is applied as a moderate tint rather than replacing the grayscale garment. The
-shape evidence is therefore present in every environment. The held-out 2,000-garment
-probe is rendered four ways: color removed, canonical/correlated, independently colored,
-and with a fixed reversed mapping. The following are the same garment pixels under those
-interventions.
+Two identically initialized CNNs receive the same 2,000 garments, targets, batches, and
+12-epoch schedule. Color is useless in the control but predicts class 85% of the time in
+the treatment. A held-out 2,000-garment probe is rendered grayscale, canonical,
+independently colored, and with a reversed mapping.
 
 ![Colored Fashion-MNIST exemplars showing grayscale, canonical, independent, and reversed-color interventions](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_exemplars.png)
 
-The representation audit uses exactly balanced class×color cells and registers two
-named target views on those same rows:
+The representation audit balances class×color cells and registers two views:
 
 - `intended_class`: the garment category that the classifier should learn;
 - `nuisance_color`: the tint that should not determine the prediction.
 
-Balancing is essential. On a 95%-correlated probe, class and color are nearly duplicate
-partitions, so even an untrained color-sensitive representation can receive high OI for
-both. The balanced probe makes garment and color statistically independent, allowing
-each OI trajectory to describe distinct geometry. It uses one tint per held-out image
-to avoid duplicate-image structure; the behavioral audit can safely recolor every image
-with all ten hues because it measures predictions rather than representation geometry.
-
-The reported run repeats the paired experiment across five training seeds. Within each
-seed, control and treatment remain matched; the plots show the mean and one standard
-deviation across seeds. Separatix and OI stability repeats are disabled here so the
-uncertainty represents variation from training the models, not repeated scoring of one
-fixed representation.
+Balancing keeps garment and color statistically independent so the views describe
+distinct geometry. Five paired seeds measure variation across trained models.
 
 ##### What the ordinary evaluation would conclude
 
-If evaluation stopped at the correlated environment, the shortcut model would win:
-
-| Model | Correlated ID | Balanced colors | Reversed colors | Color removed |
-|---|---:|---:|---:|---:|
-| Independent-color control | 82.63% ± 1.87 | 82.76% ± 1.49 | 82.81% ± 1.56 | 82.73% ± 1.68 |
-| Shortcut treatment | **91.42% ± 0.70** | 68.95% ± 2.43 | 47.27% ± 4.02 | 78.25% ± 1.77 |
-
-The treatment gains 8.79 percentage points in-distribution. That apparent improvement
-reverses when color stops carrying the training relationship: it trails the control by
-13.81 points on balanced colors and by 35.54 points on the reversed mapping. Removing
-color is less harmful than supplying misleading color, which is strong evidence that the
-model is responding to the nuisance rather than merely requiring additional RGB signal.
-
-The bottom row of the monitoring figure supplies this behavioral evidence independently
-of OI. The upper rows then explain where the representation differs.
+The treatment appears better in-distribution at `91.42%` versus `82.63%`, but trails the
+control by 13.81 points on balanced colors and 35.54 points under reversal.
 
 ![Five-seed colored Fashion-MNIST named-target OI trajectories and counterfactual accuracy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_monitoring.png)
 
 ##### What named target views reveal
 
-At epoch 12, the balanced audit probe produces the following OI macro scores:
-
-| Layer | Intended class: control | Intended class: shortcut | Nuisance color: control | Nuisance color: shortcut |
-|---|---:|---:|---:|---:|
-| Conv block 1 | 0.307 ± 0.012 | 0.263 ± 0.015 | 0.031 ± 0.012 | 0.076 ± 0.014 |
-| Conv block 2 | 0.477 ± 0.033 | 0.266 ± 0.030 | 0.009 ± 0.003 | 0.194 ± 0.056 |
-| Final embedding | 0.675 ± 0.016 | 0.557 ± 0.022 | 0.000 ± 0.000 | 0.020 ± 0.010 |
-
-The control increasingly organizes later layers around garment class while suppressing
-color. The shortcut treatment develops weaker garment geometry at every measured layer
-and retains much more color organization, especially in the second convolutional block.
-This localizes the main representational effect before the classifier head.
-
-The result is subtler than “color OI rises everywhere.” Color is visible at
-initialization, and both networks suppress some of it. The meaningful comparison is that
-independent-color training suppresses the nuisance far more completely, while correlated
-training preserves it and sacrifices robust garment structure. The paired-effect plot
-makes that treatment-minus-control comparison explicit: negative intended-target effects
-mean weaker semantic organization, while positive nuisance-target effects mean retained
-color structure.
+At epoch 12, the control's final embedding reaches intended-class OI `0.675`, versus
+`0.557` for the treatment. In block 2, nuisance-color OI is `0.009` for the control and
+`0.194` for the treatment. The paired effect localizes shortcut structure before the
+classifier head.
 
 ![Paired treatment-minus-control effects for intended garment and nuisance color OverlapIndex](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/colored_fashion_mnist_shortcut_paired_effects.png)
 
-Final-embedding color OI remains low even though the treatment is behaviorally
-color-sensitive. This is not a contradiction. OI asks whether colors form globally
-separated clusters; a classifier can exploit a weaker or class-conditional color
-direction without arranging the whole embedding into ten clean color clusters. OI
-localizes representation geometry, while counterfactual accuracy establishes whether a
-feature affects decisions. Neither should be substituted for the other.
+Final-embedding color OI can remain low while predictions are color-sensitive: a
+classifier may exploit a weak or class-conditional direction without producing ten
+globally separated color clusters. OI localizes geometry; counterfactual accuracy tests
+whether the nuisance affects decisions.
 
 ##### Exhaustive recoloring confirms the harm
 
-The final behavioral audit renders every held-out garment in all ten colors. This makes
-robustness a per-example intervention rather than a result that depends on one random
-balanced assignment:
-
-| Behavioral diagnostic | Control | Shortcut treatment | Treatment − control |
-|---|---:|---:|---:|
-| Accuracy across all colors | 82.70% ± 1.64 | 68.28% ± 2.33 | −14.42 points |
-| Garments correct under every color | 81.23% ± 1.76 | 37.03% ± 3.10 | −44.20 points |
-| Prediction changes under recoloring | 3.42% ± 0.74 | 62.17% ± 3.22 | +58.75 points |
-| Errors that follow the displayed color's associated class | 11.26% ± 0.15 | 28.49% ± 1.87 | +17.22 points |
-| 10th-percentile class×color accuracy | 65.98% ± 5.95 | 6.75% ± 6.14 | −59.23 points |
-| Mean of the five weakest class×color cells | 40.96% ± 16.24 | 0.16% ± 0.21 | −40.80 points |
-
-The average degradation is important, but the lower tail is more operationally useful:
-some garment-color combinations are nearly unusable even though aggregate ID accuracy
-exceeds 91%. A minimum cell score would be too brittle, so the example reports the 10th
-percentile and the mean of the five weakest cells together with their seed-level values.
+Across all ten recolorings, treatment accuracy falls to `68.28%` versus `82.70%` for
+the control. **Prediction changes under recoloring** rise from `3.42%` to `62.17%`, and
+the treatment's 10th-percentile class×color accuracy is only `6.75%`. Aggregate
+in-distribution accuracy had hidden nearly unusable garment-color cells.
 
 ##### How to apply this pattern
 
-This experiment is intentionally synthetic, but the workflow transfers directly to
-real representation audits:
-
-1. Name the intended target and each suspected nuisance explicitly—product category and
-   photography style, diagnosis and acquisition site, speaker content and microphone,
-   or activity and device identity.
-2. Build a fixed audit slice where intended and nuisance targets are sufficiently
-   decorrelated. Named views do not remove confounding by themselves.
-3. Compare against a controlled reference model, previous checkpoint, or training
-   regime so that naturally visible nuisance information is not mistaken for learned
-   reliance.
-4. Monitor the same named layers over time. Use OI to identify which semantics organize
-   which layers, and compare changes within the same target/probe protocol.
-5. Intervene on the nuisance independently and measure task behavior. Representation
-   separability is diagnostic evidence, not a causal performance metric.
-6. Repeat training seeds and report paired effects. OI stability intervals characterize
-   scoring sensitivity; they do not replace variation across trained models.
-
-The central lesson is not that separability is bad. High separability is valuable only
-with respect to the semantics the application actually needs. Named target views make
-that distinction visible; a decorrelated probe and counterfactual behavior make it
-credible.
-
-Reproduce the reported run with the `visuals` extra:
-
-```bash
-poetry install -E visuals
-poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
-```
-
-The script writes seed-level history, raw and summarized final metrics, the aggregate
-monitoring figure, the paired-effect figure, and documentation-ready PNG/SVG exemplar
-grids. Use `--repeats 1` while iterating; increase it only for reported results.
+The transferable pattern is to name intended and nuisance targets, decorrelate them on
+a fixed probe, compare with a controlled reference, monitor the same layers, intervene
+on the nuisance, and repeat paired training seeds. The
+[full shortcut case study](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md#shortcut-learning-with-named-target-views)
+retains the complete result tables, audit checklist, caveats, and reproduction command.
 
 #### Hierarchical label views
 
@@ -941,81 +631,28 @@ poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
 #### Tiny Shakespeare transformer representations
 
 [`tiny_shakespeare_transformer_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/tiny_shakespeare_transformer_visual_suite.py)
-offers fast and quality character-GPT profiles on the contiguous first 90% of Tiny
-Shakespeare. The following 5% supplies both a fixed, class-balanced representation
-probe and a naturally distributed language-model validation set; the final 5% remains
-untouched. The vocabulary is constructed from training text only, and the downloaded
-1.1 MB corpus is accepted only when its SHA-256 checksum matches the pinned source.
-
-Each probe row contains only its preceding validation context and is labeled with the
-immediately following character. Every validation character with at least two eligible
-positions remains in per-token diagnostics, with at most 256 deterministic positions
-per character. Characters with fewer than 50 natural validation occurrences are passed
-through `exclude_classes`: they remain visible in the heatmap and their per-class
-scores remain serialized, but they do not contribute to the headline macro score.
-With the default 64-character context and support settings, the checksum-pinned corpus
-produces 11,429 probe rows across 59 scored characters: 51 contribute to the macro
-score, eight remain diagnostic-only because they have fewer than 50 eligible validation
-positions, and one validation singleton is omitted because overlap scoring requires two
-examples. The JSON metadata records those counts, supports, character identities, and
-source offsets so the selection is auditable.
-
-The fast profile evaluates token-plus-position embeddings, blocks 1 and 2, and final
-normalized block 4. The quality profile evaluates token-plus-position, blocks 2 and 4,
-and final normalized block 6. Both run at initialization and every 1,000 steps.
-OverlapIndex uses the fixed probe and `k="auto"` with the library defaults (`min_k=10`,
-`max_k=50`, and five samples per cluster), so resolved per-character `k` values do not
-change between checkpoints. Cross-entropy, perplexity, and top-1 accuracy answer a
-different question: they measure next-character prediction on every naturally
-distributed validation window. They should not be interpreted as substitutes for the
-probe's representation geometry.
+trains a character GPT on the first 90% of a checksum-pinned corpus. The next 5%
+supplies both a fixed, class-balanced next-character representation probe and naturally
+distributed language-model validation; the final 5% remains untouched. Named hidden
+states are evaluated at initialization and throughout training, while cross-entropy,
+perplexity, and accuracy remain separate behavior metrics.
 
 ![Tiny Shakespeare causal GPT architecture, layer-wise OverlapIndex trajectories, and validation cross-entropy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-representation-monitoring.png)
 
-In the checked 5,000-step CPU run, validation cross-entropy fell from `4.1555` to
-`1.6097` (perplexity `63.78` to `5.00`) while top-1 accuracy rose from `0.8%` to
-`51.6%`. The final normalized block's macro OverlapIndex increased from `0.173` to
-`0.351`; the token-plus-position representation changed little, which helps localize
-the learned next-character geometry to the transformer blocks.
+In the checked 5,000-step CPU run, validation cross-entropy falls from `4.1555` to
+`1.6097`, top-1 accuracy rises from `0.8%` to `51.6%`, and final-block macro OI rises
+from `0.173` to `0.351`. Token-plus-position changes little, localizing learned
+next-character geometry to the transformer blocks.
 
 ![Tiny Shakespeare final-representation PCA and quantization frontier](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-compression-frontier.png)
 
 ![Tiny Shakespeare complete per-character OverlapIndex heatmap before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-next-token-heatmap.png)
 
-`--device auto` smoke-tests CUDA/ROCm, Apple MPS, and Intel XPU with a forward/backward
-step before falling back to CPU. An explicit backend fails rather than silently moving
-the run elsewhere. The selected backend and device name, Torch version, wall time, and
-host/device memory measurements are persisted with each result.
+The [monitoring guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md#hierarchical-fashion-mnist-and-tiny-shakespeare)
+documents the fast and quality profiles, probe support rules, device selection,
+reproduction commands, and complete outputs.
 
-The profiles are:
-
-| Profile | Architecture | Context / batch | Default steps | Monitored states |
-|---|---|---:|---:|---|
-| `fast` | 4 blocks, 4 heads, width 128, MLP 512, no dropout | 64 / 12 | 30,000 | token+position, blocks 1/2, final block 4 |
-| `quality` | 6 blocks, 8 heads, width 256, MLP 1024, dropout 0.1 | 256 / 32 | 10,000 | token+position, blocks 2/4, final block 6 |
-
-The quality profile has about 4.82 million parameters and samples 8,192 training
-characters per optimizer step, or about 81.9 million across its default run. Every
-validation checkpoint remains in monitoring history, but final generation, compression,
-and benchmark outputs restore the checkpoint with the lowest validation cross-entropy.
-The selected step and both best/last validation metrics are recorded in JSON metadata.
-
-Run it with:
-
-```bash
-poetry install -E text-visuals
-poetry run python examples/tiny_shakespeare_transformer_visual_suite.py --profile quality
-```
-
-The checked figures above came from the earlier 5,000-step fast baseline and can be
-reproduced with `--profile fast --steps 5000`. Profile defaults can be selectively
-overridden with `--steps`, `--context-length`, or `--train-batch-size`.
-
-Use `--no-download` for an offline run after the checksum-valid corpus has been cached
-under `examples/data/tiny_shakespeare/`. The script writes PNG/SVG monitoring,
-compression-frontier, and complete next-token heatmap figures plus CSV history,
-initial/final benchmark JSON, compression JSON, and deterministic initial/trained text
-generations under `examples/output/`.
+## Other evaluation protocols
 
 ### Retrieval and matching
 
@@ -1079,7 +716,7 @@ prototype locations used for cosine-similarity classification move.
 
 The left panel shows the central result. The sample representation has a fixed macro
 OverlapIndex of `0.892`, while zero-shot accuracy changes from `73.2%` with bare labels
-to `93.8%` with photo prompts—a `20.6` percentage-point improvement without changing
+to `93.8%` with photo prompts, a `20.6` percentage-point improvement without changing
 the image representation. Weak initial zero-shot accuracy therefore did not imply weak
 transfer features in this run; the original text prototypes addressed otherwise strong
 image structure poorly.
@@ -1253,98 +890,18 @@ alongside the runnable
 
 ## Supported Workflows
 
-`vertebrae` is designed for:
-
-- precomputed dense or sparse embeddings,
-- NumPy arrays and pandas DataFrames,
-- single-label classification, multi-label classification (including sparse binary
-  indicators), and explicit regression targets,
-- hierarchy label views and named target views for scoring the same embeddings against
-  different targets,
-- graph-node, graph-edge, entity, pair, triplet-derived, and generic labeled-unit
-  embedding diagnostics,
-- scikit-learn transformers and pipelines,
-- custom Python callable extractors,
-- dense segmentation token materialization from spatial feature maps,
-- structured unit materialization from native token, frame, region, keypoint, depth,
-  or latent-slot outputs, with explicit alignment when rows do not already match,
-- Hugging Face text backbones through `HFTextExtractor`,
-- Hugging Face vision backbones through `HFVisionExtractor`,
-- Hugging Face audio backbones through `HFAudioExtractor`,
-- Hugging Face image-text and other structured multi-modal backbones through
-  `HFMultimodalExtractor`,
-- Hugging Face video backbones through `HFVideoExtractor`,
-- Hugging Face time-series backbones through `HFTimeSeriesExtractor`,
-- sentence-transformers through `SentenceTransformerExtractor`,
-- timm, torchvision, OpenCLIP, SigLIP, TensorFlow Hub, JAX/Flax, tree-leaf,
-  graph, and hosted embedding API extractors,
-- local PyTorch modules through `TorchExtractor`,
-- local Keras modules through `KerasExtractor`,
-- local ONNX Runtime sessions through `ONNXExtractor`,
-- single-output and multi-output extractor evaluation,
-- repeated time-by-layer representation monitoring for live extractors,
-- single-extractor evaluation,
-- multi-extractor comparisons,
-- JSON and Markdown reports,
-- repeated-run stability analysis,
-- optional Separatix complexity diagnostics in local and artifact-backed reports,
-- custom full-batch embedding metrics with a selectable primary ranking metric,
-- exact, training-free query--gallery retrieval and matching with explicit graded relevance,
-- fixed-prompt, training-free zero-shot semantic alignment for compatible text-aligned models,
-- optional embedding compression and compressed-variant comparisons,
-- local embedding caching and reproducible artifacts,
-- artifact-backed distributed embedding and scoring through the `vertebrae` CLI,
-- artifact-backed `Benchmark.run()` dispatch through explicit local, Ray, and Dask
-  backends,
-- local paths, `s3://...`, and `gs://...` artifact stores.
-
-Distributed CLI commands include `vertebrae plan`, `vertebrae fit-extractor`, `vertebrae embed-shard`,
-`vertebrae merge-embeddings`, `vertebrae write-labels`, `vertebrae write-groups`,
-`vertebrae materialize-segmentation`, `vertebrae materialize-structured`,
-`vertebrae compress`, `vertebrae score`,
-`vertebrae plan-retrieval`, `vertebrae embed-retrieval-shard`,
-`vertebrae merge-retrieval-embeddings`, `vertebrae write-retrieval-relevance`,
-`vertebrae compress-retrieval`, `vertebrae score-retrieval`,
-`vertebrae plan-zero-shot`, `vertebrae embed-zero-shot-shard`,
-`vertebrae merge-zero-shot-embeddings`, `vertebrae write-zero-shot-protocol`,
-`vertebrae compress-zero-shot`, `vertebrae score-zero-shot`,
-`vertebrae zero-shot-from-artifacts`,
-`vertebrae diagnose-complexity`, `vertebrae score-repeats`,
-`vertebrae collect-scores`, `vertebrae benchmark-from-artifacts`,
-`vertebrae slurm-array`, `vertebrae slurm-score-array`, and
-`vertebrae run-embedding-shards`.
-
-All CLI pickle inputs, including fitted-extractor bundles, are trusted-input-only.
-Artifact-backed embedding workers are transform-only: the driver or
-`fit-extractor` fits once on the complete selected dataset before shard dispatch.
-
-Reusable artifacts use cache identity schema: hashes cover complete typed values.
-Array manifest commits immutable digest-named array data, while composite artifact
-manifest commits an array plus metadata or labels plus metadata as one coherent
-publication. Readers validate component sizes and SHA-256 digests as well as array
-shape, dtype, storage format, and sparse `nnz`.
-
-Callable/live-model extractors that cannot prove a stable identity still evaluate but
-bypass cache reuse and record `cache_status="bypassed_unsafe_identity"`. Reuse requires
-an explicit `cache_identity`, a model identifier that is itself a content-digested
-local path, or a remote revision pinned to a full immutable commit hash. Merely
-declaring a checkpoint beside an already-loaded live model does not prove that the
-object contains those weights. Importable callable identities include referenced
-modules, helper callables, and exact global configuration; optional backend versions
-also participate in extractor recipes. Raw-cache
-eligibility propagates to compression and every derived artifact: disabling raw
-caching or using an unsafe identity cannot produce a reusable derived cache. Superseded
-cache identity and array/composite manifest schemas are intentionally not read;
-standalone JSON and label store APIs remain current.
-
-Streaming-safe extractors are transformed in independent batches. Every batch must
-return the same unique output names, row counts, feature widths, dtypes, dense/sparse
-form, recipes, metadata contracts, and parent coverage. Extractors declaring
-`streaming_safe=False` receive one full transform call instead.
-
-For Ray or Dask cluster runs, the configured `cache_dir` can be either a shared local
-path or a cloud object-store URI such as `s3://team-bucket/vertebrae/run-001` or
-`gs://team-bucket/vertebrae/run-001`. Workers need credentials for the selected store.
+The package covers labeled classification, multi-label, regression, named target and
+hierarchy views, structured units, dense segmentation, exact retrieval, fixed-prompt
+zero-shot alignment, monitoring, compression, custom metrics, local/distributed
+execution, and local/S3/GCS artifacts. SciPy sparse matrices and arrays remain sparse
+through classification, multi-label, regression, and stability scoring, and at the
+vertebrae boundary when passed into Separatix; multi-label targets may also be sparse
+binary indicators. The
+[complete workflow inventory](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/workflows.md)
+groups every supported dataset, extractor, protocol, report, and CLI stage. The
+[distributed guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/distributed_readiness.md)
+documents trusted pickle inputs, cache identity, immutable manifests, streaming
+contracts, Ray/Dask/SLURM execution, and cloud-store requirements.
 
 ## Reports and Results
 
@@ -1370,23 +927,10 @@ footprints, and logical raw/compressed embedding storage. It does not change qua
 ranking. A cache hit remains a cache hit and reports inference as unmeasured; use
 `CacheConfig(force_recompute=True)` when a fresh inference measurement is required.
 
-Native model/device adapters cover local Torch, Keras, ONNX, Hugging Face,
-sentence-transformers, timm, torchvision, OpenCLIP/SigLIP, graph-model, and TensorFlow
-Hub and JAX/Flax extractors. Device peaks are reported only for a successfully reset
-single-device profiling window; cache hits, multi-device Torch, and JAX allocator
-limits remain explicitly unavailable. Checkpoint sizes come only from explicit paths;
-model identifiers and external caches are never scanned implicitly. Reports
-distinguish complete, partial, unavailable, and CPU-not-applicable evidence.
-
-Retrieval and zero-shot benchmarks accept the same embedding and profiling configs and
-report independent endpoint profiles. Artifact-backed workers persist local observations;
-merged results use a distinct distributed profile with worker-first latency and aggregate
-compute throughput rather than presenting worker data as one local run. Embedding storage
-reports both logical bytes and the actual persisted array-object size when available.
-
-Latency values are meaningful only with their recorded batch size, device, precision,
-and synchronization context. They are workload observations, not hardware-normalized
-scores or controlled load tests.
+Profiles distinguish complete, partial, unavailable, and CPU-not-applicable evidence.
+Latency remains meaningful only with its batch, device, precision, synchronization, and
+cache context; it is a workload observation rather than a hardware-normalized score.
+The results guide documents native device adapters and distributed endpoint profiles.
 
 Each benchmark run returns structured results that include:
 
@@ -1481,19 +1025,6 @@ workflow:
 | hierarchy or named target views | active view and available views | one ranked result per evaluated view | follows the projected target type |
 | dense segmentation | source-image groups and token provenance | per-class token overlap | classification metric when applicable |
 
-Two other network-free examples exercise the same report schema with different
-target types:
-
-| problem class | generated by | extractor | overlap_macro | weakest target | recommendation |
-| --- | --- | --- | ---: | --- | --- |
-| multi-label classification | `examples/multilabel_precomputed_embeddings.py` | toy_multilabel_embeddings | 0.0000 | outdoor | poor_frozen_representation_weak_class_attention |
-| structured regression | `examples/structured_depth.py` | depth_samples:depth_cells | 0.9732 |  | continuous_structure_above_null |
-
-The toy multi-label result is intentionally not presented as a strong representation:
-its labels cross the three embedding clusters, and the report correctly flags the
-weak result. The structured-depth result evaluates continuous target structure; it
-is not an RMSE or depth-estimation benchmark.
-
 See [results and reports](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/results_and_reports.md) for the complete schema and
 the additional metadata retained for multi-output, structured, relational, and
 zero-shot workflows.
@@ -1511,71 +1042,23 @@ classifiers, while a strong overlap score plus
 `smooth_nonlinear_recommended` or `kernel_or_local_recommended` suggests the
 embedding is promising but may benefit from a more flexible decision boundary.
 
-## Optional Extractors
+## Documentation
 
-Optional integrations are available through extras such as `torch`, `keras`,
-`tensorflow`, `onnx`, `hf`, `timm`, `torchvision`, `openclip`,
-`tensorflow-hub`, `jax`, `trees`, and `graph`:
+| Topic | Guide |
+| --- | --- |
+| Installation and optional extras | [Installation](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/installation.md) |
+| Complete capability inventory | [Workflows](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/workflows.md) |
+| Dataset constructors, targets, hierarchy, and alignment | [Datasets](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/datasets.md) |
+| Local, Hugging Face, and optional model adapters | [Feature extractors](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/feature_extractors.md) |
+| Overlap, custom metrics, stability, and Separatix | [Scoring](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/scoring.md) |
+| Monitoring and complete case-study protocols | [Representation monitoring](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md) |
+| Compression choices and storage-quality tradeoffs | [Compression](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/compression.md) |
+| Result objects, tables, JSON, Markdown, and resources | [Results and reports](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/results_and_reports.md) |
+| CLI, caching, artifacts, Ray, Dask, SLURM, S3, and GCS | [Distributed readiness](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/distributed_readiness.md) |
+| Runnable scripts | [Examples](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/README.md) |
 
-- `TorchExtractor`
-- `KerasExtractor`
-- `ONNXExtractor`
-- `SentenceTransformerExtractor`
-- `HFTextExtractor`
-- `HFVisionExtractor`
-- `HFAudioExtractor`
-- `HFTimeSeriesExtractor`
-- `HFVideoExtractor`
-- `HFMultimodalExtractor`
-- `TimmVisionExtractor`
-- `TorchvisionVisionExtractor`
-- `OpenCLIPExtractor`
-- `SigLIPExtractor`
-- `TFHubExtractor`
-- `JAXFlaxExtractor`
-- `TreeLeafEmbeddingExtractor`
-- `GraphModelExtractor`
-- `HostedEmbeddingExtractor`
-- `CallableSpatialExtractor`
-- `PrecomputedSpatialExtractor`
-- `CallableStructuredExtractor`
-- `PrecomputedStructuredExtractor`
-
-These workflows rely on optional dependencies and lazy imports, so the core package stays lightweight.
-See `examples/onnx_extractor.py` for a local ONNX export workflow.
-See `examples/hf_vision_mnist.py` for a laptop-friendly comparison that runs
-MNIST handwritten digit data through final and mid-layer Hugging Face vision
-embeddings, and
-`examples/caltech101_vision_foundation_models.py` for a single-label Caltech-101
-workflow with automatic local data reuse/downloads and a less trivial default
-class slice. See
-`examples/sklearn_wine_pipeline.py` for a network-free real-data scikit-learn
-pipeline comparison.
-See `docs/feature_extractors.md` for the full extractor matrix and install
-mapping, `docs/segmentation.md` for dense spatial workflows, and
-`docs/compression.md` for compression options and guidance.
-
-## Command Line Interface
-
-`vertebrae` includes a CLI for deterministic embedding shard planning and artifact
-merging in local or batch-style workflows. Distributed orchestration commands accept
-`--backend local|ray|dask`, with `--ray-address` and `--dask-address` available for
-cluster connections. Cloud artifact stores use the same `--cache-dir` flag, plus
-provider options such as `--s3-endpoint-url`, `--s3-profile`, `--s3-region`, and
-`--gcs-project`. The CLI can also derive compressed embedding artifacts with
-`vertebrae compress`, materialize structured unit artifacts with
-`vertebrae materialize-structured`, and evaluate importable custom metrics through
-repeatable `vertebrae score --metric module:callable` options. Run
-`vertebrae --help` to see the available commands.
-
-## Notes
-
-- The package targets Python `>=3.9,<3.15`.
-- The public API is centered on `BenchmarkDataset`, `EmbeddingUnitDataset`,
-  `SegmentationDataset`, `RetrievalDataset`, `ZeroShotDataset`, `Evaluator`,
-  `Benchmark`, `RetrievalBenchmark`, `ZeroShotBenchmark`, structured and spatial
-  adapters, extractor wrappers, metric adapters, config dataclasses, and structured
-  result objects.
+The package targets Python `>=3.9,<3.15`. Run `vertebrae --help` for the CLI command
+surface and use the generated API reference for symbol-level details.
 
 ## License
 

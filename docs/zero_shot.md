@@ -115,7 +115,7 @@ features for a separately trained downstream model.
 
 ## Flagship experiment: zero-shot versus transfer structure
 
-[`examples/zero_shot_transfer_structure.py`](../examples/zero_shot_transfer_structure.py)
+[`examples/zero_shot_transfer_structure.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/zero_shot_transfer_structure.py)
 turns the two-axis interpretation into a reproducible real-image experiment. It uses
 a deterministic balanced CIFAR-10 test slice and OpenCLIP, encodes the image endpoint
 once, and scores OverlapIndex once. It then scores three fully declared text protocols

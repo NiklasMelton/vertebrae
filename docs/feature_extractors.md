@@ -1,5 +1,7 @@
 # feature extractors
 
+## Choosing an extractor
+
 `vertebrae` supports these extractor families:
 
 - `PrecomputedExtractor`: uses embeddings supplied by the user.
@@ -68,6 +70,8 @@ one explicit 2D unit matrix per parent sample. `vertebrae` still treats them as
 embedding-efficacy diagnostics, not task-native detection, OCR, ASR, pose,
 depth, or generative evaluation engines.
 
+## Common extractor protocol
+
 Every extractor implements:
 
 ```python
@@ -76,6 +80,8 @@ transform(X)
 fit_transform(X, y=None)
 recipe()
 ```
+
+## Multi-output and structured outputs
 
 Some extractors can also emit multiple named embedding matrices from one model
 pass. `Benchmark` and `Evaluator` score each named output as a separate result.
@@ -103,6 +109,8 @@ Native multi-output support is available for:
 - `TFHubExtractor`
 - `JAXFlaxExtractor`
 
+### Named Hugging Face outputs
+
 For Hugging Face backbones, pass explicit output specs:
 
 ```python
@@ -116,6 +124,8 @@ extractor = HFVisionExtractor(
     ],
 )
 ```
+
+### Named local-model outputs
 
 Local Torch and Keras models use the same explicit ordinary `outputs` mapping. These
 adapters do not discover internal layers or install hooks; the model or `output_fn`
@@ -163,6 +173,8 @@ output must still be present by name in the mapping.
 
 `transform()` remains the ergonomic single-output path. With multiple declarations it
 raises with guidance to use `Benchmark`, `Evaluator`, or `transform_many()`.
+
+### Multimodal outputs
 
 For paired image-text models, `HFMultimodalExtractor` works with aligned
 structured dataset inputs and explicit named branch or fused outputs:
@@ -212,7 +224,10 @@ configuration values. Optional extractor recipes also record installed backend
 distribution versions, so an inference-runtime upgrade invalidates reuse. This policy
 also applies to every compressed or otherwise derived artifact.
 
-Optional model extractors require:
+The complete extras mapping, including Keras, TensorFlow, visualization, distributed,
+and cloud-store bundles, lives in the
+[installation guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/installation.md).
+Common optional model extras are:
 
 ```bash
 poetry install -E torch
@@ -230,6 +245,12 @@ poetry install -E trees
 poetry install -E graph
 ```
 
+## Local and scikit-learn adapters
+
+`SklearnExtractor` wraps fitted or fit-capable scikit-learn transformers and pipelines.
+`CallableExtractor` wraps a user function when an existing adapter is not appropriate.
+Both retain their serializable recipe and cache identity alongside generated embeddings.
+
 `TorchExtractor` is intended for users who already have a trained local PyTorch model
 loaded in memory. They provide a `collate_fn` that converts raw inputs into model
 inputs, and an `output_fn` when the model output needs to be projected to an
@@ -238,9 +259,136 @@ mode, runs under `torch.inference_mode()`, and restores the module's prior train
 state afterward. Set `inference_mode=False` only when an adapter genuinely requires
 autograd or training-mode behavior.
 
+`KerasExtractor` follows the same adapter-first shape. The caller controls batch
+coercion and output selection rather than relying on model-specific conventions:
+
+```python
+import numpy as np
+
+from vertebrae import BenchmarkDataset, DatasetIdentity, Evaluator
+from vertebrae.extractors import KerasExtractor
+
+
+def collate_fn(batch):
+    return np.asarray(batch, dtype=np.float32)
+
+
+dataset = BenchmarkDataset.from_arrays(
+    features,
+    labels,
+    modality="tabular",
+    identity=DatasetIdentity.declared("example-dataset", "1"),
+)
+extractor = KerasExtractor(
+    name="local_keras",
+    model=model,
+    collate_fn=collate_fn,
+    call_method="call",
+    checkpoint_paths=["/path/to/model.keras"],
+    cache_identity="local-keras-model-v1",
+    recipe_data={"checkpoint": "/path/to/model.keras"},
+)
+
+result = Evaluator(dataset=dataset, extractor=extractor).run()
+```
+
+`checkpoint_paths` contributes content-digested provenance and profiling evidence; a
+path copied only into `recipe_data` is descriptive. Because the adapter receives an
+already-loaded live object, the path cannot prove which weights are in memory, so
+reusable caching still requires a maintained `cache_identity`. Notebook-local, nested,
+or otherwise nonportable adapter functions need an explicit identity for the same
+reason.
+
 `ONNXExtractor` is intended for exported inference graphs. Users supply an optional
 `input_fn` and `output_fn` when model inputs or outputs need reshaping, tokenization,
 or selection from multi-input/multi-output sessions.
+
+## Hugging Face adapters
+
+Hugging Face support is explicit by modality. All remote examples below use unpinned
+introductory model names or placeholders, so they disable reusable caching. Production
+runs should use a full immutable model revision or a maintained `cache_identity`.
+
+| adapter | dataset input | common output controls |
+| --- | --- | --- |
+| `HFTextExtractor` | strings | pooling, hidden layer, named outputs, structured tokens |
+| `HFVisionExtractor` | PIL/NumPy images or paths | image mode, pooling, hidden layer, spatial/structured outputs |
+| `HFAudioExtractor` | waveforms, paths, or sampling-rate dictionaries | pooling, feature masks, structured frames |
+| `HFMultimodalExtractor` | aligned named modality fields | branch/fused source, model output, selector, pooling |
+| `HFTimeSeriesExtractor` | dense series and optional observed/time features | pooling, hidden layer, structured cells |
+| `HFVideoExtractor` | paths or predecoded clips | frame windows, pooling, hidden layer, structured frames |
+
+The vision and multimodal examples above demonstrate named outputs. The remaining
+modality-specific constructor shapes are:
+
+```python
+from vertebrae import BenchmarkDataset, CacheConfig, DatasetIdentity, Evaluator
+from vertebrae.extractors import HFAudioExtractor, HFTextExtractor
+
+text_dataset = BenchmarkDataset.from_arrays(
+    texts,
+    labels,
+    modality="text",
+    identity=DatasetIdentity.declared("text-example", "1"),
+)
+text_extractor = HFTextExtractor(
+    name="bert_text",
+    model_id="bert-base-uncased",
+    pooling="mean",
+)
+
+audio_dataset = BenchmarkDataset.from_audio_arrays(
+    audio=waveforms,
+    labels=labels,
+    sampling_rate=16_000,
+    identity=DatasetIdentity.declared("audio-example", "1"),
+)
+audio_extractor = HFAudioExtractor(
+    name="wav2vec2_base",
+    model_id="facebook/wav2vec2-base",
+    pooling="mean",
+)
+
+text_result = Evaluator(
+    dataset=text_dataset,
+    extractor=text_extractor,
+    cache_config=CacheConfig(enabled=False),
+).run()
+audio_result = Evaluator(
+    dataset=audio_dataset,
+    extractor=audio_extractor,
+    cache_config=CacheConfig(enabled=False),
+).run()
+```
+
+```python
+from vertebrae import BenchmarkDataset, DatasetIdentity
+from vertebrae.extractors import HFTimeSeriesExtractor, HFVideoExtractor
+
+time_series_dataset = BenchmarkDataset.from_time_series(
+    series=series,
+    labels=labels,
+    identity=DatasetIdentity.declared("series-example", "1"),
+)
+time_series_extractor = HFTimeSeriesExtractor(
+    name="patchtst",
+    model_id="some-local-or-hf-timeseries-model",
+    pooling="mean",
+)
+
+video_dataset = BenchmarkDataset.from_video_arrays(
+    frames=clips,
+    labels=labels,
+    frame_rate=24.0,
+    identity=DatasetIdentity.declared("video-example", "1"),
+)
+video_extractor = HFVideoExtractor(
+    name="videomae_base",
+    model_id="MCG-NJU/videomae-base",
+    pooling="mean",
+    num_frames=16,
+)
+```
 
 Text extractors validate that inputs are sequences of strings. Vision extractors accept
 PIL images, NumPy image arrays, or image paths. Audio extractors accept waveform
@@ -254,6 +402,8 @@ shape `(time, height, width, channels)`, or structured dictionaries containing
 their validated frame rate. Time-series extractors accept dense arrays with shape `(n, time)`
 or `(n, time, channels)`, plus optional structured fields such as
 `observed_mask` and `time_features`.
+
+## Other optional extractor families
 
 The corrected optional-wrapper details are intentionally explicit:
 
@@ -308,6 +458,8 @@ common image-text models it maps image fields to processor `images` and text
 fields to processor `text` by default. Use `input_map` or `input_fn` for custom
 processor shapes, and `output_fn` when model outputs need explicit projection
 before named output validation.
+
+## Streaming and memory planning
 
 For structured outputs on adapter-style extractors, reuse the same forward path
 and expose per-parent 2D unit matrices with explicit specs:
