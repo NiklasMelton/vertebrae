@@ -5,6 +5,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 
@@ -559,7 +560,7 @@ def test_relational_audit_counts_only_actionable_recommendations():
 
 
 def test_visuals_render_from_protocol_rows(tmp_path):
-    import matplotlib
+    matplotlib = pytest.importorskip("matplotlib")
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
