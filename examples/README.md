@@ -149,6 +149,34 @@ Each script writes reports to `examples/output/`.
   subset with related category pairs using DINOv2, a tiny supervised ViT baseline,
   and an optional gated DINOv3 extractor. Downloads the dataset archive when it
   is not already present locally.
+<<<<<<< Updated upstream
+=======
+- `oxford_pets_backbone_selection.py`: screen frozen vision backbones and layers on
+  Oxford-IIIT Pet without consulting final test accuracy. A disjoint representation
+  probe ranks candidates by clean breed OverlapIndex; DINOv2 and DeiT contribute
+  quarter-, middle-, late-, and final-block CLS representations to expose a broad
+  transfer-quality range without additional image forward passes. A standardized
+  linear-head scatter tests the representation-screening claim, and an OI-ranked
+  budget curve shows how quickly that ranking finds useful candidates relative to
+  random search. The ordinary head-choice audit runs Separatix on clean head-training
+  rows and compares its paired MLP-minus-linear evidence with clean validation
+  advantage. A simplified target-view heatmap and background shift-effect plot remain
+  separate diagnostics. A relational audit then reuses the cached embeddings for
+  balanced same-breed verification with same-species hard negatives. It runs Separatix
+  on the combined non-test development pairs (head-train plus validation), reconstructs
+  every downstream estimator from the exact versioned probe recipe, and validates
+  linear, smooth, local/kernel, and MLP heads only on untouched source-disjoint test
+  pairs. The plot marks the selected deployment
+  family (including an active MLP override) with a thick border and the plausible core
+  alternatives with small orange markers; the serialized guidance also retains the
+  minimum recommended family when it differs. Its star is a retrospective
+  simplest-near-best test oracle, never a selection input. The experiment writes protocol JSON/CSV data, including
+  family guidance, recipe ids, paired evidence, effective train size, and held-out
+  test-regret summaries, plus six plot families. Install `poetry install -E
+  backbone-selection`; the first run downloads the dataset and requested checkpoints.
+  Use `--replot-from examples/output/oxford_pets_backbone_selection.json` to regenerate
+  the figures without rerunning feature extraction or head training.
+>>>>>>> Stashed changes
 - `zero_shot_transfer_structure.py`: flagship CIFAR-10 OpenCLIP experiment that
   encodes images once, varies only explicit text prompt sets, and contrasts fixed
   global/per-class OverlapIndex with prompt-sensitive zero-shot accuracy/F1. Requires

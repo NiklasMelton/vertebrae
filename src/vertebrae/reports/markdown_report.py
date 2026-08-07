@@ -404,6 +404,34 @@ def render_markdown_report(result: Any) -> str:
             lines.append(
                 "- Recommendation confidence: " f"{_markdown_text(item.separatix.confidence or '')}"
             )
+            guidance = item.separatix.family_guidance or {}
+            if guidance:
+                lines.append(
+                    "- Minimum recommended family: "
+                    f"{_markdown_text(guidance.get('minimum_recommended_family') or '')}"
+                )
+                lines.append(
+                    "- Plausible families: "
+                    f"{_markdown_text(guidance.get('plausible_families', []))}"
+                )
+                lines.append(
+                    "- Selected family/probe: "
+                    f"{_markdown_text(guidance.get('selected_family') or '')}/"
+                    f"{_markdown_text(guidance.get('selected_probe') or '')}"
+                )
+                lines.append(
+                    "- Selected recipe id: "
+                    f"{_markdown_text(guidance.get('selected_recipe_id') or '')}"
+                )
+                lines.append(
+                    "- MLP override: "
+                    f"{bool(guidance.get('mlp_override', False))}"
+                )
+                lines.append(
+                    "- Paired evidence: "
+                    f"{_markdown_text(guidance.get('paired_status') or '')}"
+                    f" ({_markdown_text(guidance.get('paired_method') or '')})"
+                )
             lines.append(
                 f"- Summary: {_markdown_text((item.separatix.recommendation_text or '').strip())}"
             )
@@ -426,6 +454,23 @@ def render_markdown_report(result: Any) -> str:
             if probe.get("skip_reason"):
                 lines.append(f"- Probe unavailable: {_markdown_text(probe.get('skip_reason'))}")
             lines.append(f"- Probe evaluation mode: {_markdown_text(evaluation.get('mode') or '')}")
+            lines.append(
+                "- Probe alignment: "
+                f"{_markdown_text(evaluation.get('alignment_status') or '')}"
+            )
+            lines.append(
+                "- Probe CV/cohort: "
+                f"{_markdown_text(evaluation.get('cv_method') or '')}; "
+                f"{_markdown_text(evaluation.get('cohort_size') or '')} rows; "
+                f"{_markdown_text(evaluation.get('n_splits') or '')} splits"
+            )
+            effective_train_size = evaluation.get("effective_train_size_summary") or {}
+            if effective_train_size:
+                lines.append(
+                    "- Effective probe train size: "
+                    f"{_markdown_text(effective_train_size.get('mean') or '')} mean "
+                    f"({_markdown_text(effective_train_size.get('basis') or '')})"
+                )
             lines.append(f"- Grouped evaluation: {bool(evaluation.get('grouped', False))}")
             if evaluation.get("n_groups") is not None:
                 lines.append(f"- Independence groups: {evaluation.get('n_groups')}")

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from math import ceil
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import numpy as np
 
@@ -23,6 +23,7 @@ class SeparatixResult:
 
     ran: bool
     probe_summary: Dict[str, Any]
+    family_guidance: Dict[str, Any] = field(default_factory=dict)
     recommendation: Optional[str] = None
     recommendation_text: Optional[str] = None
     confidence: Optional[str] = None
@@ -40,6 +41,39 @@ class SeparatixResult:
         """Serialize the diagnostic result to a JSON-safe dictionary."""
 
         return make_json_safe(self)
+
+    def probe_recipe(self, probe_name_or_recipe_id: str) -> Optional[Dict[str, Any]]:
+        """Return a retained Separatix probe recipe by name or stable id.
+
+        Separatix 0.1.1 emits recipes for the core probes as well as optional
+        aligned comparators and MLP architectures.  Vertebrae keeps the raw
+        report untouched, so this lookup intentionally searches those nested
+        report payloads rather than trying to reconstruct estimators locally.
+        The returned recipe is a JSON-safe copy and can be passed directly to
+        Separatix' ``make_probe_estimator`` factory.
+        """
+
+        if not probe_name_or_recipe_id or not self.report:
+            return None
+        wanted = str(probe_name_or_recipe_id)
+        for recipe in _iter_probe_recipes(self.report):
+            recipe_id = recipe.get("recipe_id")
+            probe = recipe.get("probe") or {}
+            probe_name = probe.get("name") if isinstance(probe, dict) else None
+            if wanted in {recipe_id, probe_name}:
+                return make_json_safe(recipe)
+        return None
+
+    def selected_probe_recipe(self) -> Optional[Dict[str, Any]]:
+        """Return the recipe used by the normalized family guidance."""
+
+        recipe_id = self.family_guidance.get("selected_recipe_id")
+        if recipe_id:
+            recipe = self.probe_recipe(str(recipe_id))
+            if recipe is not None:
+                return recipe
+        probe_name = self.family_guidance.get("selected_probe")
+        return self.probe_recipe(str(probe_name)) if probe_name else None
 
 
 class SeparatixScorer:
@@ -114,6 +148,10 @@ class SeparatixScorer:
                 grouped=grouped,
                 n_groups=n_groups,
             ),
+            family_guidance=normalize_family_guidance(
+                report_dict,
+                target_type=label_metadata["target_type"],
+            ),
             metadata={
                 "normalized_embeddings": normalize_embeddings,
                 "sparse_input": sparse_input,
@@ -151,6 +189,12 @@ class SeparatixScorer:
                 "evaluation": {},
                 "skip_reason": reason,
             },
+            family_guidance=normalize_family_guidance(
+                {},
+                target_type="unknown",
+                status="skipped",
+                reason=reason,
+            ),
             metadata={
                 "normalized_embeddings": self.overlap_config.normalize_embeddings,
                 "overlap_score": float(overlap_score),
@@ -228,6 +272,9 @@ _PROBE_METRICS = {
         "subset_accuracy",
     ),
     "regression": (
+        "r2_variance_weighted",
+        "r2_uniform_average",
+        "normalized_rmse_mean",
         "r2",
         "mae",
         "rmse",
@@ -267,7 +314,16 @@ def summarize_probe_diagnostics(
     report_metrics = report.get("metrics", {}) or {}
     baseline = report_metrics.get("baseline", {}) or {}
     probes = report_metrics.get("probes", {}) or {}
-    best_probe = baseline.get("best_probe") or baseline.get("recommended_family")
+    best_probe = baseline.get("best_probe")
+    best_by_metric = baseline.get("best_by_metric", {}) or {}
+    selected_baseline_metric = None
+    if best_probe is None and isinstance(best_by_metric, dict):
+        for metric_name in _PROBE_METRICS.get(target_type, ()):
+            candidate = best_by_metric.get(metric_name, {})
+            if isinstance(candidate, dict) and candidate.get("probe"):
+                best_probe = candidate["probe"]
+                selected_baseline_metric = metric_name
+                break
     best_metrics = probes.get(best_probe, {}) if best_probe else {}
     metric_names = _PROBE_METRICS.get(target_type, ())
     metric_map = {
@@ -280,6 +336,7 @@ def summarize_probe_diagnostics(
         baseline.get("best_probe_metric")
         or baseline.get("primary_metric")
         or baseline.get("metric_name")
+        or selected_baseline_metric
     )
     if primary_name is None and target_type == "single_label":
         primary_name = "balanced_accuracy" if "balanced_accuracy" in metric_map else None
@@ -288,6 +345,10 @@ def summarize_probe_diagnostics(
         primary_value = float(best_metrics[primary_name])
     elif primary_name and _is_number(baseline.get("best_probe_score")):
         primary_value = float(baseline["best_probe_score"])
+    elif primary_name and isinstance(best_by_metric.get(primary_name), dict):
+        candidate_score = best_by_metric[primary_name].get("score")
+        if _is_number(candidate_score):
+            primary_value = float(candidate_score)
     primary_metric = (
         {"name": str(primary_name), "value": primary_value}
         if primary_name is not None and primary_value is not None
@@ -298,12 +359,41 @@ def summarize_probe_diagnostics(
     if best_probe is None:
         skip_reason = baseline.get("skipped_reason") or "Separatix did not identify a best probe."
     status = "executed" if best_probe and metric_map else "unavailable"
+    evaluation_report = report_metrics.get("probe_evaluation", {}) or {}
+    sampling = best_metrics.get("sample_info") or (report.get("sampling", {}) or {}).get(
+        "probe"
+    )
+    if not isinstance(sampling, dict):
+        sampling = {}
+    evaluation_plan_id = evaluation_report.get("evaluation_plan_id") or best_metrics.get(
+        "evaluation_plan_id"
+    )
+    alignment_status = evaluation_report.get("alignment_status") or best_metrics.get(
+        "alignment_status"
+    )
+    if alignment_status is None:
+        alignment_status = "aligned" if evaluation_plan_id else "unavailable"
+    cohort_size = evaluation_report.get("n_samples")
+    if cohort_size is None:
+        cohort_size = sampling.get("n_used") or sampling.get("n_original")
+    cohort_size_int = _integer_or_none(cohort_size)
     evaluation = {
-        "mode": best_metrics.get("evaluation_mode"),
-        "sampling": best_metrics.get("sample_info")
-        or (report.get("sampling", {}) or {}).get("probe"),
+        "mode": best_metrics.get("evaluation_mode")
+        or evaluation_report.get("evaluation_mode"),
+        "sampling": sampling,
         "grouped": grouped,
         "n_groups": n_groups,
+        "alignment_status": alignment_status,
+        "evaluation_plan_id": evaluation_plan_id,
+        "cv_method": evaluation_report.get("cv_method")
+        or best_metrics.get("cv_stratification_method"),
+        "cohort_size": cohort_size_int,
+        "n_samples": cohort_size_int,
+        "n_splits": evaluation_report.get("n_splits"),
+        "group_aware": evaluation_report.get("group_aware"),
+        "effective_train_size_summary": evaluation_report.get(
+            "effective_train_size_summary"
+        ),
     }
     return {
         "status": status,
@@ -315,6 +405,150 @@ def summarize_probe_diagnostics(
         "evaluation": evaluation,
         "skip_reason": skip_reason,
     }
+
+
+def normalize_family_guidance(
+    report: Dict[str, Any],
+    *,
+    target_type: str,
+    status: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Normalize Separatix' target-specific evidence into one stable shape.
+
+    Separatix uses separate evidence keys for single-label, multilabel, and
+    regression reports.  Their family meanings are shared, so integrations
+    should consume this compact normalized frontier instead of branching on
+    target mode.  Unknown or older reports produce an explicit unavailable
+    object rather than a guessed recommendation.
+    """
+
+    metrics = report.get("metrics", {}) if isinstance(report, dict) else {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+    canonical_target_type = {
+        "singlelabel": "single_label",
+        "multilabel": "multi_label",
+    }.get(target_type, target_type)
+    evidence_keys = {
+        "single_label": "recommendation_evidence",
+        "singlelabel": "recommendation_evidence",
+        "multi_label": "multilabel_recommendation_evidence",
+        "multilabel": "multilabel_recommendation_evidence",
+        "regression": "regression_recommendation_evidence",
+    }
+    evidence = metrics.get(
+        evidence_keys.get(canonical_target_type, "recommendation_evidence"), {}
+    )
+    if not isinstance(evidence, dict):
+        evidence = {}
+    family_set = evidence.get("plausible_family_set", {})
+    if not isinstance(family_set, dict):
+        family_set = {}
+    mlp_payload = metrics.get("mlp_recommendation_evidence", {})
+    if not isinstance(mlp_payload, dict):
+        mlp_payload = {}
+    mlp_active = bool(mlp_payload.get("recommendation_override"))
+    best_architecture = mlp_payload.get("best_architecture")
+    if not isinstance(best_architecture, dict):
+        best_architecture = {}
+
+    minimum_family = family_set.get("minimum_recommended_family")
+    if minimum_family is None:
+        minimum_family = evidence.get("recommended_family")
+    plausible = family_set.get("plausible_families", [])
+    if not isinstance(plausible, list):
+        plausible = list(plausible) if isinstance(plausible, (tuple, set)) else []
+    selected_family = evidence.get("selected_family") or evidence.get("recommended_family")
+    selected_probe = None
+    if selected_family and selected_family != "mlp":
+        family_payload = (evidence.get("families", {}) or {}).get(selected_family, {})
+        if isinstance(family_payload, dict):
+            selected_probe = family_payload.get("best_probe")
+            if selected_probe is None:
+                # Multilabel and regression evidence stores one probe choice
+                # per primary metric instead of a flat family summary.
+                metric_order = (
+                    "balanced_accuracy",
+                    "micro_f1",
+                    "macro_f1",
+                    "sample_jaccard",
+                    "r2_variance_weighted",
+                    "r2_uniform_average",
+                )
+                for metric_name in metric_order:
+                    metric_payload = family_payload.get(metric_name, {})
+                    if isinstance(metric_payload, dict) and metric_payload.get("probe"):
+                        selected_probe = metric_payload["probe"]
+                        break
+    selected_recipe_id = None
+    if selected_probe:
+        selected_probe_payload = (metrics.get("probes", {}) or {}).get(selected_probe, {})
+        if isinstance(selected_probe_payload, dict):
+            selected_recipe = selected_probe_payload.get("probe_recipe")
+            if isinstance(selected_recipe, dict):
+                selected_recipe_id = selected_recipe.get("recipe_id")
+    if mlp_active:
+        selected_family = "mlp"
+        selected_probe = best_architecture.get("probe_name") or selected_probe
+        selected_recipe_id = best_architecture.get("probe_recipe_id")
+    paired = metrics.get("paired_probe_comparisons", {})
+    if not isinstance(paired, dict):
+        paired = {}
+    paired_status = paired.get("status")
+    paired_method = paired.get("method")
+    if paired_status is None and evidence.get("family_comparisons"):
+        paired_status = (
+            "available"
+            if evidence.get("decision_method") == "paired_oof_bootstrap"
+            else "unavailable"
+        )
+    inferred_status = status or family_set.get("status") or (
+        "available" if evidence else "unavailable"
+    )
+    return {
+        "status": inferred_status,
+        "target_type": canonical_target_type,
+        "scope": family_set.get("scope", "core_probe_families"),
+        "minimum_recommended_family": minimum_family,
+        "plausible_families": [str(value) for value in plausible],
+        "decision_method": family_set.get("decision_method") or evidence.get("decision_method"),
+        "selected_family": selected_family,
+        "selected_probe": selected_probe,
+        "selected_recipe_id": selected_recipe_id if selected_family else None,
+        "mlp_override": mlp_active,
+        "mlp_override_details": {
+            "active": mlp_active,
+            "recommendation_override": mlp_active,
+            "probe_name": best_architecture.get("probe_name"),
+            "probe_recipe_id": best_architecture.get("probe_recipe_id"),
+            "status": mlp_payload.get("status"),
+            "reason": mlp_payload.get("override_reason"),
+        },
+        "paired": {
+            "status": paired_status,
+            "method": paired_method,
+            "evaluation_plan_id": paired.get("evaluation_plan_id"),
+            "resamples_used": paired.get("resamples_used"),
+        },
+        "paired_status": paired_status,
+        "paired_method": paired_method,
+        "reason": reason or family_set.get("reason"),
+    }
+
+
+def _iter_probe_recipes(value: Any) -> Iterator[Dict[str, Any]]:
+    """Yield nested probe recipes from a serialized Separatix report."""
+
+    if isinstance(value, dict):
+        recipe = value.get("probe_recipe")
+        if isinstance(recipe, dict):
+            yield recipe
+        for child in value.values():
+            yield from _iter_probe_recipes(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_probe_recipes(child)
 
 
 def _probe_comparison(
@@ -372,6 +606,14 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(value)
 
 
+def _integer_or_none(value: Any) -> Optional[int]:
+    """Convert a finite numeric value to an integer for compact metadata."""
+
+    if isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(value):
+        return int(value)
+    return None
+
+
 def _probe_metric_higher_is_better(metric_name: str) -> bool:
     return metric_name.lower() not in {
         "mae",
@@ -386,7 +628,7 @@ def _load_separatix() -> Any:
         import separatix
     except ImportError as exc:
         raise ImportError(
-            "separatix>=0.1.0a5 is required for complexity diagnostics. Install dependencies with "
+            "separatix>=0.1.1 is required for complexity diagnostics. Install dependencies with "
             "Poetry or install separatix directly."
         ) from exc
     return separatix

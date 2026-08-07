@@ -435,6 +435,17 @@ callables that omit it remain valid. `collect-scores --metric-name ...` can sele
 a non-primary metric when building an interval summary, and rejects repeats that
 mix different group protocols.
 
+Separatix diagnostic artifacts retain the same 0.1.1 result contract as local
+runs. In addition to the canonical recommendation and target-aware text, the
+serialized payload carries family guidance (minimum family, plausible family set,
+selected probe/recipe, MLP override, and paired-comparison method), probe
+alignment/CV/cohort/effective-train-size context, and the complete versioned
+probe recipes. Workers and report reconstruction must preserve these fields; do
+not rebuild a probe from a family name alone. A consumer that needs to fit the
+same estimator should retrieve the recipe through
+`SeparatixResult.probe_recipe(...)` and pass it to Separatix's
+`make_probe_estimator(...)` factory.
+
 Artifact-backed workflows can also attach a Separatix diagnostic artifact after
 overlap scoring. Use the CLI `diagnose-complexity` command with an embedding key,
 labels key, and score key. The score artifact provides the overlap score used to

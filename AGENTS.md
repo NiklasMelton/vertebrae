@@ -30,7 +30,7 @@ Treat the repository as the source of truth. The project now includes single-lab
 - Use Poetry for dependency management and packaging.
 - Use the `src/` layout.
 - Current Python target in `pyproject.toml`: `>=3.9,<3.15`.
-- Current metric dependencies in `pyproject.toml`: `overlapindex>=0.1.3a3` and `separatix>=0.1.0a4`.
+- Current metric dependencies in `pyproject.toml`: `overlapindex>=0.1.3a3` and `separatix>=0.1.1`.
 - Public CLI entry point: `vertebrae = vertebrae.cli:main`.
 - Core dependencies include NumPy, SciPy, scikit-learn, pandas, joblib, pydantic, psutil, pillow, overlapindex, and separatix.
 - Optional extras currently include `hf`, `audio`, `timeseries`, `video`, `torch`, `timm`, `torchvision`, `openclip`, `mlp`, `keras`, `tensorflow`, `tensorflow-hub`, `jax`, `trees`, `graph`, `onnx`, `ray`, `dask`, `distributed`, `s3`, `gcs`, and `cloud`.

@@ -8738,14 +8738,14 @@ train = ["accelerate (>=0.20.3)", "datasets"]
 
 [[package]]
 name = "separatix"
-version = "0.1.0"
+version = "0.1.1"
 description = "Diagnostic profiling of supervised feature spaces before model training."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "separatix-0.1.0-py3-none-any.whl", hash = "sha256:a15ed5b16ecb971117d0eeae8872ce0fb5a5531a626d2e2c1e241306537eb8b4"},
-    {file = "separatix-0.1.0.tar.gz", hash = "sha256:4e26ae29657767733622f880d42bb146c2336bf4967c3faffcca128e947f55c4"},
+    {file = "separatix-0.1.1-py3-none-any.whl", hash = "sha256:6722d2e208da0e680294f88fbea3f73f4835109368a18b28298fa3252f1e7ddb"},
+    {file = "separatix-0.1.1.tar.gz", hash = "sha256:a9bd642a874b3340432c207434caaa159c52383b3e9f59635b74bfddf5f86bcc"},
 ]
 
 [package.dependencies]
@@ -11332,4 +11332,8 @@ visuals = ["matplotlib", "torch", "torchvision"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
+<<<<<<< Updated upstream
 content-hash = "fca7dcd607512fd51fc4b0c5a4f72884360d16c9b79cafa70c7d51d051c1ce58"
+=======
+content-hash = "4f1a8feadd24c5e8db44f639232708f9b6d306e5e77c07a144fded47fac2edfe"
+>>>>>>> Stashed changes

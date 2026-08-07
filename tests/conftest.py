@@ -145,9 +145,36 @@ def _build_fake_mlp_payload(X, kwargs):
             "requested_device": kwargs.get("mlp_device", "cpu"),
             "resolved_device": "cpu",
         },
-        "architectures": ["mlp_one_layer_compact", "mlp_two_layer_compact"],
-        "aligned_comparators": {"linear": True, "smooth_poly": True},
-        "best_architecture": "mlp_two_layer_compact",
+        "architectures": [
+            {
+                "probe_name": "mlp_one_layer_compact",
+                "probe_recipe": _fake_probe_recipe(
+                    "mlp_one_layer_compact", "mlp", "mlp_architecture"
+                ),
+            },
+            {
+                "probe_name": "mlp_two_layer_compact",
+                "probe_recipe": _fake_probe_recipe(
+                    "mlp_two_layer_compact", "mlp", "mlp_architecture"
+                ),
+            },
+        ],
+        "aligned_comparators": {
+            "linear": {
+                "probe_recipe": _fake_probe_recipe(
+                    "linear", "linear", "mlp_aligned_comparator"
+                )
+            },
+            "smooth_poly": {
+                "probe_recipe": _fake_probe_recipe(
+                    "smooth_poly", "smooth_nonlinear", "mlp_aligned_comparator"
+                )
+            },
+        },
+        "best_architecture": {
+            "probe_name": "mlp_two_layer_compact",
+            "probe_recipe_id": "fake-mlp_two_layer_compact",
+        },
         "pairwise_comparisons": {
             "mlp_two_layer_compact_vs_linear": {"mean_delta": 0.05, "better": True}
         },
@@ -181,13 +208,33 @@ def _build_fake_separatix_payload(X, y, kwargs):
         best_probe_metric = "macro_f1"
     elif target_mode == "regression":
         probe_scores = {
-            "dummy": {"r2": 0.0, "mae": 0.30, "rmse": 0.35},
-            "linear": {"r2": 0.71, "mae": 0.16, "rmse": 0.20},
-            "knn": {"r2": 0.68, "mae": 0.18, "rmse": 0.22},
-            "smooth_poly": {"r2": 0.84, "mae": 0.11, "rmse": 0.15},
-            "kernel_approx": {"r2": 0.80, "mae": 0.13, "rmse": 0.17},
+            "dummy": {
+                "r2_variance_weighted": 0.0,
+                "r2_uniform_average": 0.0,
+                "normalized_rmse_mean": 1.0,
+            },
+            "linear": {
+                "r2_variance_weighted": 0.71,
+                "r2_uniform_average": 0.70,
+                "normalized_rmse_mean": 0.55,
+            },
+            "knn": {
+                "r2_variance_weighted": 0.68,
+                "r2_uniform_average": 0.67,
+                "normalized_rmse_mean": 0.58,
+            },
+            "smooth_poly": {
+                "r2_variance_weighted": 0.84,
+                "r2_uniform_average": 0.82,
+                "normalized_rmse_mean": 0.41,
+            },
+            "kernel_approx": {
+                "r2_variance_weighted": 0.80,
+                "r2_uniform_average": 0.79,
+                "normalized_rmse_mean": 0.45,
+            },
         }
-        best_probe_metric = "r2"
+        best_probe_metric = None
     else:
         probe_scores = {
             "dummy": {"accuracy": 0.50, "balanced_accuracy": 0.50, "macro_f1": 0.33},
@@ -212,6 +259,59 @@ def _build_fake_separatix_payload(X, y, kwargs):
             "n_original": int(X.shape[0]),
             "n_used": int(X.shape[0]),
         }
+    for probe_name, probe in probe_scores.items():
+        probe["evaluation_plan_id"] = "fake-plan"
+        probe["cv_stratification_method"] = "stratified_kfold"
+        probe["probe_recipe"] = _fake_probe_recipe(
+            probe_name,
+            "linear" if probe_name == "linear" else "smooth_nonlinear",
+            "core_probe",
+        )
+    if target_mode == "multilabel":
+        family_metrics = ("micro_f1", "macro_f1", "sample_jaccard")
+        family_evidence = {
+            family: {metric: {"probe": probe} for metric in family_metrics}
+            for family, probe in (
+                ("linear", "linear"),
+                ("smooth_nonlinear", "smooth_poly"),
+                ("local_kernel", "knn"),
+            )
+        }
+    elif target_mode == "regression":
+        family_metrics = ("r2_variance_weighted", "r2_uniform_average")
+        family_evidence = {
+            family: {metric: {"probe": probe} for metric in family_metrics}
+            for family, probe in (
+                ("linear", "linear"),
+                ("smooth_nonlinear", "smooth_poly"),
+                ("local_kernel", "knn"),
+            )
+        }
+    else:
+        family_evidence = {
+            "linear": {"best_probe": "linear"},
+            "smooth_nonlinear": {"best_probe": "smooth_poly"},
+            "local_kernel": {"best_probe": "knn"},
+        }
+    target_evidence_key = {
+        "singlelabel": "recommendation_evidence",
+        "multilabel": "multilabel_recommendation_evidence",
+        "regression": "regression_recommendation_evidence",
+    }[target_mode]
+    target_evidence = {
+        "recommended_family": "smooth_nonlinear",
+        "selected_family": "smooth_nonlinear",
+        "best_probe": "smooth_poly",
+        "families": family_evidence,
+        "plausible_family_set": {
+            "status": "available",
+            "scope": "core_probe_families",
+            "minimum_recommended_family": "smooth_nonlinear",
+            "plausible_families": ["smooth_nonlinear"],
+            "decision_method": "paired_oof_bootstrap",
+            "reason": None,
+        },
+    }
     return {
         "recommendation": "smooth_nonlinear_recommended",
         "recommendation_text": "Recommendation: smooth nonlinear boundary.",
@@ -220,13 +320,36 @@ def _build_fake_separatix_payload(X, y, kwargs):
             "audit": {"n_samples": int(X.shape[0]), "n_features": int(X.shape[1])},
             "geometry": {},
             "probes": probe_scores,
-            "baseline": {
-                "best_probe": "smooth_poly",
-                "best_probe_score": probe_scores["smooth_poly"][
-                    best_probe_metric or "balanced_accuracy"
-                ],
-                **({"best_probe_metric": best_probe_metric} if best_probe_metric else {}),
-            },
+            "baseline": (
+                {
+                    "primary_metrics": [
+                        "r2_variance_weighted",
+                        "r2_uniform_average",
+                    ],
+                    "best_by_metric": {
+                        "r2_variance_weighted": {
+                            "probe": "smooth_poly",
+                            "score": 0.84,
+                        },
+                        "r2_uniform_average": {
+                            "probe": "smooth_poly",
+                            "score": 0.82,
+                        },
+                    },
+                }
+                if target_mode == "regression"
+                else {
+                    "best_probe": "smooth_poly",
+                    "best_probe_score": probe_scores["smooth_poly"][
+                        best_probe_metric or "balanced_accuracy"
+                    ],
+                    **(
+                        {"best_probe_metric": best_probe_metric}
+                        if best_probe_metric
+                        else {}
+                    ),
+                }
+            ),
             "neighborhood": {},
             "boundary": {},
             "graph": {},
@@ -235,6 +358,29 @@ def _build_fake_separatix_payload(X, y, kwargs):
             "mlp_probes": mlp_payload,
             "mlp_recommendation_evidence": {
                 key: value for key, value in mlp_payload.items() if key != "trigger"
+            },
+            target_evidence_key: target_evidence,
+            "probe_evaluation": {
+                "alignment_status": "aligned",
+                "evaluation_plan_id": "fake-plan",
+                "cv_method": "stratified_kfold",
+                "n_samples": int(X.shape[0]),
+                "n_splits": 5,
+                "group_aware": False,
+                "effective_train_size_summary": {
+                    "status": "available",
+                    "basis": "held_out_folds",
+                    "min": max(1, int(X.shape[0]) - 2),
+                    "median": max(1, int(X.shape[0]) - 2),
+                    "mean": float(max(1, int(X.shape[0]) - 2)),
+                    "max": max(1, int(X.shape[0]) - 2),
+                },
+            },
+            "paired_probe_comparisons": {
+                "status": "available",
+                "method": "paired_oof_bootstrap",
+                "evaluation_plan_id": "fake-plan",
+                "resamples_used": 50,
             },
         },
         "scores": {
@@ -274,6 +420,34 @@ def _build_fake_separatix_payload(X, y, kwargs):
             "mlp_trigger_skill_threshold": kwargs.get("mlp_trigger_skill_threshold", 0.75),
             "mlp_min_improvement": kwargs.get("mlp_min_improvement", 0.02),
             "mlp_max_parameters": kwargs.get("mlp_max_parameters"),
+        },
+    }
+
+
+def _fake_probe_recipe(name, family, role):
+    """Return a compact 0.1.1-shaped recipe for adapter tests."""
+
+    return {
+        "schema": "separatix.probe_recipe",
+        "schema_version": 1,
+        "recipe_id": f"fake-{name}",
+        "probe": {
+            "name": name,
+            "family": family,
+            "target_mode": "singlelabel",
+            "role": role,
+        },
+        "implementation": {"key": "fake", "version": 1},
+        "input_contract": {},
+        "estimator": {"kind": "estimator", "key": "fake", "params": {}},
+        "training_policy": {},
+        "created_with": {
+            "separatix": "0.1.1",
+            "python": "3.9",
+            "numpy": "2.0",
+            "scipy": "1.13",
+            "scikit_learn": "1.5",
+            "torch": None,
         },
     }
 

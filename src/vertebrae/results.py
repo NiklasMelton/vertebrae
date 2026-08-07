@@ -46,6 +46,13 @@ RESULT_ROW_STATIC_COLUMNS = (
     "probe_grouped",
     "probe_n_groups",
     "probe_skip_reason",
+    "probe_alignment_status",
+    "probe_evaluation_plan_id",
+    "probe_cv_method",
+    "probe_cohort_size",
+    "probe_n_splits",
+    "probe_effective_train_size_summary",
+    "probe_effective_train_size_mean",
     "stability_mode",
     "stability_repeats",
     "stability_interval_level",
@@ -71,6 +78,17 @@ RESULT_ROW_STATIC_COLUMNS = (
     "separatix_recommendation",
     "separatix_confidence",
     "separatix_skip_reason",
+    "separatix_guidance_status",
+    "separatix_minimum_family",
+    "separatix_plausible_families",
+    "separatix_guidance_decision_method",
+    "separatix_selected_family",
+    "separatix_selected_probe",
+    "separatix_selected_recipe_id",
+    "separatix_mlp_override",
+    "separatix_paired_status",
+    "separatix_paired_method",
+    "separatix_family_guidance",
     "resource_profile_status",
     "first_call_seconds",
     "warm_median_seconds",
@@ -299,6 +317,8 @@ class BenchmarkResult:
             comparison = probe.get("comparison") or {}
             evaluation = probe.get("evaluation") or {}
             sampling = evaluation.get("sampling") or {}
+            effective_train_size = evaluation.get("effective_train_size_summary") or {}
+            family_guidance = (item.separatix.family_guidance if item.separatix else {}) or {}
             stability = item.stability or {}
             stability_summary = stability.get("summary") or {}
             output_identity = _output_identity(item)
@@ -339,6 +359,13 @@ class BenchmarkResult:
                 "probe_grouped": evaluation.get("grouped"),
                 "probe_n_groups": evaluation.get("n_groups"),
                 "probe_skip_reason": probe.get("skip_reason"),
+                "probe_alignment_status": evaluation.get("alignment_status"),
+                "probe_evaluation_plan_id": evaluation.get("evaluation_plan_id"),
+                "probe_cv_method": evaluation.get("cv_method"),
+                "probe_cohort_size": evaluation.get("cohort_size", evaluation.get("n_samples")),
+                "probe_n_splits": evaluation.get("n_splits"),
+                "probe_effective_train_size_summary": effective_train_size,
+                "probe_effective_train_size_mean": effective_train_size.get("mean"),
                 "stability_mode": stability.get("mode"),
                 "stability_repeats": stability.get("repeats"),
                 "stability_interval_level": stability.get("interval_level"),
@@ -384,6 +411,19 @@ class BenchmarkResult:
                 "separatix_skip_reason": (
                     item.separatix.skipped_reason if item.separatix else None
                 ),
+                "separatix_guidance_status": family_guidance.get("status"),
+                "separatix_minimum_family": family_guidance.get(
+                    "minimum_recommended_family"
+                ),
+                "separatix_plausible_families": family_guidance.get("plausible_families", []),
+                "separatix_guidance_decision_method": family_guidance.get("decision_method"),
+                "separatix_selected_family": family_guidance.get("selected_family"),
+                "separatix_selected_probe": family_guidance.get("selected_probe"),
+                "separatix_selected_recipe_id": family_guidance.get("selected_recipe_id"),
+                "separatix_mlp_override": family_guidance.get("mlp_override"),
+                "separatix_paired_status": family_guidance.get("paired_status"),
+                "separatix_paired_method": family_guidance.get("paired_method"),
+                "separatix_family_guidance": family_guidance,
                 "resource_profile_status": profile.status if profile else "disabled",
                 "first_call_seconds": (inference.first_call_seconds if inference else None),
                 "warm_median_seconds": (inference.warm_median_seconds if inference else None),
