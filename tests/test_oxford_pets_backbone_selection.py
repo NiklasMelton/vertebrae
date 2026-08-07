@@ -476,6 +476,63 @@ def test_candidate_ranking_uses_clean_overlap_not_test_accuracy_or_shift():
     assert [row["selection_rank"] for row in ranked] == [1, 2]
 
 
+def test_candidate_summary_call_uses_mlp_threshold_not_relational_margin():
+    import ast
+    import inspect
+
+    module = _load_example_module()
+    measurements = [
+        {
+            "condition": condition,
+            "target": target,
+            "overlap_macro": 0.5,
+        }
+        for condition, target in (
+            ("clean", "breed"),
+            ("background_swapped", "breed"),
+            ("foreground", "breed"),
+        )
+    ]
+    head_rows = [
+        {
+            "head": family,
+            "repeat": 0,
+            "validation_accuracy": 0.8,
+            "validation_balanced_accuracy": 0.8,
+            "clean_test_accuracy": 0.8,
+            "background_swapped_test_accuracy": 0.7,
+            "recipe_alignment_status": "aligned",
+        }
+        for family in ("linear", "mlp")
+    ]
+    summary = module._candidate_summary(
+        representation="Demo",
+        model_name="dinov2-small",
+        output_name="final_cls",
+        measurements=measurements,
+        head_rows=head_rows,
+        selected_head="linear",
+        selection_reason="linear evidence",
+        head_evidence={},
+        mlp_min_improvement=0.07,
+        mlp_trigger_skill_threshold=1.0,
+    )
+    assert summary["mlp_min_improvement"] == 0.07
+    assert "near_optimal_margin" not in inspect.signature(module._candidate_summary).parameters
+
+    main_tree = ast.parse(inspect.getsource(module.main))
+    candidate_call = next(
+        node
+        for node in ast.walk(main_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_candidate_summary"
+    )
+    keyword_names = {keyword.arg for keyword in candidate_call.keywords}
+    assert "mlp_min_improvement" in keyword_names
+    assert "near_optimal_margin" not in keyword_names
+
+
 def test_scatter_labels_are_compact_and_collision_spread_is_deterministic():
     module = _load_example_module()
 
