@@ -161,9 +161,7 @@ def _build_fake_mlp_payload(X, kwargs):
         ],
         "aligned_comparators": {
             "linear": {
-                "probe_recipe": _fake_probe_recipe(
-                    "linear", "linear", "mlp_aligned_comparator"
-                )
+                "probe_recipe": _fake_probe_recipe("linear", "linear", "mlp_aligned_comparator")
             },
             "smooth_poly": {
                 "probe_recipe": _fake_probe_recipe(
@@ -343,11 +341,7 @@ def _build_fake_separatix_payload(X, y, kwargs):
                     "best_probe_score": probe_scores["smooth_poly"][
                         best_probe_metric or "balanced_accuracy"
                     ],
-                    **(
-                        {"best_probe_metric": best_probe_metric}
-                        if best_probe_metric
-                        else {}
-                    ),
+                    **({"best_probe_metric": best_probe_metric} if best_probe_metric else {}),
                 }
             ),
             "neighborhood": {},

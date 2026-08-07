@@ -1399,12 +1399,11 @@ def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(
     assert guidance["paired_status"] == "available"
     assert guidance["paired_method"] == "paired_oof_bootstrap"
     assert diagnostic_payload["probe_summary"]["evaluation"]["alignment_status"] == "aligned"
-    assert diagnostic_payload["probe_summary"]["evaluation"]["evaluation_plan_id"] == (
-        "fake-plan"
+    assert diagnostic_payload["probe_summary"]["evaluation"]["evaluation_plan_id"] == ("fake-plan")
+    assert (
+        diagnostic_payload["probe_summary"]["evaluation"]["effective_train_size_summary"]["mean"]
+        == 2.0
     )
-    assert diagnostic_payload["probe_summary"]["evaluation"]["effective_train_size_summary"][
-        "mean"
-    ] == 2.0
     assert result["extractor_results"][0]["separatix"]["recommendation"] == (
         "smooth_nonlinear_recommended"
     )

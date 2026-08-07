@@ -423,10 +423,7 @@ def render_markdown_report(result: Any) -> str:
                     "- Selected recipe id: "
                     f"{_markdown_text(guidance.get('selected_recipe_id') or '')}"
                 )
-                lines.append(
-                    "- MLP override: "
-                    f"{bool(guidance.get('mlp_override', False))}"
-                )
+                lines.append("- MLP override: " f"{bool(guidance.get('mlp_override', False))}")
                 lines.append(
                     "- Paired evidence: "
                     f"{_markdown_text(guidance.get('paired_status') or '')}"
@@ -455,8 +452,7 @@ def render_markdown_report(result: Any) -> str:
                 lines.append(f"- Probe unavailable: {_markdown_text(probe.get('skip_reason'))}")
             lines.append(f"- Probe evaluation mode: {_markdown_text(evaluation.get('mode') or '')}")
             lines.append(
-                "- Probe alignment: "
-                f"{_markdown_text(evaluation.get('alignment_status') or '')}"
+                "- Probe alignment: " f"{_markdown_text(evaluation.get('alignment_status') or '')}"
             )
             lines.append(
                 "- Probe CV/cohort: "

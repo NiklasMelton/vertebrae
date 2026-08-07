@@ -360,9 +360,7 @@ def summarize_probe_diagnostics(
         skip_reason = baseline.get("skipped_reason") or "Separatix did not identify a best probe."
     status = "executed" if best_probe and metric_map else "unavailable"
     evaluation_report = report_metrics.get("probe_evaluation", {}) or {}
-    sampling = best_metrics.get("sample_info") or (report.get("sampling", {}) or {}).get(
-        "probe"
-    )
+    sampling = best_metrics.get("sample_info") or (report.get("sampling", {}) or {}).get("probe")
     if not isinstance(sampling, dict):
         sampling = {}
     evaluation_plan_id = evaluation_report.get("evaluation_plan_id") or best_metrics.get(
@@ -378,8 +376,7 @@ def summarize_probe_diagnostics(
         cohort_size = sampling.get("n_used") or sampling.get("n_original")
     cohort_size_int = _integer_or_none(cohort_size)
     evaluation = {
-        "mode": best_metrics.get("evaluation_mode")
-        or evaluation_report.get("evaluation_mode"),
+        "mode": best_metrics.get("evaluation_mode") or evaluation_report.get("evaluation_mode"),
         "sampling": sampling,
         "grouped": grouped,
         "n_groups": n_groups,
@@ -391,9 +388,7 @@ def summarize_probe_diagnostics(
         "n_samples": cohort_size_int,
         "n_splits": evaluation_report.get("n_splits"),
         "group_aware": evaluation_report.get("group_aware"),
-        "effective_train_size_summary": evaluation_report.get(
-            "effective_train_size_summary"
-        ),
+        "effective_train_size_summary": evaluation_report.get("effective_train_size_summary"),
     }
     return {
         "status": status,
@@ -437,9 +432,7 @@ def normalize_family_guidance(
         "multilabel": "multilabel_recommendation_evidence",
         "regression": "regression_recommendation_evidence",
     }
-    evidence = metrics.get(
-        evidence_keys.get(canonical_target_type, "recommendation_evidence"), {}
-    )
+    evidence = metrics.get(evidence_keys.get(canonical_target_type, "recommendation_evidence"), {})
     if not isinstance(evidence, dict):
         evidence = {}
     family_set = evidence.get("plausible_family_set", {})
@@ -503,8 +496,8 @@ def normalize_family_guidance(
             if evidence.get("decision_method") == "paired_oof_bootstrap"
             else "unavailable"
         )
-    inferred_status = status or family_set.get("status") or (
-        "available" if evidence else "unavailable"
+    inferred_status = (
+        status or family_set.get("status") or ("available" if evidence else "unavailable")
     )
     return {
         "status": inferred_status,

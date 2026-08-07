@@ -412,9 +412,7 @@ class BenchmarkResult:
                     item.separatix.skipped_reason if item.separatix else None
                 ),
                 "separatix_guidance_status": family_guidance.get("status"),
-                "separatix_minimum_family": family_guidance.get(
-                    "minimum_recommended_family"
-                ),
+                "separatix_minimum_family": family_guidance.get("minimum_recommended_family"),
                 "separatix_plausible_families": family_guidance.get("plausible_families", []),
                 "separatix_guidance_decision_method": family_guidance.get("decision_method"),
                 "separatix_selected_family": family_guidance.get("selected_family"),
