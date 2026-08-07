@@ -770,9 +770,7 @@ def _render_background_swap(pair: BackgroundSwap, blur_radius: Optional[float] =
         )
         donor_values[donor_mask != 2] = fill
         canvas = Image.fromarray(donor_values)
-        radius = (
-            max(2.0, min(canvas.size) / 32.0) if blur_radius is None else float(blur_radius)
-        )
+        radius = max(2.0, min(canvas.size) / 32.0) if blur_radius is None else float(blur_radius)
         if radius > 0:
             canvas = canvas.filter(ImageFilter.GaussianBlur(radius=radius))
         canvas = canvas.resize(target.size, resample=Image.Resampling.BILINEAR)
@@ -1485,9 +1483,7 @@ def _relational_composition_summary(
         }
     family_scores: Dict[str, Dict[str, Any]] = {}
     for family in _RELATIONAL_FAMILIES:
-        candidates = [
-            head for head in _RELATIONAL_HEADS if _RELATIONAL_HEAD_FAMILY[head] == family
-        ]
+        candidates = [head for head in _RELATIONAL_HEADS if _RELATIONAL_HEAD_FAMILY[head] == family]
         selected_head = max(
             candidates,
             key=lambda head: (head_scores[head]["validation"], -candidates.index(head)),
@@ -1523,8 +1519,7 @@ def _relational_composition_summary(
         "separatix_mlp_override": head_evidence.get("mlp_override"),
         "empirical_simplest_near_best_family": empirical_family,
         "recommendation_near_optimal": (
-            selected is not None
-            and selected["validation"] >= best_validation - head_margin
+            selected is not None and selected["validation"] >= best_validation - head_margin
         ),
         "selected_validation_balanced_accuracy": (
             selected["validation"] if selected is not None else None
@@ -1538,9 +1533,7 @@ def _relational_composition_summary(
         "selected_test_gap_vs_validation_choice": (
             empirical["test"] - selected["test"] if selected is not None else None
         ),
-        "selected_test_regret": (
-            best_test - selected["test"] if selected is not None else None
-        ),
+        "selected_test_regret": (best_test - selected["test"] if selected is not None else None),
         "train_pair_count": len(train_pairs),
         "validation_pair_count": len(validation_pairs),
         "test_pair_count": len(test_pairs),
@@ -1556,9 +1549,7 @@ def _relational_composition_summary(
 def _relational_audit_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     if not rows:
         raise ValueError("Cannot summarize an empty relational audit.")
-    recommended = [
-        row for row in rows if row.get("separatix_recommended_family") is not None
-    ]
+    recommended = [row for row in rows if row.get("separatix_recommended_family") is not None]
     validation_regrets = [
         float(row["selected_validation_regret"])
         for row in recommended
@@ -1585,9 +1576,7 @@ def _relational_audit_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, An
         "mean_validation_regret": (
             float(np.mean(validation_regrets)) if validation_regrets else None
         ),
-        "mean_test_regret": (
-            float(np.mean(test_regrets)) if test_regrets else None
-        ),
+        "mean_test_regret": (float(np.mean(test_regrets)) if test_regrets else None),
         "recommendation_family_counts": dict(sorted(family_counts.items())),
     }
 
@@ -1773,12 +1762,8 @@ def _candidate_summary(
         "mlp_vs_linear_lower_95": head_evidence.get("lower_95"),
         "mlp_vs_linear_upper_95": head_evidence.get("upper_95"),
         "mlp_probe_evaluation_mode": head_evidence.get("evaluation_mode"),
-        "validation_linear_balanced_accuracy": _mean(
-            linear_runs, "validation_balanced_accuracy"
-        ),
-        "validation_mlp_balanced_accuracy": _mean(
-            mlp_runs, "validation_balanced_accuracy"
-        ),
+        "validation_linear_balanced_accuracy": _mean(linear_runs, "validation_balanced_accuracy"),
+        "validation_mlp_balanced_accuracy": _mean(mlp_runs, "validation_balanced_accuracy"),
         "validation_mlp_advantage": float(observed_deltas.mean()),
         "validation_mlp_advantage_std": float(observed_deltas.std(ddof=0)),
         "selected_head_validation_regret": float(best_validation - selected_validation),
@@ -1863,11 +1848,7 @@ def _measurement_value(
     condition: str,
     target: str,
 ) -> float:
-    matches = [
-        row
-        for row in rows
-        if row["condition"] == condition and row["target"] == target
-    ]
+    matches = [row for row in rows if row["condition"] == condition and row["target"] == target]
     if len(matches) != 1:
         raise ValueError(f"Expected one {condition}/{target} measurement; found {len(matches)}.")
     return float(matches[0]["overlap_macro"])
@@ -1935,9 +1916,7 @@ def _replot_saved_results(path: Path, figure_dir: Path, plt: Any) -> Tuple[Path,
     missing = [name for name in required if name not in payload]
     if missing:
         raise ValueError(f"Saved experiment JSON is missing fields: {missing}.")
-    if any(
-        "mlp_probe_status" not in row for row in payload["candidate_selection"]
-    ):
+    if any("mlp_probe_status" not in row for row in payload["candidate_selection"]):
         raise ValueError(
             "Saved results predate the clean aligned-MLP head protocol; rerun the "
             "experiment before replotting."
@@ -1985,18 +1964,13 @@ def _plot_overlap_accuracy_scatter(
     """Plot the primary representation-screening result with one fixed head family."""
 
     representations = _ordered_representations(metric_rows)
-    model_by_representation = {
-        row["representation"]: row["model"] for row in candidate_rows
-    }
+    model_by_representation = {row["representation"]: row["model"] for row in candidate_rows}
     colors = _model_colors([model_by_representation[item] for item in representations], plt)
     metric_lookup = {
-        (row["representation"], row["condition"], row["target"]): row
-        for row in metric_rows
+        (row["representation"], row["condition"], row["target"]): row for row in metric_rows
     }
     all_accuracies = [
-        float(row["clean_test_accuracy"])
-        for row in head_rows
-        if row["head"] == "linear"
+        float(row["clean_test_accuracy"]) for row in head_rows if row["head"] == "linear"
     ]
     y_lower = max(0.0, min(all_accuracies) - 0.07)
     y_upper = min(1.0, max(all_accuracies) + 0.07)
@@ -2337,9 +2311,7 @@ def _plot_head_choice_audit(
             va="top",
         )
         axis.set_xlabel("Separatix aligned advantage: MLP − linear balanced accuracy")
-        axis.set_ylabel(
-            "Observed clean-validation advantage: MLP − linear balanced accuracy"
-        )
+        axis.set_ylabel("Observed clean-validation advantage: MLP − linear balanced accuracy")
         axis.grid(True, color="#E5E7EB", linewidth=0.8)
         figure.suptitle(
             "Does Separatix's aligned MLP evidence predict downstream head advantage?\n"
@@ -2447,9 +2419,7 @@ def _plot_relational_composition(
     from matplotlib.patches import Patch, Rectangle
 
     representations = _ordered_representations(rows)
-    lookup = {
-        (str(row["representation"]), str(row["composition"])): row for row in rows
-    }
+    lookup = {(str(row["representation"]), str(row["composition"])): row for row in rows}
     family_labels = {
         "linear": "Linear",
         "smooth_nonlinear": "Smooth\nnonlinear",
@@ -2461,11 +2431,7 @@ def _plot_relational_composition(
         matrices[composition] = np.asarray(
             [
                 [
-                    float(
-                        lookup[(representation, composition)][
-                            f"{family}_test_balanced_accuracy"
-                        ]
-                    )
+                    float(lookup[(representation, composition)][f"{family}_test_balanced_accuracy"])
                     for family in _RELATIONAL_FAMILIES
                 ]
                 for representation in representations
@@ -2665,10 +2631,7 @@ def _model_colors(models: Sequence[str], plt: Any) -> Dict[str, Any]:
     unique = list(dict.fromkeys(models))
     palette = plt.get_cmap("tab10")
     model_rank = {model: index for index, model in enumerate(_MODEL_ORDER)}
-    return {
-        model: palette(model_rank.get(model, len(model_rank)) % 10)
-        for model in unique
-    }
+    return {model: palette(model_rank.get(model, len(model_rank)) % 10) for model in unique}
 
 
 def _plot_style() -> Dict[str, Any]:
@@ -2737,9 +2700,7 @@ def _protocol_payload(
                 "simplest family within the configured head margin of the best "
                 "validation balanced accuracy"
             ),
-            "pair_counts": {
-                name: len(pairs) for name, pairs in relational_pairs.items()
-            },
+            "pair_counts": {name: len(pairs) for name, pairs in relational_pairs.items()},
         },
         "split_counts": {
             "head_train": len(head_train),

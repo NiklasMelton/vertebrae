@@ -312,9 +312,7 @@ def test_separatix_family_evidence_respects_primary_family_and_mlp_override():
                                 "raw_best_family": "local_kernel",
                                 "recommended_family": "smooth_nonlinear",
                                 "best_clearly_beats_dummy": True,
-                                "families": {
-                                    "smooth_nonlinear": {"best_probe": "smooth_poly"}
-                                },
+                                "families": {"smooth_nonlinear": {"best_probe": "smooth_poly"}},
                             },
                             "mlp_recommendation_evidence": {
                                 "status": "not_triggered",
@@ -492,12 +490,8 @@ def test_scatter_labels_are_compact_and_collision_spread_is_deterministic():
         upper=0.95,
         min_gap=0.04,
     )
-    assert module._compact_representation_label("DINOv2-Small · Final Cls") == (
-        "DINOv2-S · final"
-    )
-    assert module._compact_representation_label("DINOv2-Small · Early Cls") == (
-        "DINOv2-S · early"
-    )
+    assert module._compact_representation_label("DINOv2-Small · Final Cls") == ("DINOv2-S · final")
+    assert module._compact_representation_label("DINOv2-Small · Early Cls") == ("DINOv2-S · early")
     assert module._compact_representation_label("OpenCLIP ViT-B/32 · Final Image") == (
         "OpenCLIP-B/32 · final"
     )
@@ -603,9 +597,7 @@ def test_visuals_render_from_protocol_rows(tmp_path):
                         "head": head,
                         "repeat": repeat,
                         "validation_accuracy": base + 0.14 + lift + repeat * 0.005,
-                        "validation_balanced_accuracy": (
-                            base + 0.14 + lift + repeat * 0.005
-                        ),
+                        "validation_balanced_accuracy": (base + 0.14 + lift + repeat * 0.005),
                         "clean_test_accuracy": base + 0.18 + lift + repeat * 0.005,
                         "background_swapped_test_accuracy": base + 0.08 + lift + repeat * 0.005,
                     }
