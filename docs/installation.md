@@ -6,6 +6,16 @@ Install the core package from PyPI:
 pip install vertebrae
 ```
 
+The core distribution requires the supported Separatix diagnostic API at
+`separatix>=0.1.1`. That version is required for the canonical recommendation
+labels, paired family evidence, and versioned probe recipes described in the
+scoring and reports guides. If a local environment still resolves an older
+Separatix release, upgrade it before enabling complexity diagnostics:
+
+```bash
+pip install --upgrade "separatix>=0.1.1"
+```
+
 For local development, install the Poetry development group:
 
 ```bash

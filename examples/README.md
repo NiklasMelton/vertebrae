@@ -34,7 +34,6 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/caltech101_vision_foundation_models.py
-POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/oxford_pets_backbone_selection.py
 ```
 
 Each script writes reports to `examples/output/`.
@@ -157,19 +156,22 @@ Each script writes reports to `examples/output/`.
   transfer-quality range without additional image forward passes. A standardized
   linear-head scatter tests the representation-screening claim, and an OI-ranked
   budget curve shows how quickly that ranking finds useful candidates relative to
-  random search. Separatix runs on the same clean head-training rows used by the
-  downstream heads, uses its normal conditional MLP trigger, and selects an MLP only
-  through its actual aligned optional-MLP override. The head-choice audit compares
-  that paired MLP-minus-linear evidence with clean-validation advantage. A simplified
-  target-view heatmap and background shift-effect plot remain separate diagnostics.
-  A relational audit then reuses the cached embeddings for balanced same-breed
-  verification with same-species hard negatives. It compares raw endpoint
-  concatenation with explicit absolute-difference/product interactions, runs the full
-  Separatix family recommendation, and validates linear, smooth, local/kernel, and MLP
-  heads on source-disjoint pairs. The experiment writes protocol JSON/CSV data,
-  including both head-choice audits and validation-regret summaries, plus six plot
-  families. Install `poetry install -E backbone-selection`; the first run downloads
-  the dataset and requested checkpoints.
+  random search. The ordinary head-choice audit runs Separatix on clean head-training
+  rows and compares its paired MLP-minus-linear evidence with clean validation
+  advantage. A simplified target-view heatmap and background shift-effect plot remain
+  separate diagnostics. A relational audit then reuses the cached embeddings for
+  balanced same-breed verification with same-species hard negatives. It runs Separatix
+  on the combined non-test development pairs (head-train plus validation), reconstructs
+  every downstream estimator from the exact versioned probe recipe, and validates
+  linear, smooth, local/kernel, and MLP heads only on untouched source-disjoint test
+  pairs. The plot marks the selected deployment
+  family (including an active MLP override) with a thick border and the plausible core
+  alternatives with small orange markers; the serialized guidance also retains the
+  minimum recommended family when it differs. Its star is a retrospective
+  simplest-near-best test oracle, never a selection input. The experiment writes protocol JSON/CSV data, including
+  family guidance, recipe ids, paired evidence, effective train size, and held-out
+  test-regret summaries, plus six plot families. Install `poetry install -E
+  backbone-selection`; the first run downloads the dataset and requested checkpoints.
   Use `--replot-from examples/output/oxford_pets_backbone_selection.json` to regenerate
   the figures without rerunning feature extraction or head training.
 - `zero_shot_transfer_structure.py`: flagship CIFAR-10 OpenCLIP experiment that

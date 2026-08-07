@@ -15,9 +15,11 @@ aligned MLP-versus-linear evidence chooses the head family. Background sensitivi
 remains a separate diagnostic rather than changing the head-selection task.
 
 A relational audit reuses the frozen embeddings for same-breed verification with
-same-species hard negatives. It compares raw endpoint concatenation with explicit
-absolute-difference and product interactions, then checks Separatix's complete head-
-family recommendation against held-out linear, smooth, local/kernel, and MLP heads.
+same-species hard negatives. It diagnoses Separatix after combining the head-train
+and validation pairs, reconstructs its exact family recipes, and scores them once on
+held-out test pairs. It compares raw endpoint concatenation with explicit
+absolute-difference and product interactions; test-near-best stars are retrospective
+audit markers, never selection inputs.
 
 Install and run from the repository root:
 
@@ -286,7 +288,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 selection_swaps=selection_swaps,
                 overlap_k=args.overlap_k,
                 stability_repeats=args.stability_repeats,
-                head_margin=args.head_margin,
+                near_optimal_margin=args.near_optimal_margin,
+                mlp_min_improvement=args.mlp_min_improvement,
                 mlp_trigger_skill_threshold=args.mlp_trigger_skill_threshold,
                 seed=args.seed,
             )
@@ -296,7 +299,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             head_evidence = _separatix_mlp_evidence(serialized["head_selection"])
             selected_head, selection_reason = _select_head(
                 head_evidence,
-                min_improvement=args.head_margin,
+                min_improvement=args.mlp_min_improvement,
             )
             run_rows = _evaluate_head_families(
                 representation=representation,
@@ -310,6 +313,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 validation_labels=_breeds(validation),
                 test_labels=_breeds(test),
                 selected_head=selected_head,
+                head_result=serialized["head_selection"],
                 repeats=args.head_repeats,
                 seed=args.seed,
             )
@@ -324,7 +328,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     selected_head=selected_head,
                     selection_reason=selection_reason,
                     head_evidence=head_evidence,
-                    head_margin=args.head_margin,
+                    near_optimal_margin=args.near_optimal_margin,
+                    mlp_min_improvement=args.mlp_min_improvement,
                     mlp_trigger_skill_threshold=args.mlp_trigger_skill_threshold,
                 )
             )
@@ -341,8 +346,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     validation_pairs=relational_pairs["validation"],
                     test_pairs=relational_pairs["test"],
                     overlap_k=args.overlap_k,
-                    repeats=args.head_repeats,
-                    head_margin=args.head_margin,
+                    near_optimal_margin=args.near_optimal_margin,
+                    mlp_min_improvement=args.mlp_min_improvement,
                     mlp_trigger_skill_threshold=args.mlp_trigger_skill_threshold,
                     seed=args.seed,
                 )
@@ -364,6 +369,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     _write_json(
         output_dir / "oxford_pets_backbone_selection.json",
         {
+            "schema_version": 2,
             "protocol": _protocol_payload(
                 args,
                 requested_models,
@@ -403,14 +409,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "Head-choice audit: "
         f"material agreement={head_choice_audit['material_agreement_count']}/"
         f"{head_choice_audit['candidate_count']}, "
-        f"mean validation regret={head_choice_audit['mean_validation_regret']:.3f}."
+        "mean validation regret="
+        f"{_format_optional_metric(head_choice_audit['mean_validation_regret'])}."
     )
     print(
         "Relational composition audit: "
         f"near-optimal recommendations={relational_audit['near_optimal_count']}/"
         f"{relational_audit['recommendation_count']}, "
-        "mean validation regret="
-        f"{_format_optional_metric(relational_audit['mean_validation_regret'])}."
+        "mean held-out test regret="
+        f"{_format_optional_metric(relational_audit['mean_test_regret'])}."
     )
     print(f"\nReports written to {output_dir}")
     for path in figure_paths:
@@ -433,15 +440,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--stability-repeats", type=int, default=5)
     parser.add_argument("--head-repeats", type=int, default=3)
     parser.add_argument(
-        "--head-margin",
+        "--near-optimal-margin",
         type=float,
         default=0.02,
-        help="Minimum aligned Separatix MLP improvement required for an override.",
+        help=(
+            "Retrospective accuracy margin used to call a family near-best; it "
+            "does not affect Separatix selection."
+        ),
+    )
+    parser.add_argument(
+        "--mlp-min-improvement",
+        type=float,
+        default=0.02,
+        help="Minimum paired Separatix MLP improvement required for an override.",
     )
     parser.add_argument(
         "--mlp-trigger-skill-threshold",
         type=float,
-        default=0.75,
+        default=1.0,
         help="Run optional MLP probes when simpler normalized skill is below this value.",
     )
     parser.add_argument("--seed", type=int, default=42)
@@ -479,8 +495,10 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error("--selection-per-breed must be at least twice --overlap-k.")
     if args.selection_per_breed % 2 or args.test_per_breed % 2:
         parser.error("--selection-per-breed and --test-per-breed must be even.")
-    if not 0.0 <= args.head_margin <= 1.0:
-        parser.error("--head-margin must be between 0 and 1.")
+    if not 0.0 <= args.near_optimal_margin <= 1.0:
+        parser.error("--near-optimal-margin must be between 0 and 1.")
+    if not 0.0 <= args.mlp_min_improvement <= 1.0:
+        parser.error("--mlp-min-improvement must be between 0 and 1.")
     if not 0.0 <= args.mlp_trigger_skill_threshold <= 1.0:
         parser.error("--mlp-trigger-skill-threshold must be between 0 and 1.")
     _parse_model_names(args.models, parser=parser)
@@ -913,7 +931,8 @@ def _representation_measurements(
     selection_swaps: Sequence[BackgroundSwap],
     overlap_k: int,
     stability_repeats: int,
-    head_margin: float,
+    near_optimal_margin: float,
+    mlp_min_improvement: float,
     mlp_trigger_skill_threshold: float,
     seed: int,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -940,7 +959,7 @@ def _representation_measurements(
             stability_repeats=stability_repeats if stability else 0,
             run_separatix=False,
             groups=None,
-            head_margin=head_margin,
+            mlp_min_improvement=mlp_min_improvement,
             mlp_trigger_skill_threshold=mlp_trigger_skill_threshold,
             seed=seed,
         )
@@ -964,7 +983,7 @@ def _representation_measurements(
         stability_repeats=0,
         run_separatix=True,
         groups=None,
-        head_margin=head_margin,
+        mlp_min_improvement=mlp_min_improvement,
         mlp_trigger_skill_threshold=mlp_trigger_skill_threshold,
         seed=seed,
     )
@@ -991,7 +1010,7 @@ def _score_embeddings(
     stability_repeats: int,
     run_separatix: bool,
     groups: Optional[np.ndarray],
-    head_margin: float,
+    mlp_min_improvement: float,
     mlp_trigger_skill_threshold: float,
     seed: int,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -1030,7 +1049,7 @@ def _score_embeddings(
                 budget="standard",
                 mlp_probes=True,
                 mlp_trigger_skill_threshold=mlp_trigger_skill_threshold,
-                mlp_min_improvement=head_margin,
+                mlp_min_improvement=mlp_min_improvement,
             )
             if run_separatix
             else SeparatixConfig(enabled=False)
@@ -1068,6 +1087,35 @@ def _separatix_mlp_evidence(result: Mapping[str, Any]) -> Dict[str, Any]:
     aligned = mlp.get("aligned_comparators") or {}
     linear = aligned.get("linear") or {}
     best = mlp.get("best_architecture") or {}
+    architecture_payload = (metrics.get("mlp_probes") or {}).get("architectures", [])
+    if isinstance(architecture_payload, Mapping):
+        architecture_payload = list(architecture_payload.values())
+    architecture_results = {
+        str(item.get("probe_name")): item
+        for item in architecture_payload
+        if isinstance(item, Mapping) and item.get("probe_name")
+    }
+    best_result = architecture_results.get(str(best.get("probe_name")), {})
+    aligned_payload = (metrics.get("mlp_probes") or {}).get("aligned_comparators", {})
+    if isinstance(aligned_payload, Mapping):
+        linear_payload = aligned_payload.get("linear") or {}
+    elif isinstance(aligned_payload, Sequence) and not isinstance(aligned_payload, (str, bytes)):
+        linear_payload = next(
+            (
+                item
+                for item in aligned_payload
+                if isinstance(item, Mapping) and item.get("probe_name") == "linear"
+            ),
+            {},
+        )
+    else:
+        linear_payload = {}
+    linear_recipe = linear.get("probe_recipe") or linear_payload.get("probe_recipe")
+    mlp_recipe = (
+        best_result.get("probe_recipe")
+        or best.get("probe_recipe")
+        or _find_probe_recipe(metrics, best.get("probe_name"))
+    )
     return {
         "status": mlp.get("status"),
         "trigger_status": trigger.get("status"),
@@ -1086,6 +1134,11 @@ def _separatix_mlp_evidence(result: Mapping[str, Any]) -> Dict[str, Any]:
         "upper_95": _optional_float(comparison.get("upper_95")),
         "clear_advantage": comparison.get("clear_advantage"),
         "absolute_skill": _optional_float(mlp.get("absolute_skill")),
+        "linear_recipe": linear_recipe,
+        "linear_recipe_id": _recipe_id(linear_recipe),
+        "mlp_recipe": mlp_recipe,
+        "mlp_recipe_id": _recipe_id(mlp_recipe),
+        "mlp_recipe_status": (best_result.get("probe_recipe_status") or {}).get("status"),
     }
 
 
@@ -1178,25 +1231,130 @@ def _separatix_family_evidence(result: Mapping[str, Any]) -> Dict[str, Any]:
     recommendation = metrics.get("recommendation_evidence") or {}
     families = recommendation.get("families") or {}
     mlp = metrics.get("mlp_recommendation_evidence") or {}
-    mlp_override = bool(mlp.get("recommendation_override"))
-    selected_family = "mlp" if mlp_override else recommendation.get("recommended_family")
+    guidance = separatix.get("family_guidance") or {}
+    mlp_guidance = guidance.get("mlp_override")
+    if isinstance(mlp_guidance, Mapping):
+        mlp_override = bool(
+            mlp_guidance.get("active", mlp_guidance.get("recommendation_override", False))
+        )
+    elif mlp_guidance is not None:
+        mlp_override = bool(mlp_guidance)
+    else:
+        mlp_override = bool(mlp.get("recommendation_override"))
+    selected_family = guidance.get("selected_family")
+    if selected_family is None:
+        selected_family = "mlp" if mlp_override else recommendation.get("recommended_family")
+    minimum_family = guidance.get("minimum_recommended_family")
+    if minimum_family is None:
+        minimum_family = recommendation.get("recommended_family")
+    plausible_families = list(guidance.get("plausible_families") or [])
+    if not plausible_families:
+        plausible = (recommendation.get("plausible_family_set") or {}).get("plausible_families")
+        plausible_families = list(plausible or [])
+    mlp_best_name = (
+        mlp_guidance.get("probe_name") if isinstance(mlp_guidance, Mapping) else None
+    ) or (mlp.get("best_architecture") or {}).get("probe_name")
+    family_probes: Dict[str, Optional[str]] = {}
+    family_recipes: Dict[str, Any] = {}
+    for family in _RELATIONAL_FAMILIES:
+        if family == "mlp":
+            probe_name = mlp_best_name
+        else:
+            family_payload = families.get(family) or {}
+            probe_name = family_payload.get("best_probe")
+        family_probes[family] = str(probe_name) if probe_name else None
+        family_recipes[family] = _find_probe_recipe(metrics, probe_name)
     selected_payload = families.get(selected_family) or {}
     if selected_family == "mlp":
         selected_payload = mlp.get("best_architecture") or {}
+    selected_probe = guidance.get("selected_probe") or (
+        mlp_best_name if selected_family == "mlp" else selected_payload.get("best_probe")
+    )
+    selected_recipe = _find_probe_recipe(metrics, selected_probe)
+    probe_summary = result.get("probe_summary") or {}
+    evaluation = probe_summary.get("evaluation") or {}
+    paired = guidance.get("paired") or {}
+    if not paired:
+        paired = report.get("metrics", {}).get("paired_probe_comparisons") or {}
     return {
         "recommendation": report.get("recommendation"),
         "confidence": report.get("confidence"),
         "raw_best_family": recommendation.get("raw_best_family"),
         "recommended_family": selected_family,
-        "recommended_probe": (
-            selected_payload.get("probe_name")
-            if selected_family == "mlp"
-            else selected_payload.get("best_probe")
-        ),
+        "minimum_recommended_family": minimum_family,
+        "plausible_families": plausible_families,
+        "recommended_probe": selected_probe,
+        "recommended_recipe": selected_recipe,
+        "recommended_recipe_id": _recipe_id(selected_recipe),
+        "family_probes": family_probes,
+        "family_recipes": family_recipes,
         "best_clearly_beats_dummy": recommendation.get("best_clearly_beats_dummy"),
         "mlp_status": mlp.get("status"),
         "mlp_override": mlp_override,
+        "paired": {
+            "status": paired.get("status"),
+            "method": paired.get("method"),
+            "evaluation_plan_id": paired.get("evaluation_plan_id"),
+        },
+        "effective_train_size": evaluation.get("effective_train_size_summary"),
+        "decision_method": guidance.get("decision_method")
+        or (recommendation.get("plausible_family_set") or {}).get("decision_method"),
     }
+
+
+def _recipe_id(recipe: Any) -> Optional[str]:
+    if isinstance(recipe, Mapping) and recipe.get("recipe_id"):
+        return str(recipe["recipe_id"])
+    return None
+
+
+def _find_probe_recipe(metrics: Mapping[str, Any], probe_name: Any) -> Any:
+    """Find an emitted Separatix recipe by probe name or recipe id."""
+
+    if not probe_name:
+        return None
+    wanted = str(probe_name)
+    candidates: List[Mapping[str, Any]] = []
+    probes = metrics.get("probes") or {}
+    if isinstance(probes, Mapping):
+        candidates.extend(value for value in probes.values() if isinstance(value, Mapping))
+    elif isinstance(probes, Sequence) and not isinstance(probes, (str, bytes)):
+        candidates.extend(value for value in probes if isinstance(value, Mapping))
+    mlp_probes = metrics.get("mlp_probes") or {}
+    if isinstance(mlp_probes, Mapping):
+        for key in ("architectures", "aligned_comparators"):
+            values = mlp_probes.get(key) or {}
+            if isinstance(values, Mapping):
+                candidates.extend(value for value in values.values() if isinstance(value, Mapping))
+            elif isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+                candidates.extend(value for value in values if isinstance(value, Mapping))
+    for payload in candidates:
+        recipe = payload.get("probe_recipe")
+        if not isinstance(recipe, Mapping):
+            continue
+        probe = recipe.get("probe") or {}
+        if wanted in {str(payload.get("probe_name")), str(probe.get("name")), _recipe_id(recipe)}:
+            return recipe
+    return None
+
+
+class _RecipeUnavailable(RuntimeError):
+    """A Separatix recipe cannot be reconstructed in this runtime."""
+
+
+def _make_recipe_estimator(recipe: Any) -> Any:
+    if not isinstance(recipe, Mapping):
+        raise _RecipeUnavailable("Separatix did not emit a reconstructable probe recipe.")
+    try:
+        from separatix import make_probe_estimator
+    except (ImportError, AttributeError) as exc:
+        raise _RecipeUnavailable(
+            "Separatix 0.1.1 with make_probe_estimator is required for aligned heads."
+        ) from exc
+    try:
+        return make_probe_estimator(recipe, version_policy="error")
+    except Exception as exc:
+        raise _RecipeUnavailable(f"Could not reconstruct Separatix probe recipe: {exc}") from exc
 
 
 def _evaluate_relational_compositions(
@@ -1211,8 +1369,8 @@ def _evaluate_relational_compositions(
     validation_pairs: Sequence[VerificationPair],
     test_pairs: Sequence[VerificationPair],
     overlap_k: int,
-    repeats: int,
-    head_margin: float,
+    near_optimal_margin: float,
+    mlp_min_improvement: float,
     mlp_trigger_skill_threshold: float,
     seed: int,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
@@ -1236,15 +1394,17 @@ def _evaluate_relational_compositions(
             ),
             "test": _compose_pair_embeddings(test_embeddings, test_pairs, composition),
         }
+        development_embeddings = np.vstack([composed["train"], composed["validation"]])
+        development_targets = np.concatenate([targets["train"], targets["validation"]])
         _, serialized = _score_embeddings(
-            composed["train"],
-            targets["train"],
+            development_embeddings,
+            development_targets,
             name=f"{representation}:same-breed:{composition}",
             overlap_k=overlap_k,
             stability_repeats=0,
             run_separatix=True,
             groups=None,
-            head_margin=head_margin,
+            mlp_min_improvement=mlp_min_improvement,
             mlp_trigger_skill_threshold=mlp_trigger_skill_threshold,
             seed=seed,
         )
@@ -1254,14 +1414,11 @@ def _evaluate_relational_compositions(
             model_name=model_name,
             output_name=output_name,
             composition=composition,
-            train_embeddings=composed["train"],
-            validation_embeddings=composed["validation"],
+            development_embeddings=development_embeddings,
             test_embeddings=composed["test"],
-            train_labels=targets["train"],
-            validation_labels=targets["validation"],
+            development_labels=development_targets,
             test_labels=targets["test"],
-            selected_family=evidence.get("recommended_family"),
-            repeats=repeats,
+            family_evidence=evidence,
             seed=seed,
         )
         head_rows.extend(runs)
@@ -1273,7 +1430,7 @@ def _evaluate_relational_compositions(
                 composition=composition,
                 head_rows=runs,
                 head_evidence=evidence,
-                head_margin=head_margin,
+                near_optimal_margin=near_optimal_margin,
                 train_pairs=train_pairs,
                 validation_pairs=validation_pairs,
                 test_pairs=test_pairs,
@@ -1289,176 +1446,56 @@ def _evaluate_relational_heads(
     model_name: str,
     output_name: str,
     composition: str,
-    train_embeddings: np.ndarray,
-    validation_embeddings: np.ndarray,
+    development_embeddings: np.ndarray,
     test_embeddings: np.ndarray,
-    train_labels: np.ndarray,
-    validation_labels: np.ndarray,
+    development_labels: np.ndarray,
     test_labels: np.ndarray,
-    selected_family: Optional[str],
-    repeats: int,
+    family_evidence: Mapping[str, Any],
     seed: int,
 ) -> List[Dict[str, Any]]:
     from sklearn.metrics import balanced_accuracy_score
 
     rows: List[Dict[str, Any]] = []
-    combined_embeddings = np.vstack([train_embeddings, validation_embeddings])
-    combined_labels = np.concatenate([train_labels, validation_labels])
-    for repeat in range(repeats):
-        repeat_seed = seed + 101 * repeat
-        for head in _RELATIONAL_HEADS:
-            family = _RELATIONAL_HEAD_FAMILY[head]
-            validation_head = _make_relational_head(
-                head,
-                repeat_seed,
-                n_features=train_embeddings.shape[1],
-                n_train=len(train_embeddings),
-            )
-            validation_head.fit(train_embeddings, train_labels)
-            validation_score = balanced_accuracy_score(
-                validation_labels,
-                validation_head.predict(validation_embeddings),
-            )
-            final_head = _make_relational_head(
-                head,
-                repeat_seed,
-                n_features=train_embeddings.shape[1],
-                n_train=len(train_embeddings),
-            )
-            final_head.fit(combined_embeddings, combined_labels)
-            test_score = balanced_accuracy_score(
+    family_recipes = family_evidence.get("family_recipes") or {}
+    selected_family = family_evidence.get("recommended_family")
+    for family in _RELATIONAL_FAMILIES:
+        recipe = family_recipes.get(family)
+        probe_name = (family_evidence.get("family_probes") or {}).get(family)
+        base = {
+            "representation": representation,
+            "model": model_name,
+            "output": output_name,
+            "task": "same_breed_verification",
+            "composition": composition,
+            "head": family,
+            "family": family,
+            "probe": probe_name,
+            "recipe_id": _recipe_id(recipe),
+            "selected_by_separatix": family == selected_family,
+            "repeat": 0,
+            "seed": seed,
+            "development_pair_count": int(len(development_labels)),
+            "test_pair_count": int(len(test_labels)),
+            "validation_balanced_accuracy": None,
+            "test_balanced_accuracy": None,
+            "status": "unavailable",
+            "unavailable_reason": None,
+        }
+        try:
+            estimator = _make_recipe_estimator(recipe)
+            estimator.fit(development_embeddings, development_labels)
+            score = balanced_accuracy_score(
                 test_labels,
-                final_head.predict(test_embeddings),
+                estimator.predict(test_embeddings),
             )
-            rows.append(
-                {
-                    "representation": representation,
-                    "model": model_name,
-                    "output": output_name,
-                    "task": "same_breed_verification",
-                    "composition": composition,
-                    "head": head,
-                    "family": family,
-                    "selected_by_separatix": family == selected_family,
-                    "repeat": repeat,
-                    "seed": repeat_seed,
-                    "validation_balanced_accuracy": float(validation_score),
-                    "test_balanced_accuracy": float(test_score),
-                }
-            )
+            base["test_balanced_accuracy"] = float(score)
+            base["status"] = "completed"
+        except _RecipeUnavailable as exc:
+            base["unavailable_reason"] = str(exc)
+        except (ValueError, RuntimeError, TypeError) as exc:
+            base["unavailable_reason"] = f"Exact Separatix probe failed: {exc}"
+        rows.append(base)
     return rows
-
-
-def _make_relational_head(
-    head: str,
-    seed: int,
-    *,
-    n_features: int,
-    n_train: int,
-) -> Any:
-    """Return one downstream estimator aligned with a Separatix probe subtype."""
-
-    from sklearn.kernel_approximation import PolynomialCountSketch, RBFSampler
-    from sklearn.linear_model import LogisticRegression, SGDClassifier
-    from sklearn.neighbors import KNeighborsClassifier
-    from sklearn.neural_network import MLPClassifier
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import StandardScaler
-
-    if head == "linear":
-        return Pipeline(
-            [
-                ("scale", StandardScaler()),
-                (
-                    "clf",
-                    LogisticRegression(
-                        max_iter=3_000,
-                        class_weight="balanced",
-                        random_state=seed,
-                    ),
-                ),
-            ]
-        )
-    if head == "smooth_poly":
-        sketch_components = min(2_048, max(128, min(n_train * 2, n_features * 2)))
-        return Pipeline(
-            [
-                ("scale_in", StandardScaler()),
-                (
-                    "poly_sketch",
-                    PolynomialCountSketch(
-                        degree=2,
-                        coef0=1.0,
-                        n_components=sketch_components,
-                        random_state=seed,
-                    ),
-                ),
-                ("scale_out", StandardScaler()),
-                (
-                    "clf",
-                    LogisticRegression(
-                        max_iter=3_000,
-                        class_weight="balanced",
-                        random_state=seed,
-                    ),
-                ),
-            ]
-        )
-    if head == "knn":
-        neighbors = min(max(1, n_train - 1), min(15, max(3, int(np.sqrt(n_train)))))
-        return Pipeline(
-            [
-                ("scale", StandardScaler()),
-                ("knn", KNeighborsClassifier(n_neighbors=neighbors)),
-            ]
-        )
-    if head == "kernel_approx":
-        return Pipeline(
-            [
-                ("scale_in", StandardScaler()),
-                (
-                    "rff",
-                    RBFSampler(
-                        gamma=1.0 / max(1, n_features),
-                        n_components=min(256, max(32, n_features * 2)),
-                        random_state=seed,
-                    ),
-                ),
-                ("scale_out", StandardScaler()),
-                (
-                    "clf",
-                    SGDClassifier(
-                        loss="log_loss",
-                        class_weight="balanced",
-                        random_state=seed,
-                        max_iter=3_000,
-                        tol=1e-4,
-                    ),
-                ),
-            ]
-        )
-    if head == "mlp":
-        return Pipeline(
-            [
-                ("scale", StandardScaler()),
-                (
-                    "clf",
-                    MLPClassifier(
-                        hidden_layer_sizes=(128,),
-                        activation="relu",
-                        alpha=1e-4,
-                        batch_size=64,
-                        learning_rate_init=1e-3,
-                        max_iter=300,
-                        early_stopping=True,
-                        validation_fraction=0.15,
-                        n_iter_no_change=15,
-                        random_state=seed,
-                    ),
-                ),
-            ]
-        )
-    raise ValueError(f"Unknown relational head {head!r}.")
 
 
 def _relational_composition_summary(
@@ -1469,39 +1506,40 @@ def _relational_composition_summary(
     composition: str,
     head_rows: Sequence[Mapping[str, Any]],
     head_evidence: Mapping[str, Any],
-    head_margin: float,
+    near_optimal_margin: float,
     train_pairs: Sequence[VerificationPair],
     validation_pairs: Sequence[VerificationPair],
     test_pairs: Sequence[VerificationPair],
 ) -> Dict[str, Any]:
-    head_scores: Dict[str, Dict[str, float]] = {}
-    for head in _RELATIONAL_HEADS:
-        runs = [row for row in head_rows if row["head"] == head]
-        head_scores[head] = {
-            "validation": _mean(runs, "validation_balanced_accuracy"),
-            "test": _mean(runs, "test_balanced_accuracy"),
-        }
     family_scores: Dict[str, Dict[str, Any]] = {}
     for family in _RELATIONAL_FAMILIES:
-        candidates = [head for head in _RELATIONAL_HEADS if _RELATIONAL_HEAD_FAMILY[head] == family]
-        selected_head = max(
-            candidates,
-            key=lambda head: (head_scores[head]["validation"], -candidates.index(head)),
-        )
+        candidates = [row for row in head_rows if row.get("family") == family]
+        row = candidates[0] if candidates else {}
         family_scores[family] = {
-            "head": selected_head,
-            **head_scores[selected_head],
+            "head": family,
+            "probe": row.get("probe"),
+            "recipe_id": row.get("recipe_id"),
+            "test": _optional_float(row.get("test_balanced_accuracy")),
+            "status": row.get("status", "unavailable"),
         }
-    best_validation = max(item["validation"] for item in family_scores.values())
-    empirical_family = next(
-        family
-        for family in _RELATIONAL_FAMILIES
-        if family_scores[family]["validation"] >= best_validation - head_margin
-    )
+    available = {
+        family: scores["test"]
+        for family, scores in family_scores.items()
+        if scores["test"] is not None
+    }
+    best_test = max(available.values()) if available else None
+    empirical_family = None
+    if best_test is not None:
+        empirical_family = next(
+            family
+            for family in _RELATIONAL_FAMILIES
+            if family in available and available[family] >= best_test - near_optimal_margin
+        )
     recommended_family = head_evidence.get("recommended_family")
-    selected = family_scores.get(str(recommended_family))
-    empirical = family_scores[empirical_family]
-    best_test = max(item["test"] for item in family_scores.values())
+    selected = family_scores.get(str(recommended_family)) if recommended_family else None
+    selected_test = selected.get("test") if selected else None
+    plausible = [str(item) for item in head_evidence.get("plausible_families", [])]
+    plausible_coverage = empirical_family in plausible if empirical_family is not None else None
     return {
         "representation": representation,
         "model": model_name,
@@ -1509,40 +1547,59 @@ def _relational_composition_summary(
         "task": "same_breed_verification",
         "negative_pair_policy": "different breed, same species",
         "composition": composition,
-        "head_margin": float(head_margin),
+        "near_optimal_margin": float(near_optimal_margin),
         "separatix_recommendation": head_evidence.get("recommendation"),
         "separatix_confidence": head_evidence.get("confidence"),
         "separatix_raw_best_family": head_evidence.get("raw_best_family"),
+        "separatix_minimum_recommended_family": head_evidence.get("minimum_recommended_family"),
         "separatix_recommended_family": recommended_family,
+        "separatix_selected_family": recommended_family,
         "separatix_recommended_probe": head_evidence.get("recommended_probe"),
+        "separatix_recommended_recipe_id": head_evidence.get("recommended_recipe_id"),
+        "separatix_family_probes": head_evidence.get("family_probes", {}),
+        "separatix_family_recipe_ids": {
+            family: _recipe_id(recipe)
+            for family, recipe in (head_evidence.get("family_recipes") or {}).items()
+        },
+        "separatix_plausible_families": plausible,
+        "separatix_decision_method": head_evidence.get("decision_method"),
+        "separatix_paired_status": (head_evidence.get("paired") or {}).get("status"),
+        "separatix_paired_method": (head_evidence.get("paired") or {}).get("method"),
+        "separatix_evaluation_plan_id": (head_evidence.get("paired") or {}).get(
+            "evaluation_plan_id"
+        ),
+        "separatix_effective_train_size": head_evidence.get("effective_train_size"),
+        "separatix_effective_train_size_mean": _optional_float(
+            (head_evidence.get("effective_train_size") or {}).get("mean")
+            if isinstance(head_evidence.get("effective_train_size"), Mapping)
+            else None
+        ),
+        "separatix_development_cohort_size": len(train_pairs) + len(validation_pairs),
         "separatix_mlp_status": head_evidence.get("mlp_status"),
         "separatix_mlp_override": head_evidence.get("mlp_override"),
         "empirical_simplest_near_best_family": empirical_family,
-        "recommendation_near_optimal": (
-            selected is not None and selected["validation"] >= best_validation - head_margin
+        "test_near_optimal": (
+            selected_test is not None
+            and best_test is not None
+            and selected_test >= best_test - near_optimal_margin
         ),
-        "selected_validation_balanced_accuracy": (
-            selected["validation"] if selected is not None else None
-        ),
-        "selected_test_balanced_accuracy": selected["test"] if selected is not None else None,
-        "validation_choice_test_balanced_accuracy": empirical["test"],
+        "selected_test_balanced_accuracy": selected_test,
         "best_observed_test_balanced_accuracy": best_test,
-        "selected_validation_regret": (
-            best_validation - selected["validation"] if selected is not None else None
+        "selected_test_regret": (
+            best_test - selected_test
+            if best_test is not None and selected_test is not None
+            else None
         ),
-        "selected_test_gap_vs_validation_choice": (
-            empirical["test"] - selected["test"] if selected is not None else None
-        ),
-        "selected_test_regret": (best_test - selected["test"] if selected is not None else None),
+        "plausible_family_coverage": plausible_coverage,
         "train_pair_count": len(train_pairs),
         "validation_pair_count": len(validation_pairs),
         "test_pair_count": len(test_pairs),
         **{
-            f"{family}_{metric}_balanced_accuracy": scores[metric]
+            f"{family}_test_balanced_accuracy": scores["test"]
             for family, scores in family_scores.items()
-            for metric in ("validation", "test")
         },
-        "local_kernel_selected_head": family_scores["local_kernel"]["head"],
+        "family_scores": family_scores,
+        "local_kernel_selected_head": family_scores["local_kernel"].get("probe"),
     }
 
 
@@ -1550,33 +1607,53 @@ def _relational_audit_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, An
     if not rows:
         raise ValueError("Cannot summarize an empty relational audit.")
     recommended = [row for row in rows if row.get("separatix_recommended_family") is not None]
-    validation_regrets = [
-        float(row["selected_validation_regret"])
-        for row in recommended
-        if row.get("selected_validation_regret") is not None
-    ]
     test_regrets = [
         float(row["selected_test_regret"])
         for row in recommended
         if row.get("selected_test_regret") is not None
     ]
     family_counts = Counter(str(row["separatix_recommended_family"]) for row in recommended)
+    coverage = [
+        bool(row["plausible_family_coverage"])
+        for row in recommended
+        if row.get("plausible_family_coverage") is not None
+    ]
     return {
         "case_count": len(rows),
         "recommendation_count": len(recommended),
-        "near_optimal_count": sum(bool(row["recommendation_near_optimal"]) for row in recommended),
+        "near_optimal_count": sum(
+            bool(row.get("test_near_optimal", row.get("recommendation_near_optimal")))
+            for row in recommended
+        ),
         "near_optimal_rate": (
             float(
-                sum(bool(row["recommendation_near_optimal"]) for row in recommended)
+                sum(
+                    bool(row.get("test_near_optimal", row.get("recommendation_near_optimal")))
+                    for row in recommended
+                )
                 / len(recommended)
             )
             if recommended
             else None
         ),
-        "mean_validation_regret": (
-            float(np.mean(validation_regrets)) if validation_regrets else None
-        ),
         "mean_test_regret": (float(np.mean(test_regrets)) if test_regrets else None),
+        "plausible_family_coverage_count": sum(coverage),
+        "plausible_family_coverage_rate": (float(np.mean(coverage)) if coverage else None),
+        "test_near_optimal_count": sum(
+            bool(row.get("test_near_optimal", row.get("recommendation_near_optimal")))
+            for row in recommended
+        ),
+        "test_near_optimal_rate": (
+            float(
+                sum(
+                    bool(row.get("test_near_optimal", row.get("recommendation_near_optimal")))
+                    for row in recommended
+                )
+                / len(recommended)
+            )
+            if recommended
+            else None
+        ),
         "recommendation_family_counts": dict(sorted(family_counts.items())),
     }
 
@@ -1594,6 +1671,7 @@ def _evaluate_head_families(
     validation_labels: np.ndarray,
     test_labels: np.ndarray,
     selected_head: str,
+    head_result: Mapping[str, Any],
     repeats: int,
     seed: int,
 ) -> List[Dict[str, Any]]:
@@ -1607,45 +1685,58 @@ def _evaluate_head_families(
     rows = []
     combined_embeddings = np.vstack([train_embeddings, validation_embeddings])
     combined_targets = np.concatenate([train_targets, validation_targets])
+    evidence = _separatix_mlp_evidence(head_result)
+    recipes = {
+        "linear": evidence.get("linear_recipe"),
+        "mlp": evidence.get("mlp_recipe"),
+    }
+    # Recipes encode Separatix's resolved training policy.  Replaying the exact recipe
+    # keeps estimator alignment intact; repeated rows are deterministic reproductions,
+    # not independent seed-based uncertainty estimates.
     for repeat in range(repeats):
         repeat_seed = seed + 101 * repeat
         for family in _HEAD_FAMILIES:
-            validation_head = _make_head(family, repeat_seed)
-            validation_head.fit(train_embeddings, train_targets)
-            validation_predictions = validation_head.predict(validation_embeddings)
-            validation_accuracy = accuracy_score(
-                validation_targets,
-                validation_predictions,
-            )
-            validation_balanced_accuracy = balanced_accuracy_score(
-                validation_targets,
-                validation_predictions,
-            )
-            final_head = _make_head(family, repeat_seed)
-            final_head.fit(combined_embeddings, combined_targets)
-            clean_accuracy = accuracy_score(
-                test_targets,
-                final_head.predict(clean_test_embeddings),
-            )
-            swapped_accuracy = accuracy_score(
-                test_targets,
-                final_head.predict(swapped_test_embeddings),
-            )
-            rows.append(
-                {
-                    "representation": representation,
-                    "model": model_name,
-                    "output": output_name,
-                    "head": family,
-                    "selected_by_separatix": family == selected_head,
-                    "repeat": repeat,
-                    "seed": repeat_seed,
-                    "validation_accuracy": float(validation_accuracy),
-                    "validation_balanced_accuracy": float(validation_balanced_accuracy),
-                    "clean_test_accuracy": float(clean_accuracy),
-                    "background_swapped_test_accuracy": float(swapped_accuracy),
-                }
-            )
+            row = {
+                "representation": representation,
+                "model": model_name,
+                "output": output_name,
+                "head": family,
+                "selected_by_separatix": family == selected_head,
+                "repeat": repeat,
+                "seed": repeat_seed,
+                "repeat_policy": "emitted_recipe_replay",
+                "recipe_id": _recipe_id(recipes[family]),
+                "recipe_alignment_status": "unavailable",
+                "recipe_unavailable_reason": None,
+                "validation_accuracy": None,
+                "validation_balanced_accuracy": None,
+                "clean_test_accuracy": None,
+                "background_swapped_test_accuracy": None,
+            }
+            try:
+                validation_head = _make_recipe_estimator(recipes[family])
+                validation_head.fit(train_embeddings, train_targets)
+                validation_predictions = validation_head.predict(validation_embeddings)
+                row["validation_accuracy"] = float(
+                    accuracy_score(validation_targets, validation_predictions)
+                )
+                row["validation_balanced_accuracy"] = float(
+                    balanced_accuracy_score(validation_targets, validation_predictions)
+                )
+                final_head = _make_recipe_estimator(recipes[family])
+                final_head.fit(combined_embeddings, combined_targets)
+                row["clean_test_accuracy"] = float(
+                    accuracy_score(test_targets, final_head.predict(clean_test_embeddings))
+                )
+                row["background_swapped_test_accuracy"] = float(
+                    accuracy_score(test_targets, final_head.predict(swapped_test_embeddings))
+                )
+                row["recipe_alignment_status"] = "aligned"
+            except _RecipeUnavailable as exc:
+                row["recipe_unavailable_reason"] = str(exc)
+            except (ValueError, RuntimeError, TypeError) as exc:
+                row["recipe_unavailable_reason"] = f"Exact Separatix probe failed: {exc}"
+            rows.append(row)
     return rows
 
 
@@ -1677,6 +1768,13 @@ def _encode_head_labels(
 
 
 def _make_head(family: str, seed: int) -> Any:
+    """Build the legacy reference head used only by the encoding unit test.
+
+    Experiment audits must use emitted Separatix recipes through
+    :func:`_make_recipe_estimator`; this helper is intentionally not used by
+    the production experiment and is retained only for a small local smoke test.
+    """
+
     from sklearn.linear_model import LogisticRegression
     from sklearn.neural_network import MLPClassifier
     from sklearn.pipeline import make_pipeline
@@ -1716,7 +1814,7 @@ def _candidate_summary(
     selected_head: str,
     selection_reason: str,
     head_evidence: Mapping[str, Any],
-    head_margin: float,
+    mlp_min_improvement: float,
     mlp_trigger_skill_threshold: float,
 ) -> Dict[str, Any]:
     clean_overlap = _measurement_value(measurements, "clean", "breed")
@@ -1727,17 +1825,26 @@ def _candidate_summary(
     mlp_runs = [row for row in head_rows if row["head"] == "mlp"]
     repeat_rows: Dict[int, Dict[str, float]] = defaultdict(dict)
     for row in head_rows:
-        repeat_rows[int(row["repeat"])][str(row["head"])] = float(
-            row["validation_balanced_accuracy"]
-        )
+        value = _optional_float(row.get("validation_balanced_accuracy"))
+        if value is not None:
+            repeat_rows[int(row["repeat"])][str(row["head"])] = value
     observed_deltas = np.asarray(
-        [values["mlp"] - values["linear"] for values in repeat_rows.values()],
+        [
+            values["mlp"] - values["linear"]
+            for values in repeat_rows.values()
+            if "mlp" in values and "linear" in values
+        ],
         dtype=float,
     )
-    selected_validation = _mean(selected_runs, "validation_balanced_accuracy")
-    best_validation = max(
-        _mean(linear_runs, "validation_balanced_accuracy"),
-        _mean(mlp_runs, "validation_balanced_accuracy"),
+    selected_validation = _mean_optional(selected_runs, "validation_balanced_accuracy")
+    best_validation_values = [
+        _mean_optional(linear_runs, "validation_balanced_accuracy"),
+        _mean_optional(mlp_runs, "validation_balanced_accuracy"),
+    ]
+    best_validation = (
+        max(value for value in best_validation_values if value is not None)
+        if any(value is not None for value in best_validation_values)
+        else None
     )
     return {
         "representation": representation,
@@ -1749,28 +1856,53 @@ def _candidate_summary(
         "background_swapped_breed_overlap": swapped_overlap,
         "selected_head": selected_head,
         "selection_reason": selection_reason,
-        "head_margin": float(head_margin),
+        "mlp_min_improvement": float(mlp_min_improvement),
         "mlp_trigger_skill_threshold": float(mlp_trigger_skill_threshold),
         "mlp_probe_status": head_evidence.get("status"),
         "mlp_trigger_status": head_evidence.get("trigger_status"),
         "mlp_trigger_good_enough": head_evidence.get("trigger_good_enough"),
         "mlp_recommendation_override": head_evidence.get("recommendation_override"),
         "mlp_probe_architecture": head_evidence.get("best_architecture"),
+        "aligned_linear_recipe_id": head_evidence.get("linear_recipe_id"),
+        "aligned_mlp_recipe_id": head_evidence.get("mlp_recipe_id"),
+        "aligned_mlp_recipe_status": head_evidence.get("mlp_recipe_status"),
+        "head_recipe_alignment_status": {
+            str(head): sorted(
+                {
+                    str(row.get("recipe_alignment_status"))
+                    for row in head_rows
+                    if row.get("head") == head
+                }
+            )
+            for head in _HEAD_FAMILIES
+        },
         "mlp_probe_balanced_accuracy": head_evidence.get("mlp_score"),
         "aligned_linear_balanced_accuracy": head_evidence.get("linear_score"),
         "mlp_vs_linear_delta": head_evidence.get("mean_delta"),
         "mlp_vs_linear_lower_95": head_evidence.get("lower_95"),
         "mlp_vs_linear_upper_95": head_evidence.get("upper_95"),
         "mlp_probe_evaluation_mode": head_evidence.get("evaluation_mode"),
-        "validation_linear_balanced_accuracy": _mean(linear_runs, "validation_balanced_accuracy"),
-        "validation_mlp_balanced_accuracy": _mean(mlp_runs, "validation_balanced_accuracy"),
-        "validation_mlp_advantage": float(observed_deltas.mean()),
-        "validation_mlp_advantage_std": float(observed_deltas.std(ddof=0)),
-        "selected_head_validation_regret": float(best_validation - selected_validation),
-        "selected_head_validation_accuracy": _mean(selected_runs, "validation_accuracy"),
+        "validation_linear_balanced_accuracy": _mean_optional(
+            linear_runs, "validation_balanced_accuracy"
+        ),
+        "validation_mlp_balanced_accuracy": _mean_optional(
+            mlp_runs, "validation_balanced_accuracy"
+        ),
+        "validation_mlp_advantage": (
+            float(observed_deltas.mean()) if observed_deltas.size else None
+        ),
+        "validation_mlp_advantage_std": (
+            float(observed_deltas.std(ddof=0)) if observed_deltas.size else None
+        ),
+        "selected_head_validation_regret": (
+            float(best_validation - selected_validation)
+            if best_validation is not None and selected_validation is not None
+            else None
+        ),
+        "selected_head_validation_accuracy": _mean_optional(selected_runs, "validation_accuracy"),
         "selected_head_validation_balanced_accuracy": selected_validation,
-        "selected_head_clean_test_accuracy": _mean(selected_runs, "clean_test_accuracy"),
-        "selected_head_swapped_test_accuracy": _mean(
+        "selected_head_clean_test_accuracy": _mean_optional(selected_runs, "clean_test_accuracy"),
+        "selected_head_swapped_test_accuracy": _mean_optional(
             selected_runs,
             "background_swapped_test_accuracy",
         ),
@@ -1797,17 +1929,21 @@ def _head_choice_audit_summary(
 ) -> Dict[str, Any]:
     if not rows:
         raise ValueError("Cannot summarize an empty head-choice audit.")
-    margin = float(rows[0].get("head_margin", 0.02))
+    margin = float(rows[0].get("mlp_min_improvement", 0.02))
     material_agreement = 0
     sign_agreement = 0
     aligned_rows = []
     regrets = []
     for row in rows:
-        observed_delta = float(row["validation_mlp_advantage"])
+        observed_delta = _optional_float(row.get("validation_mlp_advantage"))
+        regret = _optional_float(row.get("selected_head_validation_regret"))
+        if observed_delta is None:
+            continue
         selected_mlp = row["selected_head"] == "mlp"
         materially_mlp = observed_delta >= margin
         material_agreement += int(selected_mlp == materially_mlp)
-        regrets.append(float(row["selected_head_validation_regret"]))
+        if regret is not None:
+            regrets.append(regret)
         aligned_delta = _optional_float(row.get("mlp_vs_linear_delta"))
         if aligned_delta is not None:
             aligned_rows.append((aligned_delta, observed_delta))
@@ -1822,7 +1958,7 @@ def _head_choice_audit_summary(
     )
     return {
         "candidate_count": len(rows),
-        "head_margin": margin,
+        "mlp_min_improvement": margin,
         "mlp_probe_completed_count": sum(
             row.get("mlp_probe_status") == "completed" for row in rows
         ),
@@ -1838,8 +1974,8 @@ def _head_choice_audit_summary(
             float(sign_agreement / len(aligned_rows)) if aligned_rows else None
         ),
         "aligned_delta_spearman": correlation if np.isfinite(correlation) else None,
-        "mean_validation_regret": float(np.mean(regrets)),
-        "max_validation_regret": float(np.max(regrets)),
+        "mean_validation_regret": float(np.mean(regrets)) if regrets else None,
+        "max_validation_regret": float(np.max(regrets)) if regrets else None,
     }
 
 
@@ -1861,13 +1997,25 @@ def _plot_overlap_heatmap(
 ) -> Tuple[Path, Path]:
     representations = _ordered_representations(metric_rows)
     lookup = {
-        (row["representation"], row["condition"], row["target"]): row["overlap_macro"]
+        (row["representation"], row["condition"], row["target"]): _optional_float(
+            row.get("overlap_macro")
+        )
         for row in metric_rows
     }
+    if not representations or not any(value is not None for value in lookup.values()):
+        return _plot_empty_state(
+            figure_dir,
+            plt,
+            "oxford-pets-backbone-overlap-heatmap",
+            "Target-specific structure in each frozen representation",
+            "No finite OverlapIndex measurements are available for this plot.",
+        )
     matrix = np.asarray(
         [
             [
-                lookup[(representation, condition, target)]
+                value
+                if (value := lookup.get((representation, condition, target))) is not None
+                else np.nan
                 for condition, target, _ in _HEATMAP_TARGET_LABELS
             ]
             for representation in representations
@@ -1887,11 +2035,13 @@ def _plot_overlap_heatmap(
         for row_index in range(matrix.shape[0]):
             for column_index in range(matrix.shape[1]):
                 value = matrix[row_index, column_index]
-                color = "white" if value < 0.38 or value > 0.76 else "black"
+                color = (
+                    "white" if not np.isfinite(value) or value < 0.38 or value > 0.76 else "black"
+                )
                 axis.text(
                     column_index,
                     row_index,
-                    f"{value:.3f}",
+                    "—" if not np.isfinite(value) else f"{value:.3f}",
                     ha="center",
                     va="center",
                     color=color,
@@ -1916,6 +2066,14 @@ def _replot_saved_results(path: Path, figure_dir: Path, plt: Any) -> Tuple[Path,
     missing = [name for name in required if name not in payload]
     if missing:
         raise ValueError(f"Saved experiment JSON is missing fields: {missing}.")
+    protocol = payload.get("protocol") or {}
+    if payload.get("schema_version") != 2 or protocol.get("relational_evidence_schema") != (
+        "deployment_family_composition_v2"
+    ):
+        raise ValueError(
+            "Saved results use an older relational deployment schema; rerun the "
+            "experiment before replotting."
+        )
     if any("mlp_probe_status" not in row for row in payload["candidate_selection"]):
         raise ValueError(
             "Saved results predate the clean aligned-MLP head protocol; rerun the "
@@ -1963,14 +2121,45 @@ def _plot_overlap_accuracy_scatter(
 ) -> Tuple[Path, Path]:
     """Plot the primary representation-screening result with one fixed head family."""
 
-    representations = _ordered_representations(metric_rows)
-    model_by_representation = {row["representation"]: row["model"] for row in candidate_rows}
-    colors = _model_colors([model_by_representation[item] for item in representations], plt)
+    linear_rows = [
+        row
+        for row in head_rows
+        if row.get("head") == "linear"
+        and _optional_float(row.get("clean_test_accuracy")) is not None
+        and row.get("status", "completed") != "unavailable"
+    ]
+    linear_representations = {str(row["representation"]) for row in linear_rows}
     metric_lookup = {
         (row["representation"], row["condition"], row["target"]): row for row in metric_rows
     }
+    representations = [
+        representation
+        for representation in _ordered_representations(metric_rows)
+        if representation in linear_representations
+        and _optional_float(
+            (metric_lookup.get((representation, "clean", "breed")) or {}).get("overlap_macro")
+        )
+        is not None
+    ]
+    if not representations:
+        return _plot_empty_state(
+            figure_dir,
+            plt,
+            "oxford-pets-overlap-vs-head-accuracy",
+            "Frozen breed geometry predicts downstream transfer",
+            "No aligned linear-head test scores are available for this plot.",
+        )
+    model_by_representation = {
+        str(row["representation"]): row["model"]
+        for row in [*candidate_rows, *metric_rows, *linear_rows]
+        if row.get("representation") in representations and row.get("model") is not None
+    }
+    colors = _model_colors([model_by_representation[item] for item in representations], plt)
     all_accuracies = [
-        float(row["clean_test_accuracy"]) for row in head_rows if row["head"] == "linear"
+        float(value)
+        for row in linear_rows
+        if row["representation"] in representations
+        and (value := _optional_float(row.get("clean_test_accuracy"))) is not None
     ]
     y_lower = max(0.0, min(all_accuracies) - 0.07)
     y_upper = min(1.0, max(all_accuracies) + 0.07)
@@ -1987,12 +2176,8 @@ def _plot_overlap_accuracy_scatter(
         label_entries = []
         plotted_y = []
         for representation, x_value in zip(representations, x_values):
-            runs = [
-                row
-                for row in head_rows
-                if row["representation"] == representation and row["head"] == "linear"
-            ]
-            y_values = np.asarray([row["clean_test_accuracy"] for row in runs], dtype=float)
+            runs = [row for row in linear_rows if row["representation"] == representation]
+            y_values = np.asarray([float(row["clean_test_accuracy"]) for row in runs], dtype=float)
             y_value = float(y_values.mean())
             plotted_y.append(y_value)
             axis.scatter(
@@ -2085,6 +2270,14 @@ def _plot_selection_budget(
     plt: Any,
 ) -> Tuple[Path, Path]:
     statistics = _selection_budget_statistics(candidate_rows, head_rows)
+    if not statistics["budget"]:
+        return _plot_empty_state(
+            figure_dir,
+            plt,
+            "oxford-pets-oi-selection-budget",
+            "OverlapIndex concentrates head-training budget",
+            "No completed linear-head test scores are available for this plot.",
+        )
     budgets = np.asarray(statistics["budget"], dtype=int)
     oi_best = np.asarray(statistics["oi_ranked_best"], dtype=float)
     random_mean = np.asarray(statistics["random_mean_best"], dtype=float)
@@ -2147,24 +2340,28 @@ def _selection_budget_statistics(
 
     from itertools import combinations
 
-    linear_accuracy = {
-        representation: _mean(
-            [
-                row
-                for row in head_rows
-                if row["representation"] == representation and row["head"] == "linear"
-            ],
-            "clean_test_accuracy",
-        )
-        for representation in {row["representation"] for row in candidate_rows}
-    }
+    linear_accuracy: Dict[str, float] = {}
+    for representation in {str(row["representation"]) for row in candidate_rows}:
+        values = [
+            value
+            for row in head_rows
+            if row.get("representation") == representation
+            and row.get("head") == "linear"
+            and row.get("status", "completed") != "unavailable"
+            if (value := _optional_float(row.get("clean_test_accuracy"))) is not None
+        ]
+        if values:
+            linear_accuracy[representation] = float(np.mean(values))
     ordered = sorted(
-        candidate_rows,
+        [
+            row
+            for row in candidate_rows
+            if str(row["representation"]) in linear_accuracy
+            and _optional_float(row.get("clean_breed_overlap")) is not None
+        ],
         key=lambda row: (float(row["clean_breed_overlap"]), row["representation"]),
         reverse=True,
     )
-    ordered_accuracy = [linear_accuracy[row["representation"]] for row in ordered]
-    all_accuracy = list(linear_accuracy.values())
     result: Dict[str, List[float]] = {
         "budget": [],
         "oi_ranked_best": [],
@@ -2172,6 +2369,10 @@ def _selection_budget_statistics(
         "random_lower_best": [],
         "random_upper_best": [],
     }
+    if not ordered:
+        return result
+    ordered_accuracy = [linear_accuracy[row["representation"]] for row in ordered]
+    all_accuracy = [linear_accuracy[row["representation"]] for row in ordered]
     for budget in range(1, len(ordered) + 1):
         random_best = np.asarray(
             [max(values) for values in combinations(all_accuracy, budget)],
@@ -2195,6 +2396,10 @@ def _plot_head_choice_audit(
         probe_delta = _optional_float(candidate.get("mlp_vs_linear_delta"))
         if probe_delta is None:
             continue
+        observed_delta = _optional_float(candidate.get("validation_mlp_advantage"))
+        observed_std = _optional_float(candidate.get("validation_mlp_advantage_std"))
+        if observed_delta is None or observed_std is None:
+            continue
         rows.append(
             {
                 "representation": str(candidate["representation"]),
@@ -2202,8 +2407,8 @@ def _plot_head_choice_audit(
                 "probe_delta": probe_delta,
                 "probe_lower": _optional_float(candidate.get("mlp_vs_linear_lower_95")),
                 "probe_upper": _optional_float(candidate.get("mlp_vs_linear_upper_95")),
-                "observed_delta": float(candidate["validation_mlp_advantage"]),
-                "observed_std": float(candidate["validation_mlp_advantage_std"]),
+                "observed_delta": observed_delta,
+                "observed_std": observed_std,
                 "override": bool(candidate.get("mlp_recommendation_override")),
             }
         )
@@ -2212,17 +2417,43 @@ def _plot_head_choice_audit(
         for candidate in candidate_rows
         if candidate.get("mlp_probe_status") == "not_triggered"
     ]
-    head_margin = float(candidate_rows[0].get("head_margin", 0.02))
+    mlp_override_threshold = next(
+        (
+            value
+            for candidate in candidate_rows
+            if (value := _optional_float(candidate.get("mlp_min_improvement"))) is not None
+        ),
+        0.02,
+    )
+    if not candidate_rows:
+        return _plot_empty_state(
+            figure_dir,
+            plt,
+            "oxford-pets-separatix-head-choice-audit",
+            "Separatix head-choice audit",
+            "No candidate rows are available for this audit.",
+        )
     audit_summary = _head_choice_audit_summary(candidate_rows)
     if not rows:
         with plt.rc_context(_plot_style()):
             figure, axis = plt.subplots(figsize=(10.8, 4.8), constrained_layout=True)
             axis.axis("off")
+            if any(
+                candidate.get("mlp_probe_status") == "completed" for candidate in candidate_rows
+            ):
+                message = (
+                    "No aligned MLP/linear validation rows are available.\n"
+                    "The exact emitted probe recipes were unavailable for this audit."
+                )
+            else:
+                message = (
+                    "No optional MLP probes were triggered.\n"
+                    "Simpler probes cleared the configured normalized-skill threshold."
+                )
             axis.text(
                 0.5,
                 0.55,
-                "No optional MLP probes were triggered.\n"
-                "Simpler probes cleared the configured normalized-skill threshold.",
+                message,
                 transform=axis.transAxes,
                 ha="center",
                 va="center",
@@ -2242,7 +2473,12 @@ def _plot_head_choice_audit(
     with plt.rc_context(_plot_style()):
         figure, axis = plt.subplots(figsize=(10.8, 6.8), constrained_layout=True)
         axis.axhline(0.0, color="#6B7280", linewidth=1.0)
-        axis.axvline(head_margin, color="#6B7280", linewidth=1.0, linestyle="--")
+        axis.axvline(
+            mlp_override_threshold,
+            color="#6B7280",
+            linewidth=1.0,
+            linestyle="--",
+        )
         label_positions = _spread_label_positions(
             y_values,
             lower=min(y_values) - 0.14 * y_span,
@@ -2292,9 +2528,9 @@ def _plot_head_choice_audit(
                 },
             )
         axis.text(
-            head_margin,
+            mlp_override_threshold,
             axis.get_ylim()[1],
-            f"  MLP threshold = {head_margin:.2f}",
+            f"  MLP override threshold = {mlp_override_threshold:.2f}",
             ha="left",
             va="top",
             color="#4B5563",
@@ -2305,7 +2541,8 @@ def _plot_head_choice_audit(
             "Material head-choice agreement: "
             f"{audit_summary['material_agreement_count']}/"
             f"{audit_summary['candidate_count']}\n"
-            f"Mean validation regret: {audit_summary['mean_validation_regret']:.3f}",
+            "Mean validation regret: "
+            f"{_format_optional_metric(audit_summary['mean_validation_regret'])}",
             transform=axis.transAxes,
             ha="left",
             va="top",
@@ -2315,7 +2552,7 @@ def _plot_head_choice_audit(
         axis.grid(True, color="#E5E7EB", linewidth=0.8)
         figure.suptitle(
             "Does Separatix's aligned MLP evidence predict downstream head advantage?\n"
-            "Horizontal bars show its paired 95% interval; vertical bars show head-seed variation",
+            "Horizontal bars show paired 95% intervals; vertical bars show deterministic replay",
         )
         if untriggered:
             figure.text(
@@ -2337,15 +2574,32 @@ def _plot_background_shift_effect(
 ) -> Tuple[Path, Path]:
     rows = []
     for candidate in candidate_rows:
+        clean_overlap = _optional_float(candidate.get("clean_breed_overlap"))
+        swapped_overlap = _optional_float(candidate.get("background_swapped_breed_overlap"))
+        clean_accuracy = _optional_float(candidate.get("selected_head_clean_test_accuracy"))
+        swapped_accuracy = _optional_float(candidate.get("selected_head_swapped_test_accuracy"))
+        if (
+            clean_overlap is None
+            or swapped_overlap is None
+            or clean_accuracy is None
+            or swapped_accuracy is None
+        ):
+            continue
         rows.append(
             {
                 "representation": str(candidate["representation"]),
                 "model": str(candidate["model"]),
-                "overlap_delta": float(candidate["background_swapped_breed_overlap"])
-                - float(candidate["clean_breed_overlap"]),
-                "accuracy_delta": float(candidate["selected_head_swapped_test_accuracy"])
-                - float(candidate["selected_head_clean_test_accuracy"]),
+                "overlap_delta": swapped_overlap - clean_overlap,
+                "accuracy_delta": swapped_accuracy - clean_accuracy,
             }
+        )
+    if not rows:
+        return _plot_empty_state(
+            figure_dir,
+            plt,
+            "oxford-pets-background-shift-effect",
+            "Background intervention effect",
+            "No completed selected-head test scores are available for this plot.",
         )
     colors = _model_colors([row["model"] for row in rows], plt)
     x_values = [row["overlap_delta"] for row in rows]
@@ -2431,12 +2685,31 @@ def _plot_relational_composition(
         matrices[composition] = np.asarray(
             [
                 [
-                    float(lookup[(representation, composition)][f"{family}_test_balanced_accuracy"])
+                    (
+                        value
+                        if (
+                            value := _optional_float(
+                                lookup.get((representation, composition), {}).get(
+                                    f"{family}_test_balanced_accuracy"
+                                )
+                            )
+                        )
+                        is not None
+                        else np.nan
+                    )
                     for family in _RELATIONAL_FAMILIES
                 ]
                 for representation in representations
             ],
             dtype=float,
+        )
+    if not representations or not any(np.isfinite(value).any() for value in matrices.values()):
+        return _plot_empty_state(
+            figure_dir,
+            plt,
+            "oxford-pets-relational-composition-heads",
+            "Relational composition and head complexity",
+            "No completed held-out test family scores are available for this plot.",
         )
     with plt.rc_context(_plot_style()):
         figure, axes = plt.subplots(
@@ -2468,20 +2741,28 @@ def _plot_relational_composition(
             axis.set_yticks(np.arange(len(representations)), labels=representations)
             axis.set_title(titles[composition])
             for row_index, representation in enumerate(representations):
-                item = lookup[(representation, composition)]
+                item = lookup.get((representation, composition), {})
                 for column_index, family in enumerate(_RELATIONAL_FAMILIES):
                     value = matrix[row_index, column_index]
-                    text_color = "white" if value < 0.67 or value > 0.91 else "black"
+                    text_color = (
+                        "white"
+                        if not np.isfinite(value) or value < 0.67 or value > 0.91
+                        else "black"
+                    )
                     axis.text(
                         column_index,
                         row_index,
-                        f"{value:.3f}",
+                        "—" if not np.isfinite(value) else f"{value:.3f}",
                         ha="center",
                         va="center",
                         color=text_color,
                         fontsize=8,
                     )
-                    if item.get("separatix_recommended_family") == family:
+                    selected_family = item.get(
+                        "separatix_selected_family",
+                        item.get("separatix_recommended_family"),
+                    )
+                    if selected_family == family:
                         axis.add_patch(
                             Rectangle(
                                 (column_index - 0.48, row_index - 0.48),
@@ -2491,6 +2772,17 @@ def _plot_relational_composition(
                                 edgecolor="#F97316",
                                 linewidth=2.4,
                             )
+                        )
+                    if family in (item.get("separatix_plausible_families") or []):
+                        axis.scatter(
+                            column_index - 0.34,
+                            row_index + 0.33,
+                            marker="o",
+                            s=24,
+                            facecolor="#F97316",
+                            edgecolor="white",
+                            linewidth=0.5,
+                            zorder=4,
                         )
                     if item.get("empirical_simplest_near_best_family") == family:
                         axis.scatter(
@@ -2511,7 +2803,17 @@ def _plot_relational_composition(
                     facecolor="none",
                     edgecolor="#F97316",
                     linewidth=2.4,
-                    label="Separatix recommendation",
+                    label="Selected Separatix deployment family",
+                ),
+                Line2D(
+                    [],
+                    [],
+                    marker="o",
+                    linestyle="None",
+                    markerfacecolor="#F97316",
+                    markeredgecolor="white",
+                    markersize=6,
+                    label="Separatix plausible core family",
                 ),
                 Line2D(
                     [],
@@ -2521,7 +2823,7 @@ def _plot_relational_composition(
                     markerfacecolor="#111827",
                     markeredgecolor="white",
                     markersize=9,
-                    label="Simplest family within validation margin",
+                    label="Simplest family within test near-best margin",
                 ),
             ],
             loc="outside lower center",
@@ -2530,7 +2832,9 @@ def _plot_relational_composition(
         )
         figure.suptitle(
             "Does pair composition change the head complexity Oxford Pets needs?\n"
-            "Same-breed verification uses same-species hard negatives and disjoint source images",
+            "Border = selected train+validation deployment family; "
+            "orange dots = plausible core families; "
+            "stars = retrospective test near-best",
         )
         return _save_figure(
             figure,
@@ -2634,6 +2938,30 @@ def _model_colors(models: Sequence[str], plt: Any) -> Dict[str, Any]:
     return {model: palette(model_rank.get(model, len(model_rank)) % 10) for model in unique}
 
 
+def _plot_empty_state(
+    figure_dir: Path,
+    plt: Any,
+    stem: str,
+    title: str,
+    message: str,
+) -> Tuple[Path, Path]:
+    """Persist an explicit empty-state figure when a diagnostic has no usable rows."""
+
+    with plt.rc_context(_plot_style()):
+        figure, axis = plt.subplots(figsize=(10.8, 4.8), constrained_layout=True)
+        axis.axis("off")
+        axis.text(
+            0.5,
+            0.52,
+            message,
+            transform=axis.transAxes,
+            ha="center",
+            va="center",
+        )
+        figure.suptitle(title)
+        return _save_figure(figure, figure_dir, stem, plt)
+
+
 def _plot_style() -> Dict[str, Any]:
     return {
         "figure.facecolor": "white",
@@ -2673,14 +3001,14 @@ def _protocol_payload(
         "selection_rule": "rank backbone/layer candidates by clean breed OverlapIndex",
         "head_rule": (
             "run Separatix on clean head-training rows and choose MLP only when its "
-            f"aligned optional-MLP override clears the {args.head_margin:.3f} margin; "
+            f"paired override clears the {args.mlp_min_improvement:.3f} improvement; "
             "otherwise choose linear"
         ),
         "head_diagnostic": (
             "clean head-training embeddings only; background interventions are excluded"
         ),
-        "head_evidence_schema": "aligned_optional_mlp_v1",
-        "relational_evidence_schema": "full_family_composition_v1",
+        "head_evidence_schema": "aligned_optional_mlp_v2_recipe_aligned",
+        "relational_evidence_schema": "deployment_family_composition_v2",
         "head_training": (
             "clean head-training images with L2 normalization and fold-local standardization; "
             "refit on head-train plus validation"
@@ -2696,9 +3024,14 @@ def _protocol_payload(
                 "interaction": "[abs(left-right), left*right] after endpoint normalization",
             },
             "head_families": list(_RELATIONAL_FAMILIES),
-            "empirical_rule": (
-                "simplest family within the configured head margin of the best "
-                "validation balanced accuracy"
+            "deployment_rule": (
+                "diagnose Separatix on combined head-train plus validation pairs, "
+                "fit each emitted family recipe once on that development cohort, "
+                "and report held-out test balanced accuracy"
+            ),
+            "retrospective_rule": (
+                "star the simplest family within the configured near-optimal margin "
+                "of the best observed held-out test score"
             ),
             "pair_counts": {name: len(pairs) for name, pairs in relational_pairs.items()},
         },
@@ -2712,7 +3045,8 @@ def _protocol_payload(
             "overlap_k": args.overlap_k,
             "stability_repeats": args.stability_repeats,
             "head_repeats": args.head_repeats,
-            "head_margin": args.head_margin,
+            "near_optimal_margin": args.near_optimal_margin,
+            "mlp_min_improvement": args.mlp_min_improvement,
             "mlp_trigger_skill_threshold": args.mlp_trigger_skill_threshold,
             "seed": args.seed,
         },
@@ -2775,6 +3109,11 @@ def _mean(rows: Sequence[Mapping[str, Any]], field: str) -> float:
     if not rows:
         raise ValueError(f"Cannot aggregate empty head rows for {field!r}.")
     return float(np.mean([float(row[field]) for row in rows]))
+
+
+def _mean_optional(rows: Sequence[Mapping[str, Any]], field: str) -> Optional[float]:
+    values = [rendered for row in rows if (rendered := _optional_float(row.get(field))) is not None]
+    return float(np.mean(values)) if values else None
 
 
 def _breeds(samples: Sequence[PetSample]) -> np.ndarray:

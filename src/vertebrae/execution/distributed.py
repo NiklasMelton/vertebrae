@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, replace
 from functools import partial
+from importlib import metadata as importlib_metadata
 from itertools import chain
 from typing import Any, Dict, Iterable, Iterator, Optional, Tuple
 from uuid import uuid4
@@ -347,14 +348,31 @@ def separatix_artifact_key(
     if separatix_config is None:
         raise ValueError("separatix_config is required for a Separatix artifact identity.")
     identity = {
-        "identity_schema": 2,
+        # Bump this whenever the serialized Separatix diagnostic contract
+        # changes.  The 0.1.0 report shape is intentionally not reusable after
+        # the 0.1.1 family-guidance/recipe release.
+        "identity_schema": 3,
+        "separatix_contract": _separatix_contract_identity(),
         "embedding_key": embedding_key,
         "labels_key": labels_key,
         "groups_key": groups_key,
         "score_key": score_key,
         "separatix_config": make_json_safe(separatix_config),
     }
-    return f"{embedding_key}/diagnostics/separatix-v2-{hash_json_exact(identity)}"
+    return f"{embedding_key}/diagnostics/separatix-v3-{hash_json_exact(identity)}"
+
+
+def _separatix_contract_identity() -> dict[str, Any]:
+    """Return installed Separatix provenance used in diagnostic cache keys."""
+
+    try:
+        version = importlib_metadata.version("separatix")
+    except importlib_metadata.PackageNotFoundError:
+        version = None
+    return {
+        "distribution_version": version,
+        "diagnostic_schema": "family_guidance_v1_probe_recipe_v1",
+    }
 
 
 def _require_artifact_identity(value: Any, name: str) -> None:

@@ -9,6 +9,7 @@ from vertebrae.config import CacheConfig, OverlapScoringConfig, StabilityConfig
 from vertebrae.extractors import PrecomputedExtractor
 from vertebrae.scoring.separatix import (
     SeparatixScorer,
+    normalize_family_guidance,
     probe_summary_for_result,
     summarize_probe_diagnostics,
 )
@@ -26,6 +27,8 @@ def test_separatix_config_validates_threshold_and_limits():
         SeparatixConfig(max_samples=0)
     with pytest.raises(ValueError, match="max_dense_bytes"):
         SeparatixConfig(max_dense_bytes=0)
+    with pytest.raises(ValueError, match="mlp_min_improvement"):
+        SeparatixConfig(mlp_min_improvement=1.1)
     with pytest.raises(ValueError, match="n_jobs"):
         SeparatixConfig(n_jobs=0)
     with pytest.raises(ValueError, match="densify_policy"):
@@ -55,6 +58,102 @@ def test_separatix_scorer_preserves_sparse_input_and_records_normalization(fake_
     assert fake_separatix.ComplexityProfiler.calls[0]["kind"] == "diagnose"
     assert fake_separatix.ComplexityProfiler.calls[0]["is_sparse"] is True
     assert fake_separatix.ComplexityProfiler.calls[0]["densify_policy"] == "skip"
+
+
+def test_separatix_normalizes_family_guidance_and_resolves_core_recipe(fake_separatix):
+    embeddings = np.arange(24, dtype=float).reshape(8, 3)
+    labels = np.array(["a"] * 4 + ["b"] * 4)
+
+    result = SeparatixScorer().score(embeddings, labels)
+
+    assert result.family_guidance["minimum_recommended_family"] == "smooth_nonlinear"
+    assert result.family_guidance["plausible_families"] == ["smooth_nonlinear"]
+    assert result.family_guidance["selected_family"] == "smooth_nonlinear"
+    assert result.family_guidance["selected_probe"] == "smooth_poly"
+    assert result.family_guidance["selected_recipe_id"] == "fake-smooth_poly"
+    assert result.family_guidance["paired_status"] == "available"
+    assert result.family_guidance["paired_method"] == "paired_oof_bootstrap"
+    assert result.probe_recipe("smooth_poly")["recipe_id"] == "fake-smooth_poly"
+    assert result.probe_recipe("fake-smooth_poly")["probe"]["name"] == "smooth_poly"
+    assert result.selected_probe_recipe()["recipe_id"] == "fake-smooth_poly"
+    assert result.probe_summary["evaluation"]["alignment_status"] == "aligned"
+    assert result.probe_summary["evaluation"]["cv_method"] == "stratified_kfold"
+    assert result.probe_summary["evaluation"]["cohort_size"] == 8
+    assert result.probe_summary["evaluation"]["effective_train_size_summary"]["mean"] == 6.0
+
+
+def test_family_guidance_is_uniform_for_multilabel_and_regression(fake_separatix):
+    embeddings = np.arange(24, dtype=float).reshape(8, 3)
+    multilabel = [("red",), ("round",), ("red", "round"), ("red",)] * 2
+    regression = np.linspace(0.0, 1.0, 8)
+
+    multilabel_result = SeparatixScorer().score(embeddings, multilabel)
+    regression_result = SeparatixScorer().score(
+        embeddings,
+        regression,
+        target_type="regression",
+        target_names=["score"],
+    )
+
+    for result, target_type in (
+        (multilabel_result, "multi_label"),
+        (regression_result, "regression"),
+    ):
+        guidance = result.family_guidance
+        assert guidance["target_type"] == target_type
+        assert set(
+            (
+                "minimum_recommended_family",
+                "plausible_families",
+                "selected_family",
+                "selected_probe",
+                "selected_recipe_id",
+                "mlp_override",
+                "paired_status",
+                "paired_method",
+            )
+        ).issubset(guidance)
+        assert result.selected_probe_recipe()["recipe_id"] == "fake-smooth_poly"
+
+
+def test_family_guidance_reports_mlp_selected_recipe(fake_separatix):
+    embeddings = np.arange(24, dtype=float).reshape(8, 3)
+    labels = np.array(["a"] * 4 + ["b"] * 4)
+
+    result = SeparatixScorer(
+        config=SeparatixConfig(mlp_probes=True),
+    ).score(embeddings, labels)
+
+    guidance = result.family_guidance
+    assert guidance["mlp_override"] is True
+    assert guidance["selected_family"] == "mlp"
+    assert guidance["selected_probe"] == "mlp_two_layer_compact"
+    assert guidance["selected_recipe_id"] == "fake-mlp_two_layer_compact"
+    assert result.selected_probe_recipe()["probe"]["name"] == "mlp_two_layer_compact"
+
+
+def test_family_guidance_does_not_promote_raw_best_without_selected_family():
+    guidance = normalize_family_guidance(
+        {
+            "metrics": {
+                "recommendation_evidence": {
+                    "raw_best_family": "local_kernel",
+                    "raw_best_probe": "knn",
+                    "recommended_family": None,
+                    "plausible_family_set": {
+                        "status": "not_applicable",
+                        "minimum_recommended_family": None,
+                        "plausible_families": [],
+                    },
+                }
+            }
+        },
+        target_type="single_label",
+    )
+
+    assert guidance["selected_family"] is None
+    assert guidance["selected_probe"] is None
+    assert guidance["selected_recipe_id"] is None
 
 
 def test_separatix_scorer_passes_multilabel_target_mode(fake_separatix):
@@ -231,8 +330,15 @@ def test_separatix_scorer_passes_regression_target_mode_and_mlp_settings(fake_se
     assert call["mlp_probes"] is True
     assert call["mlp_max_parameters"] == 1000
     assert result.report["metrics"]["mlp_probes"]["status"] == "executed"
-    assert result.probe_summary["primary_metric"] == {"name": "r2", "value": 0.84}
-    assert result.probe_summary["metrics"] == {"r2": 0.84, "mae": 0.11, "rmse": 0.15}
+    assert result.probe_summary["primary_metric"] == {
+        "name": "r2_variance_weighted",
+        "value": 0.84,
+    }
+    assert result.probe_summary["metrics"] == {
+        "r2_variance_weighted": 0.84,
+        "r2_uniform_average": 0.82,
+        "normalized_rmse_mean": 0.41,
+    }
 
 
 def test_benchmark_runs_and_skips_separatix_by_threshold(tmp_path, fake_overlapindex):
@@ -435,6 +541,51 @@ def test_regression_benchmark_uses_regression_threshold(
     assert item.separatix is not None
     assert item.separatix.ran is False
     assert "below the configured threshold" in (item.separatix.skipped_reason or "")
+
+
+def test_regression_separatix_serialization_and_markdown_use_canonical_guidance(
+    tmp_path,
+    fake_overlapindex,
+):
+    embeddings = np.arange(18, dtype=float).reshape(6, 3)
+    targets = np.array([0.0, 0.1, 0.2, 0.8, 0.9, 1.0])
+    dataset = BenchmarkDataset.from_embeddings(
+        embeddings,
+        targets,
+        target_type="regression",
+        target_names=["score"],
+        identity=DatasetIdentity.ephemeral(),
+    )
+
+    result = Evaluator(
+        dataset=dataset,
+        extractor=PrecomputedExtractor(name="regression_dense"),
+        separatix_config=SeparatixConfig(regression_overlap_threshold=0.60),
+        stability_config=StabilityConfig(enabled=False),
+        cache_config=CacheConfig(enabled=False),
+    ).run()
+
+    item = result.extractor_results[0]
+    assert item.separatix is not None and item.separatix.ran
+    assert item.separatix.metadata["target_type"] == "regression"
+    assert item.separatix.probe_summary["primary_metric"] == {
+        "name": "r2_variance_weighted",
+        "value": 0.84,
+    }
+    assert item.separatix.family_guidance["selected_probe"] == "smooth_poly"
+    payload = json.loads(json.dumps(result.to_dict()))
+    serialized = json.dumps(payload)
+    assert "smooth_nonlinear_recommended" in serialized
+    assert "linear_response_likely_sufficient" not in serialized
+    assert "smooth_nonlinear_response_recommended" not in serialized
+
+    markdown_path = tmp_path / "regression_report.md"
+    result.save_markdown(str(markdown_path))
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "Target type: regression" in markdown
+    assert "r2_variance_weighted" in markdown
+    assert "Minimum recommended family: smooth_nonlinear" in markdown
+    assert "smooth_nonlinear_response_recommended" not in markdown
 
 
 def test_reports_include_separatix_mlp_status(tmp_path, fake_overlapindex):

@@ -60,6 +60,14 @@ about whether a linear model is likely sufficient or whether nonlinear approache
 worth testing. Together, they help distinguish a poor representation from a promising
 representation whose geometry is simply non-trivial.
 
+Vertebrae integrates Separatix `0.1.1` or newer. Its machine-readable guidance uses
+one canonical vocabulary across classification, multi-label, and regression targets:
+`linear_likely_sufficient`, `smooth_nonlinear_recommended`,
+`kernel_or_local_recommended`, `high_capacity_or_partitioning_recommended`,
+`feedforward_mlp_recommended`, `feature_or_target_bottleneck_likely`,
+`insufficient_data_or_unreliable_geometry`, and `inconclusive`. The label is
+shared, while the rendered headline and suggested models remain target-specific.
+
 Separatix remains a diagnostic. Its probe evidence does not change the OverlapIndex
 score or the default ranking, and neither diagnostic guarantees downstream performance.
 
@@ -652,18 +660,30 @@ and a better task-specific representation composition.
 The backbone/layer ranking uses clean breed OverlapIndex; final test accuracy is not
 consulted. A standardized linear-head scatter isolates representation quality, while an
 OI-ranked selection-budget curve compares the number of trained heads needed to find a
-strong candidate with random candidate search. The experiment also trains a shallow MLP
-and runs Separatix on the same clean head-training rows used by both downstream head
-families. The normal conditional MLP trigger is retained, and head selection consumes
-Separatix's actual aligned optional-MLP override rather than a generic nonlinear probe.
-The head-choice audit compares its paired MLP-minus-linear evidence with clean-validation
-advantage. A simplified target-view heatmap and a clean-to-swapped effect plot keep
+strong candidate with random candidate search. For relational verification, Separatix
+is run only on the combined non-test development cohort (head-train plus validation
+pairs), then the selected family is refit on all of those rows. The final test pairs are
+used only for the held-out score. Every downstream family is reconstructed from the
+exact versioned Separatix probe recipe, including preprocessing and MLP architecture;
+the experiment never substitutes a hand-written approximation.
+
+The relational plot uses a thick border for Separatix's selected deployment family
+(including an active MLP override), while small orange markers show the plausible core
+family set. The selected family is chosen from the non-test development cohort; the
+minimum recommended family remains available in the serialized guidance when it differs
+from that selection. A star marks the simplest family that is within the configured
+margin of the best *observed test* score; that star is a retrospective audit oracle and
+is never used for selection. This makes estimator alignment, uncertainty, and the
+train-size difference visible without leaking test information into the recommendation.
+The standalone head-choice audit likewise uses Separatix's paired MLP-minus-linear
+evidence. A simplified target-view heatmap and a clean-to-swapped effect plot keep
 target specificity and background sensitivity visible as supporting diagnostics.
+
 The same cached embeddings also support a relational composition audit: balanced
 same-breed verification pairs use different-breed, same-species hard negatives with no
 source-image reuse inside a split. Raw endpoint concatenation is compared with explicit
-absolute-difference and product interactions. Separatix's complete family recommendation
-is then checked against held-out linear, smooth-nonlinear, local/kernel, and MLP heads,
+absolute-difference and product interactions. Separatix's complete family guidance is
+then checked against held-out linear, smooth-nonlinear, local/kernel, and MLP heads,
 showing whether a representation-level interaction can simplify the downstream head.
 
 ```bash
@@ -1012,6 +1032,19 @@ output preserves the full Separatix report. Markdown and DataFrame views
 surface the main recommendation, confidence, and compact explanation fields
 that are usually the most actionable.
 
+Separatix `0.1.1` adds an uncertainty-aware family frontier to those summaries.
+`SeparatixResult.family_guidance` reports the minimum recommended family,
+plausible alternatives, the decision method, selected family/probe and recipe id,
+MLP-override status, and paired-comparison status/method. The normalized probe
+evaluation context records estimator alignment, the CV/cohort plan, and effective
+train size. Use `SeparatixResult.probe_recipe(...)` or
+`selected_probe_recipe()` with Separatix's `make_probe_estimator(...)` factory to
+reproduce the exact diagnostic estimator. A missing recipe is reported as
+unavailable rather than replaced with a hand-built approximation.
+When MLP probes are enabled, their compute trigger is separate from the paired
+improvement required to override a simpler family; an untriggered MLP is therefore
+not evidence that linear guidance won an exhaustive comparison.
+
 Separatix is also the source of probe-style summary fields, so vertebrae does not
 fit a second probe system alongside the complexity diagnostic.
 
@@ -1029,7 +1062,9 @@ following is the current output generated by
 The full generated table also includes `target_view`, `label_view`,
 `overlap_score`, `overlap_weighted`, compression fields, and Separatix fields.
 The compact table above keeps the README readable while preserving the values used
-for the ranking.
+for the ranking. Its `recommendation` column is Vertebrae's representation-quality
+summary; the separate `separatix_recommendation` column uses the eight canonical
+Separatix labels described below.
 
 By default, extractors are ranked by overlap. When a custom `primary_metric` is
 configured, they are ranked by that metric instead; the overlap columns remain
@@ -1048,7 +1083,7 @@ The easiest way to interpret the report is:
 - Inspect `overlap_macro` and per-class overlap scores as the standard vertebrae
   representation diagnostic, even when another metric ranks the candidates.
 - Use the vertebrae `recommendation` field as a quick summary of representation quality under the benchmark protocol.
-- Use `separatix_recommendation` and `separatix_confidence` to understand what kind of downstream classifier complexity the labeled embedding seems to imply once the representation is already reasonably separated.
+- Use `separatix_recommendation` and `separatix_confidence` to understand what kind of downstream classifier complexity the labeled embedding seems to imply once the representation is already reasonably separated. The recommendation uses exactly eight canonical labels shared across target modes: `linear_likely_sufficient`, `smooth_nonlinear_recommended`, `kernel_or_local_recommended`, `high_capacity_or_partitioning_recommended`, `feedforward_mlp_recommended`, `feature_or_target_bottleneck_likely`, `insufficient_data_or_unreliable_geometry`, and `inconclusive`.
 - When Separatix columns are blank, the diagnostic was disabled, did not clear the
   overlap gate, or did not return that field. Check the per-extractor skip reason
   before interpreting the blank.
@@ -1056,6 +1091,11 @@ The easiest way to interpret the report is:
   quick-check columns. They are blank when Separatix is disabled, skipped, or does
   not report a baseline probe score. The metric is target-aware rather than always
   being accuracy.
+- Use the family frontier to plan downstream experiments: start with
+  `minimum_recommended_family`, retain `plausible_families` as unresolved
+  alternatives, and inspect paired evidence and effective train size before
+  calling a recommendation a mismatch. The shared machine-readable label does
+  not remove target-specific regression prose or confidence handling.
 
 Problem classes change the interpretation and detail columns, not the overall report
 workflow:
@@ -1077,6 +1117,9 @@ In the per-extractor Markdown section, Separatix also adds:
 - a plain-language recommendation text,
 - a decision path showing the main diagnostic branches,
 - normalized summary scores such as signal, overlap, linearity, nonlinearity, and reliability,
+- family guidance (minimum family, plausible alternatives, selected probe/recipe,
+  and paired-comparison status),
+- evaluation alignment, CV/cohort size, and effective train-size context,
 - warnings and skipped diagnostics when part of the complexity audit did not run.
 
 As a rule of thumb, a strong overlap score plus `linear_likely_sufficient`

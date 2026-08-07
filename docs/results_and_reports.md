@@ -29,6 +29,13 @@ Each extractor contributes an `ExtractorResult` with:
 - weakest-class diagnostics when available.
 - an optional measured `resource_profile` when local resource profiling is enabled.
 
+When the complexity diagnostic runs, `ExtractorResult.separatix` is a
+`SeparatixResult`. In addition to its canonical recommendation and target-aware
+text, it preserves the uncertainty-aware family guidance and versioned probe
+recipes emitted by Separatix 0.1.1. The raw report remains available for audit;
+consumers should use the normalized fields and recipe helpers rather than
+reimplementing Separatix's selection logic.
+
 ## Resource profiles and quality cohorts
 
 `ResourceProfilingConfig(enabled=True)` adds a serialized profile containing observed
@@ -182,6 +189,23 @@ Jaccard, and a regression diagnostic may select R². Consumers should inspect
 `probe_metric` before interpreting `probe_score`; there is no universal
 `probe_accuracy` field.
 
+The compact Separatix columns also expose the family frontier: the minimum
+recommended family, the plausible family set, the selected family/probe, the
+decision method, paired-comparison status, and effective train-size summary.
+These are summaries for the ranked table; complete paired deltas, CV folds,
+cohort metadata, and recipes remain nested in the serialized result. A missing
+family or recipe is an explicit unavailable state, not permission for a consumer
+to substitute a different estimator. The stable column names are
+`separatix_guidance_status`, `separatix_minimum_family`,
+`separatix_plausible_families`, `separatix_guidance_decision_method`,
+`separatix_selected_family`, `separatix_selected_probe`,
+`separatix_selected_recipe_id`, `separatix_mlp_override`,
+`separatix_paired_status`, and `separatix_paired_method`.
+Probe evaluation columns include `probe_alignment_status`,
+`probe_evaluation_plan_id`, `probe_cv_method`, `probe_cohort_size`,
+`probe_n_splits`, `probe_effective_train_size_summary`, and
+`probe_effective_train_size_mean`.
+
 ## JSON and Markdown output
 
 Reports can be written directly from the result object:
@@ -294,6 +318,37 @@ per-extractor details show the full descriptive context. When Separatix MLP prob
 are enabled, their trigger, status, reason, and comparison payload remain separate
 from the ordinary baseline probe summary.
 
+For Separatix 0.1.1, the normalized diagnostic also includes
+`family_guidance`. Its fields are `status`, `target_type`, `reason`,
+`minimum_recommended_family`, `plausible_families`, `decision_method`,
+`selected_family`, `selected_probe`, `selected_recipe_id`, `mlp_override`, and
+paired-comparison status/method. `probe_summary.evaluation` records alignment,
+the CV plan, cohort size, and effective train-size information. A retained
+recipe can be recovered with `SeparatixResult.probe_recipe(name_or_id)` or
+`selected_probe_recipe()` and reconstructed through Separatix's
+`make_probe_estimator(...)`; this is the supported way to reproduce a probe.
+When MLP probes are enabled, the compute trigger and the override threshold are
+reported separately. An MLP can therefore be available and selected because its
+paired improvement is clear even when the simpler family is not near-perfect;
+absence of an MLP recipe means that the probe was unavailable or not triggered,
+not that a linear result was proven optimal.
+
+The machine-readable `separatix_recommendation` uses exactly eight shared labels
+across classification, multi-label, and regression reports:
+
+- `linear_likely_sufficient`
+- `smooth_nonlinear_recommended`
+- `kernel_or_local_recommended`
+- `high_capacity_or_partitioning_recommended`
+- `feedforward_mlp_recommended`
+- `feature_or_target_bottleneck_likely`
+- `insufficient_data_or_unreliable_geometry`
+- `inconclusive`
+
+The label is intentionally shared; Markdown prose selects target-specific
+headlines and suggested models from the diagnostic's `target_type`. In particular,
+regression reliability and confidence rules are not inferred from the label text.
+
 Sparse diagnostic runs also expose preprocessing metadata, the effective
 densification policy, structured densification events, skipped diagnostics, and
 warnings. Markdown details render these fields compactly; JSON retains their complete
@@ -318,6 +373,11 @@ Use them as a triage aid:
 Separatix recommendations are complementary. They describe the apparent classifier
 complexity of the labeled embedding space and do not replace vertebrae's overlap-based
 ranking or existing benchmark recommendation label.
+The eight canonical Separatix labels are shared across target modes; use
+`target_type`, confidence, and the family frontier before turning one into an
+engineering action. `minimum_recommended_family` is the least complex family
+supported by the evidence, while `plausible_families` communicates unresolved
+alternatives rather than a second ranking.
 
 ## Reproducibility mindset
 

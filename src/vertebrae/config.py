@@ -366,6 +366,8 @@ class SeparatixConfig:
             raise ValueError("SeparatixConfig.mlp_trigger_skill_threshold must be between 0 and 1.")
         if self.mlp_min_improvement < 0.0:
             raise ValueError("SeparatixConfig.mlp_min_improvement must be >= 0.")
+        if self.mlp_min_improvement > 1.0:
+            raise ValueError("SeparatixConfig.mlp_min_improvement must be <= 1.")
         if self.mlp_max_parameters is not None and self.mlp_max_parameters < 1:
             raise ValueError("SeparatixConfig.mlp_max_parameters must be >= 1 when provided.")
 

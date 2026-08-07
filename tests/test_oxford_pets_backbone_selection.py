@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import subprocess
 import sys
 from collections import Counter
@@ -62,7 +63,8 @@ def test_help_does_not_require_model_extras():
 
     assert completed.returncode == 0, completed.stderr
     assert "--models" in completed.stdout
-    assert "--head-margin" in completed.stdout
+    assert "--near-optimal-margin" in completed.stdout
+    assert "--mlp-min-improvement" in completed.stdout
     assert "--mlp-trigger-skill-threshold" in completed.stdout
     assert "--replot-from" in completed.stdout
     assert "--no-download" in completed.stdout
@@ -379,8 +381,9 @@ def test_head_diagnostic_uses_clean_head_training_rows_only(tmp_path, monkeypatc
         selection_swaps=swaps,
         overlap_k=2,
         stability_repeats=2,
-        head_margin=0.02,
-        mlp_trigger_skill_threshold=0.75,
+        near_optimal_margin=0.02,
+        mlp_min_improvement=0.02,
+        mlp_trigger_skill_threshold=1.0,
         seed=42,
     )
 
@@ -389,7 +392,7 @@ def test_head_diagnostic_uses_clean_head_training_rows_only(tmp_path, monkeypatc
     assert np.array_equal(diagnostic_labels, module._breeds(head_train))
     assert diagnostic_kwargs["run_separatix"] is True
     assert diagnostic_kwargs["groups"] is None
-    assert diagnostic_kwargs["mlp_trigger_skill_threshold"] == 0.75
+    assert diagnostic_kwargs["mlp_trigger_skill_threshold"] == 1.0
     assert rows[-1]["condition"] == "clean_head_train"
 
 
@@ -528,20 +531,20 @@ def test_relational_audit_counts_only_actionable_recommendations():
         {
             "separatix_recommended_family": "smooth_nonlinear",
             "recommendation_near_optimal": True,
-            "selected_validation_regret": 0.01,
             "selected_test_regret": 0.02,
+            "plausible_family_coverage": True,
         },
         {
             "separatix_recommended_family": "linear",
             "recommendation_near_optimal": False,
-            "selected_validation_regret": 0.04,
             "selected_test_regret": 0.03,
+            "plausible_family_coverage": False,
         },
         {
             "separatix_recommended_family": None,
             "recommendation_near_optimal": False,
-            "selected_validation_regret": None,
             "selected_test_regret": None,
+            "plausible_family_coverage": None,
         },
     ]
 
@@ -551,12 +554,295 @@ def test_relational_audit_counts_only_actionable_recommendations():
     assert summary["recommendation_count"] == 2
     assert summary["near_optimal_count"] == 1
     assert summary["near_optimal_rate"] == 0.5
-    assert summary["mean_validation_regret"] == 0.025
     assert summary["mean_test_regret"] == 0.025
+    assert summary["plausible_family_coverage_count"] == 1
+    assert summary["plausible_family_coverage_rate"] == 0.5
     assert summary["recommendation_family_counts"] == {
         "linear": 1,
         "smooth_nonlinear": 1,
     }
+
+
+def test_relational_guidance_uses_combined_development_and_exact_recipe_once(monkeypatch):
+    module = _load_example_module()
+    import separatix
+
+    recipes = {
+        name: {"recipe_id": f"recipe-{name}", "probe": {"name": name}}
+        for name in ("linear", "smooth_poly", "knn", "kernel_approx", "mlp_one_layer_wide")
+    }
+    score_calls = []
+    estimator_calls = []
+
+    class FakeEstimator:
+        def fit(self, X, y):
+            self.fit_rows = len(X)
+            self.fit_labels = np.asarray(y)
+            return self
+
+        def predict(self, X):
+            return np.zeros(len(X), dtype=np.int64)
+
+    def fake_make(recipe, *, version_policy):
+        estimator_calls.append((recipe["recipe_id"], version_policy))
+        return FakeEstimator()
+
+    def fake_score(embeddings, labels, **kwargs):
+        score_calls.append((np.asarray(embeddings), np.asarray(labels), kwargs))
+        metrics = {
+            "recommendation_evidence": {
+                "recommended_family": "smooth_nonlinear",
+                "families": {
+                    family: {
+                        "best_probe": probe,
+                    }
+                    for family, probe in (
+                        ("linear", "linear"),
+                        ("smooth_nonlinear", "smooth_poly"),
+                        ("local_kernel", "knn"),
+                    )
+                },
+            },
+            "mlp_recommendation_evidence": {
+                "status": "completed",
+                "recommendation_override": False,
+                "best_architecture": {"probe_name": "mlp_one_layer_wide"},
+            },
+            "probes": {
+                name: {"probe_recipe": recipe}
+                for name, recipe in recipes.items()
+                if name != "mlp_one_layer_wide"
+            },
+            "mlp_probes": {
+                "architectures": [
+                    {
+                        "probe_name": "mlp_one_layer_wide",
+                        "probe_recipe": recipes["mlp_one_layer_wide"],
+                    }
+                ]
+            },
+        }
+        return (
+            {},
+            {
+                "probe_summary": {
+                    "evaluation": {
+                        "cohort_size": len(labels),
+                        "effective_train_size_summary": {"mean": len(labels) - 1},
+                    }
+                },
+                "extractor_results": [
+                    {
+                        "separatix": {
+                            "family_guidance": {
+                                "selected_family": "smooth_nonlinear",
+                                "minimum_recommended_family": "smooth_nonlinear",
+                                "plausible_families": [
+                                    "smooth_nonlinear",
+                                    "local_kernel",
+                                ],
+                                "selected_probe": "smooth_poly",
+                                "selected_recipe_id": recipes["smooth_poly"]["recipe_id"],
+                                "mlp_override": False,
+                                "paired": {
+                                    "status": "available",
+                                    "method": "paired_oof_bootstrap",
+                                },
+                            },
+                            "report": {"metrics": metrics},
+                        }
+                    }
+                ],
+            },
+        )
+
+    monkeypatch.setattr(separatix, "make_probe_estimator", fake_make, raising=False)
+    monkeypatch.setattr(module, "_score_embeddings", fake_score)
+
+    pairs = [
+        module.VerificationPair(0, 1, 1, "Cat"),
+        module.VerificationPair(2, 3, 0, "Cat"),
+    ]
+    embeddings = np.eye(4, dtype=np.float32)
+    rows, head_rows, _ = module._evaluate_relational_compositions(
+        representation="Demo",
+        model_name="dinov2-small",
+        output_name="final_cls",
+        train_embeddings=embeddings,
+        validation_embeddings=embeddings,
+        test_embeddings=embeddings,
+        train_pairs=pairs,
+        validation_pairs=pairs,
+        test_pairs=pairs,
+        overlap_k=2,
+        near_optimal_margin=0.02,
+        mlp_min_improvement=0.02,
+        mlp_trigger_skill_threshold=1.0,
+        seed=42,
+    )
+
+    assert len(score_calls) == 2
+    assert all(call[0].shape[0] == 4 for call in score_calls)
+    assert all(call[1].shape[0] == 4 for call in score_calls)
+    assert len(head_rows) == 8
+    assert all(row["status"] == "completed" for row in head_rows)
+    assert all(policy == "error" for _, policy in estimator_calls)
+    assert all(row["separatix_development_cohort_size"] == 4 for row in rows)
+    assert all(row["separatix_recommended_recipe_id"] == "recipe-smooth_poly" for row in rows)
+
+
+def test_single_image_head_audit_reconstructs_emitted_recipes(monkeypatch, tmp_path):
+    module = _load_example_module()
+    import separatix
+
+    recipes = {
+        "linear": {"recipe_id": "recipe-linear", "probe": {"name": "linear"}},
+        "mlp_one_layer_wide": {
+            "recipe_id": "recipe-mlp",
+            "probe": {"name": "mlp_one_layer_wide"},
+        },
+    }
+    calls = []
+
+    class FakeEstimator:
+        def fit(self, X, y):
+            calls.append(("fit", len(X), tuple(np.unique(y))))
+            return self
+
+        def predict(self, X):
+            return np.zeros(len(X), dtype=np.int64)
+
+    def fake_make(recipe, *, version_policy):
+        calls.append(("make", recipe["recipe_id"], version_policy))
+        return FakeEstimator()
+
+    monkeypatch.setattr(separatix, "make_probe_estimator", fake_make, raising=False)
+    samples = _samples(module, tmp_path, per_breed=2)
+    embeddings = np.arange(len(samples) * 4, dtype=np.float32).reshape(len(samples), 4)
+    head_result = {
+        "extractor_results": [
+            {
+                "separatix": {
+                    "report": {
+                        "metrics": {
+                            "mlp_trigger_evidence": {"status": "triggered"},
+                            "mlp_recommendation_evidence": {
+                                "status": "completed",
+                                "recommendation_override": True,
+                                "best_architecture": {
+                                    "probe_name": "mlp_one_layer_wide",
+                                    "balanced_accuracy": 0.8,
+                                },
+                                "aligned_comparators": {
+                                    "linear": {
+                                        "probe_recipe": recipes["linear"],
+                                        "balanced_accuracy": 0.6,
+                                    }
+                                },
+                                "pairwise_comparisons": {"linear": {"mean_delta": 0.2}},
+                            },
+                            "mlp_probes": {
+                                "architectures": [
+                                    {
+                                        "probe_name": "mlp_one_layer_wide",
+                                        "probe_recipe": recipes["mlp_one_layer_wide"],
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    rows = module._evaluate_head_families(
+        representation="Demo",
+        model_name="dinov2-small",
+        output_name="final_cls",
+        train_embeddings=embeddings[:4],
+        validation_embeddings=embeddings[4:6],
+        clean_test_embeddings=embeddings[6:8],
+        swapped_test_embeddings=embeddings[6:8],
+        train_labels=module._breeds(samples[:4]),
+        validation_labels=np.asarray(["Abyssinian", "Birman"]),
+        test_labels=np.asarray(["Abyssinian", "Birman"]),
+        selected_head="mlp",
+        head_result=head_result,
+        repeats=3,
+        seed=42,
+    )
+
+    assert {row["head"] for row in rows} == {"linear", "mlp"}
+    assert all(row["recipe_alignment_status"] == "aligned" for row in rows)
+    assert {row["recipe_id"] for row in rows} == {"recipe-linear", "recipe-mlp"}
+    assert all(row["repeat_policy"] == "emitted_recipe_replay" for row in rows)
+    assert all(policy == "error" for kind, _, policy in calls if kind == "make")
+    assert len(rows) == 6
+    assert {row["repeat"] for row in rows} == {0, 1, 2}
+    assert sum(kind == "fit" for kind, *_ in calls) == 12
+
+
+def test_single_image_head_audit_marks_missing_mlp_recipe_unavailable(monkeypatch, tmp_path):
+    module = _load_example_module()
+    import separatix
+
+    recipe = {"recipe_id": "recipe-linear", "probe": {"name": "linear"}}
+
+    class FakeEstimator:
+        def fit(self, X, y):
+            return self
+
+        def predict(self, X):
+            return np.zeros(len(X), dtype=np.int64)
+
+    monkeypatch.setattr(
+        separatix,
+        "make_probe_estimator",
+        lambda recipe, *, version_policy: FakeEstimator(),
+        raising=False,
+    )
+    samples = _samples(module, tmp_path, per_breed=2)
+    embeddings = np.arange(len(samples) * 3, dtype=np.float32).reshape(len(samples), 3)
+    result = {
+        "extractor_results": [
+            {
+                "separatix": {
+                    "report": {
+                        "metrics": {
+                            "mlp_recommendation_evidence": {
+                                "status": "completed",
+                                "recommendation_override": False,
+                                "best_architecture": {"probe_name": "mlp_one_layer_wide"},
+                                "aligned_comparators": {"linear": {"probe_recipe": recipe}},
+                            },
+                            "mlp_probes": {"architectures": []},
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    rows = module._evaluate_head_families(
+        representation="Demo",
+        model_name="dinov2-small",
+        output_name="final_cls",
+        train_embeddings=embeddings[:4],
+        validation_embeddings=embeddings[4:6],
+        clean_test_embeddings=embeddings[6:8],
+        swapped_test_embeddings=embeddings[6:8],
+        train_labels=module._breeds(samples[:4]),
+        validation_labels=np.asarray(["Abyssinian", "Birman"]),
+        test_labels=np.asarray(["Abyssinian", "Birman"]),
+        selected_head="linear",
+        head_result=result,
+        repeats=1,
+        seed=42,
+    )
+
+    mlp_row = next(row for row in rows if row["head"] == "mlp")
+    assert mlp_row["recipe_alignment_status"] == "unavailable"
+    assert mlp_row["recipe_id"] is None
+    assert mlp_row["validation_balanced_accuracy"] is None
 
 
 def test_visuals_render_from_protocol_rows(tmp_path):
@@ -622,7 +908,7 @@ def test_visuals_render_from_protocol_rows(tmp_path):
             "validation_mlp_advantage": 0.03,
             "validation_mlp_advantage_std": 0.005,
             "selected_head_validation_regret": 0.0,
-            "head_margin": 0.02,
+            "mlp_min_improvement": 0.02,
         }
         for representation, model, output, base in representations
     ]
@@ -682,3 +968,114 @@ def test_visuals_render_from_protocol_rows(tmp_path):
     ):
         assert path.is_file()
         assert path.stat().st_size > 0
+
+
+def test_plots_render_empty_states_for_unavailable_recipe_rows(tmp_path):
+    matplotlib = pytest.importorskip("matplotlib")
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    module = _load_example_module()
+    representation = "DINOv2-Small · Final Cls"
+    metric_rows = [
+        {
+            "representation": representation,
+            "model": "dinov2-small",
+            "output": "final_cls",
+            "condition": condition,
+            "target": target,
+            "overlap_macro": 0.5,
+        }
+        for condition, target, _ in module._MEASUREMENT_TARGET_LABELS
+    ]
+    head_rows = [
+        {
+            "representation": representation,
+            "model": "dinov2-small",
+            "output": "final_cls",
+            "head": family,
+            "status": "unavailable",
+            "recipe_alignment_status": "unavailable",
+            "clean_test_accuracy": None,
+            "background_swapped_test_accuracy": None,
+        }
+        for family in ("linear", "mlp")
+    ]
+    candidate_rows = [
+        {
+            "representation": representation,
+            "model": "dinov2-small",
+            "output": "final_cls",
+            "selected_head": "linear",
+            "clean_breed_overlap": 0.5,
+            "background_swapped_breed_overlap": 0.4,
+            "selected_head_clean_test_accuracy": None,
+            "selected_head_swapped_test_accuracy": None,
+            "mlp_probe_status": "completed",
+            "mlp_vs_linear_delta": None,
+            "validation_mlp_advantage": None,
+            "validation_mlp_advantage_std": None,
+            "selected_head_validation_regret": None,
+        }
+    ]
+    relational_rows = [
+        {
+            "representation": representation,
+            "model": "dinov2-small",
+            "output": "final_cls",
+            "composition": composition,
+            "separatix_selected_family": "linear",
+            "separatix_recommended_family": "linear",
+            "separatix_plausible_families": ["linear"],
+            **{f"{family}_test_balanced_accuracy": None for family in module._RELATIONAL_FAMILIES},
+        }
+        for composition in module._PAIR_COMPOSITIONS
+    ]
+
+    paths = (
+        *module._plot_overlap_heatmap(metric_rows, tmp_path, plt),
+        *module._plot_overlap_accuracy_scatter(
+            metric_rows, head_rows, candidate_rows, tmp_path, plt
+        ),
+        *module._plot_selection_budget(candidate_rows, head_rows, tmp_path, plt),
+        *module._plot_head_choice_audit(candidate_rows, tmp_path, plt),
+        *module._plot_background_shift_effect(candidate_rows, tmp_path, plt),
+        *module._plot_relational_composition(relational_rows, tmp_path, plt),
+    )
+
+    assert len(paths) == 12
+    assert all(path.is_file() and path.stat().st_size > 0 for path in paths)
+
+
+def test_replot_accepts_schema_v2_and_rejects_legacy_payload(tmp_path, monkeypatch):
+    module = _load_example_module()
+    plot_names = (
+        "_plot_overlap_heatmap",
+        "_plot_overlap_accuracy_scatter",
+        "_plot_selection_budget",
+        "_plot_head_choice_audit",
+        "_plot_background_shift_effect",
+        "_plot_relational_composition",
+    )
+    for name in plot_names:
+        monkeypatch.setattr(module, name, lambda *args: ())
+
+    valid = {
+        "schema_version": 2,
+        "protocol": {"relational_evidence_schema": "deployment_family_composition_v2"},
+        "metrics": [],
+        "head_runs": [],
+        "candidate_selection": [],
+        "relational_composition": [],
+    }
+    valid_path = tmp_path / "schema-v2.json"
+    valid_path.write_text(json.dumps(valid), encoding="utf-8")
+    assert module._replot_saved_results(valid_path, tmp_path, object()) == ()
+
+    legacy = dict(valid)
+    legacy["schema_version"] = 1
+    legacy_path = tmp_path / "schema-v1.json"
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+    with pytest.raises(ValueError, match="older relational deployment schema"):
+        module._replot_saved_results(legacy_path, tmp_path, object())

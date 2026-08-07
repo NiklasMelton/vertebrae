@@ -139,6 +139,12 @@ Summary records retain tidy operational rows, including identifiers, scores,
 aggregate metric columns, compact stability and Separatix fields, warnings, runtimes,
 and compact resource fields. They omit per-class and pairwise diagnostics, complete
 stability repeats, full Separatix reports, and nested resource profiles.
+The compact Separatix portion includes the canonical recommendation label,
+minimum/plausible family guidance, selected probe/recipe identity, paired-evidence
+status, and effective train-size context. The eight labels are shared across
+classification, multi-label, and regression targets; use target metadata and
+confidence fields when interpreting a monitoring alert. Full family deltas and
+recipes remain available only with `detail="full"`.
 
 `detail="full"` additionally stores the complete `BenchmarkResult.to_dict()` payload.
 Failed full-detail evaluations also retain traceback text; summary failures retain
@@ -198,8 +204,9 @@ committed, and reporter exceptions become warnings without changing evaluation s
 or interrupting training.
 
 `ConsoleReporter` prints the context, output/layer identity, primary score, overlap
-score, and Separatix recommendation or skip state. Reporting is opt-in; the default is
-silent.
+score, and Separatix canonical recommendation or skip state. Reporting is opt-in;
+the default is silent. For target-specific interpretation, inspect the full result's
+`family_guidance` and `probe_summary.evaluation` rather than parsing the label text.
 
 See the network-free
 [`examples/representation_monitoring.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/representation_monitoring.py)

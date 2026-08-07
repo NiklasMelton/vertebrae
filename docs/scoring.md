@@ -8,6 +8,9 @@ All [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) scoring in
 through the internal `SeparatixScorer` adapter. Separatix does not affect
 extractor ranking; it adds classifier-complexity guidance on top of the overlap
 result when enabled.
+The adapter targets Separatix `0.1.1` or newer. That release uses one canonical
+recommendation vocabulary for classification, multi-label, and regression
+diagnostics while retaining target-specific explanatory text.
 When a dataset declares groups, vertebrae forwards them to Separatix so supervised
 evaluation and structural evidence respect those independence units. A grouped
 diagnostic that lacks sufficient cross-group class support is recorded as skipped;
@@ -215,6 +218,9 @@ config = SeparatixConfig(
     overlap_threshold=0.80,
     random_state=42,
     densify_policy="warn_and_sample",
+    mlp_probes=True,
+    mlp_trigger_skill_threshold=0.75,
+    mlp_min_improvement=0.02,
 )
 ```
 
@@ -229,9 +235,21 @@ Current behavior:
   `target_mode="multilabel"`.
 - Regression targets are passed with `target_mode="regression"`.
 - Optional Separatix MLP probes can be enabled with `mlp_probes=True`.
+- `mlp_trigger_skill_threshold` controls only whether MLP computation is attempted;
+  `mlp_min_improvement` controls whether paired MLP evidence can override the
+  simpler-family guidance. These are intentionally separate so an MLP can be
+  selected when the simpler probes are useful but not already near-perfect.
 - Linear/nonlinear probe comparisons use the declared metric direction: accuracy/F1
   families favor larger values, while MAE/RMSE favor smaller values. Reported
   improvement and favored-family fields follow that same direction.
+- The machine-readable `recommendation` is one of eight shared labels:
+  `linear_likely_sufficient`, `smooth_nonlinear_recommended`,
+  `kernel_or_local_recommended`, `high_capacity_or_partitioning_recommended`,
+  `feedforward_mlp_recommended`, `feature_or_target_bottleneck_likely`,
+  `insufficient_data_or_unreliable_geometry`, or `inconclusive`.
+  These labels are deliberately target-agnostic. Plain-text recommendation
+  headlines and suggested model names still use `target_type`, so a regression
+  result does not lose its regression-specific interpretation.
 - The full Separatix report is preserved in JSON outputs, while Markdown reports
   show a compact recommendation, confidence, decision path, key scores, probe
   evidence, evaluation context, and skips.
@@ -257,14 +275,41 @@ reported only when the Separatix diagnostic runs and includes them.
 fitting another model. It records the best probe, a target-appropriate primary
 metric when Separatix declares one, the complete reported metric map, comparable
 linear/nonlinear evidence, evaluation and sampling context, grouping counts, and
-probe-specific skip reasons. Single-label fallback summaries use Separatix's
-balanced-accuracy baseline contract. Multi-label and regression summaries never
-invent an accuracy value or select an undeclared primary metric.
+probe-specific skip reasons. Its evaluation context also records whether the
+comparison is estimator-aligned, the cross-validation plan and cohort size, and
+the effective train-size summary (the number of rows available to each fitted
+fold). This makes it possible to distinguish a genuinely different family
+recommendation from a comparison made with a different estimator or training
+budget. Single-label fallback summaries use Separatix's balanced-accuracy
+baseline contract. Multi-label and regression summaries never invent an accuracy
+value or select an undeclared primary metric.
+
+Separatix `0.1.1` also exposes an uncertainty-aware family frontier. The
+`SeparatixResult.family_guidance` mapping contains the guidance status, target
+type, reason when unavailable, `minimum_recommended_family`,
+`plausible_families`, and the `decision_method`. It separately records the
+selected family/probe, the selected recipe id, whether an MLP override is active,
+and the paired-comparison status and method. The minimum family is the simplest
+family supported by the evidence; the plausible set retains alternatives that
+cannot be ruled out. Consumers should not treat a family outside that set as
+equally supported merely because its point estimate is close.
+
+Probe recipes are versioned, JSON-safe Separatix data rather than opaque live
+estimators. Use `separatix_result.probe_recipe(name_or_id)` to retrieve a retained
+recipe or `separatix_result.selected_probe_recipe()` for the family/probe selected
+by the guidance.
+Pass a returned recipe to Separatix's `make_probe_estimator(...)` factory when a
+downstream audit must reproduce the exact preprocessing, sketch, kernel, or MLP
+architecture used by the diagnostic. Missing or unavailable recipes return
+`None`; Vertebrae does not guess a replacement estimator.
 
 These fields are descriptive diagnostics. They do not participate in ranking,
 aggregate validity, or vertebrae's benchmark recommendations. Recommendation
 confidence and probe-comparison confidence are reported separately because they
-describe different evidence.
+describe different evidence. `inconclusive` and
+`insufficient_data_or_unreliable_geometry` retain Separatix's target-specific
+confidence handling; do not infer a high-confidence regression conclusion from
+the shared label alone.
 
 ## Custom embedding metrics
 
