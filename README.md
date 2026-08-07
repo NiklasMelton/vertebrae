@@ -628,6 +628,49 @@ poetry run python examples/fashion_mnist_overfitting.py
 poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
 ```
 
+#### Backbone and downstream-head selection
+
+[`oxford_pets_backbone_selection.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/oxford_pets_backbone_selection.py)
+turns representation diagnostics into a controlled model-selection decision. It
+compares frozen supervised, self-supervised, efficient, and image-text-pretrained
+vision backbones on disjoint Oxford-IIIT Pet head-training, representation-selection,
+head-validation, and final-test roles. Trimap annotations create foreground-only and
+balanced background-swapped probes. DINOv2 and DeiT expose quarter-, middle-, late-,
+and final-block CLS representations, adding lower-quality transfer candidates without
+extra image forward passes.
+
+**Headline:** representation quality and head complexity are separate decisions. First,
+OverlapIndex screens which frozen backbone outputs are worth training on. Then Separatix
+diagnoses the complexity of the exact downstream decision boundary. Strong frozen
+representations make ordinary single-image breed recognition largely linear; the same
+embeddings can require nonlinear comparisons for same-breed verification when the two
+endpoints are merely concatenated. Making those interactions explicit with
+`abs(left - right)` and `left * right` can return the task to a linear head. In practice,
+when Separatix recommends nonlinearity, users should consider both a more expressive head
+and a better task-specific representation composition.
+
+The backbone/layer ranking uses clean breed OverlapIndex; final test accuracy is not
+consulted. A standardized linear-head scatter isolates representation quality, while an
+OI-ranked selection-budget curve compares the number of trained heads needed to find a
+strong candidate with random candidate search. The experiment also trains a shallow MLP
+and runs Separatix on the same clean head-training rows used by both downstream head
+families. The normal conditional MLP trigger is retained, and head selection consumes
+Separatix's actual aligned optional-MLP override rather than a generic nonlinear probe.
+The head-choice audit compares its paired MLP-minus-linear evidence with clean-validation
+advantage. A simplified target-view heatmap and a clean-to-swapped effect plot keep
+target specificity and background sensitivity visible as supporting diagnostics.
+The same cached embeddings also support a relational composition audit: balanced
+same-breed verification pairs use different-breed, same-species hard negatives with no
+source-image reuse inside a split. Raw endpoint concatenation is compared with explicit
+absolute-difference and product interactions. Separatix's complete family recommendation
+is then checked against held-out linear, smooth-nonlinear, local/kernel, and MLP heads,
+showing whether a representation-level interaction can simplify the downstream head.
+
+```bash
+poetry install -E backbone-selection
+poetry run python examples/oxford_pets_backbone_selection.py
+```
+
 #### Tiny Shakespeare transformer representations
 
 [`tiny_shakespeare_transformer_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/tiny_shakespeare_transformer_visual_suite.py)
