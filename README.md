@@ -636,8 +636,6 @@ poetry run python examples/fashion_mnist_overfitting.py
 poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
 ```
 
-<<<<<<< Updated upstream
-=======
 #### Backbone and downstream-head selection
 
 [`oxford_pets_backbone_selection.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/oxford_pets_backbone_selection.py)
@@ -693,7 +691,6 @@ poetry install -E backbone-selection
 poetry run python examples/oxford_pets_backbone_selection.py
 ```
 
->>>>>>> Stashed changes
 #### Tiny Shakespeare transformer representations
 
 [`tiny_shakespeare_transformer_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/tiny_shakespeare_transformer_visual_suite.py)

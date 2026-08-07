@@ -11332,8 +11332,4 @@ visuals = ["matplotlib", "torch", "torchvision"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-<<<<<<< Updated upstream
-content-hash = "fca7dcd607512fd51fc4b0c5a4f72884360d16c9b79cafa70c7d51d051c1ce58"
-=======
 content-hash = "4f1a8feadd24c5e8db44f639232708f9b6d306e5e77c07a144fded47fac2edfe"
->>>>>>> Stashed changes

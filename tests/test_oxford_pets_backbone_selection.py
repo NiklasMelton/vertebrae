@@ -315,9 +315,7 @@ def test_separatix_family_evidence_respects_primary_family_and_mlp_override():
                                 "raw_best_family": "local_kernel",
                                 "recommended_family": "smooth_nonlinear",
                                 "best_clearly_beats_dummy": True,
-                                "families": {
-                                    "smooth_nonlinear": {"best_probe": "smooth_poly"}
-                                },
+                                "families": {"smooth_nonlinear": {"best_probe": "smooth_poly"}},
                             },
                             "mlp_recommendation_evidence": {
                                 "status": "not_triggered",
@@ -496,12 +494,8 @@ def test_scatter_labels_are_compact_and_collision_spread_is_deterministic():
         upper=0.95,
         min_gap=0.04,
     )
-    assert module._compact_representation_label("DINOv2-Small · Final Cls") == (
-        "DINOv2-S · final"
-    )
-    assert module._compact_representation_label("DINOv2-Small · Early Cls") == (
-        "DINOv2-S · early"
-    )
+    assert module._compact_representation_label("DINOv2-Small · Final Cls") == ("DINOv2-S · final")
+    assert module._compact_representation_label("DINOv2-Small · Early Cls") == ("DINOv2-S · early")
     assert module._compact_representation_label("OpenCLIP ViT-B/32 · Final Image") == (
         "OpenCLIP-B/32 · final"
     )
@@ -745,9 +739,7 @@ def test_single_image_head_audit_reconstructs_emitted_recipes(monkeypatch, tmp_p
                                         "balanced_accuracy": 0.6,
                                     }
                                 },
-                                "pairwise_comparisons": {
-                                    "linear": {"mean_delta": 0.2}
-                                },
+                                "pairwise_comparisons": {"linear": {"mean_delta": 0.2}},
                             },
                             "mlp_probes": {
                                 "architectures": [
@@ -821,9 +813,7 @@ def test_single_image_head_audit_marks_missing_mlp_recipe_unavailable(monkeypatc
                                 "status": "completed",
                                 "recommendation_override": False,
                                 "best_architecture": {"probe_name": "mlp_one_layer_wide"},
-                                "aligned_comparators": {
-                                    "linear": {"probe_recipe": recipe}
-                                },
+                                "aligned_comparators": {"linear": {"probe_recipe": recipe}},
                             },
                             "mlp_probes": {"architectures": []},
                         }
@@ -856,7 +846,7 @@ def test_single_image_head_audit_marks_missing_mlp_recipe_unavailable(monkeypatc
 
 
 def test_visuals_render_from_protocol_rows(tmp_path):
-    import matplotlib
+    matplotlib = pytest.importorskip("matplotlib")
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -894,9 +884,7 @@ def test_visuals_render_from_protocol_rows(tmp_path):
                         "head": head,
                         "repeat": repeat,
                         "validation_accuracy": base + 0.14 + lift + repeat * 0.005,
-                        "validation_balanced_accuracy": (
-                            base + 0.14 + lift + repeat * 0.005
-                        ),
+                        "validation_balanced_accuracy": (base + 0.14 + lift + repeat * 0.005),
                         "clean_test_accuracy": base + 0.18 + lift + repeat * 0.005,
                         "background_swapped_test_accuracy": base + 0.08 + lift + repeat * 0.005,
                     }
@@ -983,7 +971,7 @@ def test_visuals_render_from_protocol_rows(tmp_path):
 
 
 def test_plots_render_empty_states_for_unavailable_recipe_rows(tmp_path):
-    import matplotlib
+    matplotlib = pytest.importorskip("matplotlib")
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1040,10 +1028,7 @@ def test_plots_render_empty_states_for_unavailable_recipe_rows(tmp_path):
             "separatix_selected_family": "linear",
             "separatix_recommended_family": "linear",
             "separatix_plausible_families": ["linear"],
-            **{
-                f"{family}_test_balanced_accuracy": None
-                for family in module._RELATIONAL_FAMILIES
-            },
+            **{f"{family}_test_balanced_accuracy": None for family in module._RELATIONAL_FAMILIES},
         }
         for composition in module._PAIR_COMPOSITIONS
     ]

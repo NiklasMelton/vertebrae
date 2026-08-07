@@ -149,8 +149,6 @@ Each script writes reports to `examples/output/`.
   subset with related category pairs using DINOv2, a tiny supervised ViT baseline,
   and an optional gated DINOv3 extractor. Downloads the dataset archive when it
   is not already present locally.
-<<<<<<< Updated upstream
-=======
 - `oxford_pets_backbone_selection.py`: screen frozen vision backbones and layers on
   Oxford-IIIT Pet without consulting final test accuracy. A disjoint representation
   probe ranks candidates by clean breed OverlapIndex; DINOv2 and DeiT contribute
@@ -176,7 +174,6 @@ Each script writes reports to `examples/output/`.
   backbone-selection`; the first run downloads the dataset and requested checkpoints.
   Use `--replot-from examples/output/oxford_pets_backbone_selection.json` to regenerate
   the figures without rerunning feature extraction or head training.
->>>>>>> Stashed changes
 - `zero_shot_transfer_structure.py`: flagship CIFAR-10 OpenCLIP experiment that
   encodes images once, varies only explicit text prompt sets, and contrasts fixed
   global/per-class OverlapIndex with prompt-sensitive zero-shot accuracy/F1. Requires

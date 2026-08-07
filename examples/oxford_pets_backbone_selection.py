@@ -788,9 +788,7 @@ def _render_background_swap(pair: BackgroundSwap, blur_radius: Optional[float] =
         )
         donor_values[donor_mask != 2] = fill
         canvas = Image.fromarray(donor_values)
-        radius = (
-            max(2.0, min(canvas.size) / 32.0) if blur_radius is None else float(blur_radius)
-        )
+        radius = max(2.0, min(canvas.size) / 32.0) if blur_radius is None else float(blur_radius)
         if radius > 0:
             canvas = canvas.filter(ImageFilter.GaussianBlur(radius=radius))
         canvas = canvas.resize(target.size, resample=Image.Resampling.BILINEAR)
@@ -1251,14 +1249,10 @@ def _separatix_family_evidence(result: Mapping[str, Any]) -> Dict[str, Any]:
         minimum_family = recommendation.get("recommended_family")
     plausible_families = list(guidance.get("plausible_families") or [])
     if not plausible_families:
-        plausible = (recommendation.get("plausible_family_set") or {}).get(
-            "plausible_families"
-        )
+        plausible = (recommendation.get("plausible_family_set") or {}).get("plausible_families")
         plausible_families = list(plausible or [])
     mlp_best_name = (
-        mlp_guidance.get("probe_name")
-        if isinstance(mlp_guidance, Mapping)
-        else None
+        mlp_guidance.get("probe_name") if isinstance(mlp_guidance, Mapping) else None
     ) or (mlp.get("best_architecture") or {}).get("probe_name")
     family_probes: Dict[str, Optional[str]] = {}
     family_recipes: Dict[str, Any] = {}
@@ -1331,9 +1325,7 @@ def _find_probe_recipe(metrics: Mapping[str, Any], probe_name: Any) -> Any:
         for key in ("architectures", "aligned_comparators"):
             values = mlp_probes.get(key) or {}
             if isinstance(values, Mapping):
-                candidates.extend(
-                    value for value in values.values() if isinstance(value, Mapping)
-                )
+                candidates.extend(value for value in values.values() if isinstance(value, Mapping))
             elif isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
                 candidates.extend(value for value in values if isinstance(value, Mapping))
     for payload in candidates:
@@ -1541,16 +1533,13 @@ def _relational_composition_summary(
         empirical_family = next(
             family
             for family in _RELATIONAL_FAMILIES
-            if family in available
-            and available[family] >= best_test - near_optimal_margin
+            if family in available and available[family] >= best_test - near_optimal_margin
         )
     recommended_family = head_evidence.get("recommended_family")
     selected = family_scores.get(str(recommended_family)) if recommended_family else None
     selected_test = selected.get("test") if selected else None
     plausible = [str(item) for item in head_evidence.get("plausible_families", [])]
-    plausible_coverage = (
-        empirical_family in plausible if empirical_family is not None else None
-    )
+    plausible_coverage = empirical_family in plausible if empirical_family is not None else None
     return {
         "representation": representation,
         "model": model_name,
@@ -1562,9 +1551,7 @@ def _relational_composition_summary(
         "separatix_recommendation": head_evidence.get("recommendation"),
         "separatix_confidence": head_evidence.get("confidence"),
         "separatix_raw_best_family": head_evidence.get("raw_best_family"),
-        "separatix_minimum_recommended_family": head_evidence.get(
-            "minimum_recommended_family"
-        ),
+        "separatix_minimum_recommended_family": head_evidence.get("minimum_recommended_family"),
         "separatix_recommended_family": recommended_family,
         "separatix_selected_family": recommended_family,
         "separatix_recommended_probe": head_evidence.get("recommended_probe"),
@@ -1619,9 +1606,7 @@ def _relational_composition_summary(
 def _relational_audit_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     if not rows:
         raise ValueError("Cannot summarize an empty relational audit.")
-    recommended = [
-        row for row in rows if row.get("separatix_recommended_family") is not None
-    ]
+    recommended = [row for row in rows if row.get("separatix_recommended_family") is not None]
     test_regrets = [
         float(row["selected_test_regret"])
         for row in recommended
@@ -1651,13 +1636,9 @@ def _relational_audit_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, An
             if recommended
             else None
         ),
-        "mean_test_regret": (
-            float(np.mean(test_regrets)) if test_regrets else None
-        ),
+        "mean_test_regret": (float(np.mean(test_regrets)) if test_regrets else None),
         "plausible_family_coverage_count": sum(coverage),
-        "plausible_family_coverage_rate": (
-            float(np.mean(coverage)) if coverage else None
-        ),
+        "plausible_family_coverage_rate": (float(np.mean(coverage)) if coverage else None),
         "test_near_optimal_count": sum(
             bool(row.get("test_near_optimal", row.get("recommendation_near_optimal")))
             for row in recommended
@@ -1665,9 +1646,7 @@ def _relational_audit_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, An
         "test_near_optimal_rate": (
             float(
                 sum(
-                    bool(
-                        row.get("test_near_optimal", row.get("recommendation_near_optimal"))
-                    )
+                    bool(row.get("test_near_optimal", row.get("recommendation_near_optimal")))
                     for row in recommended
                 )
                 / len(recommended)
@@ -1850,8 +1829,11 @@ def _candidate_summary(
         if value is not None:
             repeat_rows[int(row["repeat"])][str(row["head"])] = value
     observed_deltas = np.asarray(
-        [values["mlp"] - values["linear"] for values in repeat_rows.values()
-         if "mlp" in values and "linear" in values],
+        [
+            values["mlp"] - values["linear"]
+            for values in repeat_rows.values()
+            if "mlp" in values and "linear" in values
+        ],
         dtype=float,
     )
     selected_validation = _mean_optional(selected_runs, "validation_balanced_accuracy")
@@ -1917,13 +1899,9 @@ def _candidate_summary(
             if best_validation is not None and selected_validation is not None
             else None
         ),
-        "selected_head_validation_accuracy": _mean_optional(
-            selected_runs, "validation_accuracy"
-        ),
+        "selected_head_validation_accuracy": _mean_optional(selected_runs, "validation_accuracy"),
         "selected_head_validation_balanced_accuracy": selected_validation,
-        "selected_head_clean_test_accuracy": _mean_optional(
-            selected_runs, "clean_test_accuracy"
-        ),
+        "selected_head_clean_test_accuracy": _mean_optional(selected_runs, "clean_test_accuracy"),
         "selected_head_swapped_test_accuracy": _mean_optional(
             selected_runs,
             "background_swapped_test_accuracy",
@@ -2006,11 +1984,7 @@ def _measurement_value(
     condition: str,
     target: str,
 ) -> float:
-    matches = [
-        row
-        for row in rows
-        if row["condition"] == condition and row["target"] == target
-    ]
+    matches = [row for row in rows if row["condition"] == condition and row["target"] == target]
     if len(matches) != 1:
         raise ValueError(f"Expected one {condition}/{target} measurement; found {len(matches)}.")
     return float(matches[0]["overlap_macro"])
@@ -2062,9 +2036,7 @@ def _plot_overlap_heatmap(
             for column_index in range(matrix.shape[1]):
                 value = matrix[row_index, column_index]
                 color = (
-                    "white"
-                    if not np.isfinite(value) or value < 0.38 or value > 0.76
-                    else "black"
+                    "white" if not np.isfinite(value) or value < 0.38 or value > 0.76 else "black"
                 )
                 axis.text(
                     column_index,
@@ -2102,9 +2074,7 @@ def _replot_saved_results(path: Path, figure_dir: Path, plt: Any) -> Tuple[Path,
             "Saved results use an older relational deployment schema; rerun the "
             "experiment before replotting."
         )
-    if any(
-        "mlp_probe_status" not in row for row in payload["candidate_selection"]
-    ):
+    if any("mlp_probe_status" not in row for row in payload["candidate_selection"]):
         raise ValueError(
             "Saved results predate the clean aligned-MLP head protocol; rerun the "
             "experiment before replotting."
@@ -2160,17 +2130,14 @@ def _plot_overlap_accuracy_scatter(
     ]
     linear_representations = {str(row["representation"]) for row in linear_rows}
     metric_lookup = {
-        (row["representation"], row["condition"], row["target"]): row
-        for row in metric_rows
+        (row["representation"], row["condition"], row["target"]): row for row in metric_rows
     }
     representations = [
         representation
         for representation in _ordered_representations(metric_rows)
         if representation in linear_representations
         and _optional_float(
-            (metric_lookup.get((representation, "clean", "breed")) or {}).get(
-                "overlap_macro"
-            )
+            (metric_lookup.get((representation, "clean", "breed")) or {}).get("overlap_macro")
         )
         is not None
     ]
@@ -2209,14 +2176,8 @@ def _plot_overlap_accuracy_scatter(
         label_entries = []
         plotted_y = []
         for representation, x_value in zip(representations, x_values):
-            runs = [
-                row
-                for row in linear_rows
-                if row["representation"] == representation
-            ]
-            y_values = np.asarray(
-                [float(row["clean_test_accuracy"]) for row in runs], dtype=float
-            )
+            runs = [row for row in linear_rows if row["representation"] == representation]
+            y_values = np.asarray([float(row["clean_test_accuracy"]) for row in runs], dtype=float)
             y_value = float(y_values.mean())
             plotted_y.append(y_value)
             axis.scatter(
@@ -2478,8 +2439,7 @@ def _plot_head_choice_audit(
             figure, axis = plt.subplots(figsize=(10.8, 4.8), constrained_layout=True)
             axis.axis("off")
             if any(
-                candidate.get("mlp_probe_status") == "completed"
-                for candidate in candidate_rows
+                candidate.get("mlp_probe_status") == "completed" for candidate in candidate_rows
             ):
                 message = (
                     "No aligned MLP/linear validation rows are available.\n"
@@ -2588,9 +2548,7 @@ def _plot_head_choice_audit(
             va="top",
         )
         axis.set_xlabel("Separatix aligned advantage: MLP − linear balanced accuracy")
-        axis.set_ylabel(
-            "Observed clean-validation advantage: MLP − linear balanced accuracy"
-        )
+        axis.set_ylabel("Observed clean-validation advantage: MLP − linear balanced accuracy")
         axis.grid(True, color="#E5E7EB", linewidth=0.8)
         figure.suptitle(
             "Does Separatix's aligned MLP evidence predict downstream head advantage?\n"
@@ -2715,9 +2673,7 @@ def _plot_relational_composition(
     from matplotlib.patches import Patch, Rectangle
 
     representations = _ordered_representations(rows)
-    lookup = {
-        (str(row["representation"]), str(row["composition"])): row for row in rows
-    }
+    lookup = {(str(row["representation"]), str(row["composition"])): row for row in rows}
     family_labels = {
         "linear": "Linear",
         "smooth_nonlinear": "Smooth\nnonlinear",
@@ -2731,11 +2687,13 @@ def _plot_relational_composition(
                 [
                     (
                         value
-                        if (value := _optional_float(
-                            lookup.get((representation, composition), {}).get(
-                                f"{family}_test_balanced_accuracy"
+                        if (
+                            value := _optional_float(
+                                lookup.get((representation, composition), {}).get(
+                                    f"{family}_test_balanced_accuracy"
+                                )
                             )
-                        ))
+                        )
                         is not None
                         else np.nan
                     )
@@ -2745,9 +2703,7 @@ def _plot_relational_composition(
             ],
             dtype=float,
         )
-    if not representations or not any(
-        np.isfinite(value).any() for value in matrices.values()
-    ):
+    if not representations or not any(np.isfinite(value).any() for value in matrices.values()):
         return _plot_empty_state(
             figure_dir,
             plt,
@@ -2979,10 +2935,7 @@ def _model_colors(models: Sequence[str], plt: Any) -> Dict[str, Any]:
     unique = list(dict.fromkeys(models))
     palette = plt.get_cmap("tab10")
     model_rank = {model: index for index, model in enumerate(_MODEL_ORDER)}
-    return {
-        model: palette(model_rank.get(model, len(model_rank)) % 10)
-        for model in unique
-    }
+    return {model: palette(model_rank.get(model, len(model_rank)) % 10) for model in unique}
 
 
 def _plot_empty_state(
@@ -3080,9 +3033,7 @@ def _protocol_payload(
                 "star the simplest family within the configured near-optimal margin "
                 "of the best observed held-out test score"
             ),
-            "pair_counts": {
-                name: len(pairs) for name, pairs in relational_pairs.items()
-            },
+            "pair_counts": {name: len(pairs) for name, pairs in relational_pairs.items()},
         },
         "split_counts": {
             "head_train": len(head_train),
@@ -3161,11 +3112,7 @@ def _mean(rows: Sequence[Mapping[str, Any]], field: str) -> float:
 
 
 def _mean_optional(rows: Sequence[Mapping[str, Any]], field: str) -> Optional[float]:
-    values = [
-        rendered
-        for row in rows
-        if (rendered := _optional_float(row.get(field))) is not None
-    ]
+    values = [rendered for row in rows if (rendered := _optional_float(row.get(field))) is not None]
     return float(np.mean(values)) if values else None
 
 
