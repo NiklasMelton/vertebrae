@@ -647,44 +647,60 @@ balanced background-swapped probes. DINOv2 and DeiT expose quarter-, middle-, la
 and final-block CLS representations, adding lower-quality transfer candidates without
 extra image forward passes.
 
-**Headline:** representation quality and head complexity are separate decisions. First,
-OverlapIndex screens which frozen backbone outputs are worth training on. Then Separatix
-diagnoses the complexity of the exact downstream decision boundary. Strong frozen
-representations make ordinary single-image breed recognition largely linear; the same
-embeddings can require nonlinear comparisons for same-breed verification when the two
-endpoints are merely concatenated. Making those interactions explicit with
-`abs(left - right)` and `left * right` can return the task to a linear head. In practice,
-when Separatix recommends nonlinearity, users should consider both a more expressive head
-and a better task-specific representation composition.
+**Headline:** representation quality and head complexity are separate decisions.
+Vertebrae first measures whether a frozen representation organizes the target usefully;
+Separatix then diagnoses the minimum credible family for the downstream boundary. The
+result is not merely a backbone leaderboard: it distinguishes missing representation
+quality from avoidable downstream complexity.
 
-The backbone/layer ranking uses clean breed OverlapIndex; final test accuracy is not
-consulted. A standardized linear-head scatter isolates representation quality, while an
-OI-ranked selection-budget curve compares the number of trained heads needed to find a
-strong candidate with random candidate search. For relational verification, Separatix
-is run only on the combined non-test development cohort (head-train plus validation
-pairs), then the selected family is refit on all of those rows. The final test pairs are
-used only for the held-out score. Every downstream family is reconstructed from the
-exact versioned Separatix probe recipe, including preprocessing and MLP architecture;
-the experiment never substitutes a hand-written approximation.
+**1. Screen frozen representations before committing to a downstream model.** The
+backbone/layer ranking uses clean breed OverlapIndex on the representation-selection
+split; final test accuracy is never consulted. The same standardized linear head is used
+only as a retrospective behavioral check so that head-family choice cannot explain the
+differences between points.
 
-The relational plot uses a thick border for Separatix's selected deployment family
-(including an active MLP override), while small orange markers show the plausible core
-family set. The selected family is chosen from the non-test development cohort; the
-minimum recommended family remains available in the serialized guidance when it differs
-from that selection. A star marks the simplest family that is within the configured
-margin of the best *observed test* score; that star is a retrospective audit oracle and
-is never used for selection. This makes estimator alignment, uncertainty, and the
-train-size difference visible without leaking test information into the recommendation.
-The standalone head-choice audit likewise uses Separatix's paired MLP-minus-linear
-evidence. A simplified target-view heatmap and a clean-to-swapped effect plot keep
-target specificity and background sensitivity visible as supporting diagnostics.
+![Oxford-IIIT Pet clean breed OverlapIndex versus held-out standardized linear-head accuracy across frozen backbone outputs](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/oxford-pets-overlap-vs-head-accuracy.png)
 
-The same cached embeddings also support a relational composition audit: balanced
-same-breed verification pairs use different-breed, same-species hard negatives with no
-source-image reuse inside a split. Raw endpoint concatenation is compared with explicit
-absolute-difference and product interactions. Separatix's complete family guidance is
-then checked against held-out linear, smooth-nonlinear, local/kernel, and MLP heads,
-showing whether a representation-level interaction can simplify the downstream head.
+Across eleven frozen outputs, clean breed OverlapIndex has a descriptive Spearman
+correlation of `0.95` with held-out linear-head accuracy. ConvNeXt-Tiny ranks first by
+OverlapIndex and reaches `0.931` test accuracy; DINOv2-Small's final CLS output follows
+closely at `0.926`. Early and middle transformer outputs provide deliberately weak
+controls. The absolute OverlapIndex value is not an accuracy estimate—the useful result
+is that representation geometry orders downstream transfer quality without using the
+test outcome or committing the ranking to a tuned head.
+
+**2. Treat nonlinear guidance as a diagnosis, not automatically as a request for a
+bigger model.** The same cached embeddings are reused for balanced same-breed
+verification with different-breed, same-species hard negatives. With raw endpoint
+concatenation, `[left, right]`, the comparison itself is hidden from a linear readout.
+With interaction-aware composition, `[abs(left - right), left * right]`, the relevant
+relationship is made explicit.
+
+![Oxford-IIIT Pet held-out relational head-family accuracy for raw concatenation and interaction-aware pair composition](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/oxford-pets-relational-composition-heads.png)
+
+For raw concatenation, Separatix recommends smooth nonlinearity in all nine conclusive
+cases, and a smooth-nonlinear family is retrospectively the simplest near-best choice for
+ten of eleven outputs. After adding explicit interactions, Separatix recommends a linear
+family in nine of ten conclusive cases, while linear is retrospectively simplest
+near-best in ten of eleven. The composition change improves mean linear balanced
+accuracy by `0.195`. For example, DINOv2-Small's final output moves from `0.497` linear
+accuracy under concatenation—versus `0.814` with a smooth-nonlinear head—to `0.885` with
+an interaction-aware linear head.
+
+Separatix sees only the combined non-test development pairs. Every family is rebuilt
+from its exact versioned Separatix recipe and evaluated once on untouched test pairs. In
+the heatmap, the orange border is the selected deployment family, orange dots are the
+plausible core families, and the star is the retrospective simplest family within `0.02`
+of the best observed test score. The star never participates in selection. Across the
+nineteen conclusive cases, the selected family is test-near-best in `16/19`, its plausible
+set covers the retrospective near-best family in `17/19`, and mean selected-family test
+regret is `0.013` balanced accuracy.
+
+Together, the figures show the intended workflow: use representation geometry to find
+where target information is accessible, then use family guidance to decide whether to
+increase head complexity or expose the task relationship more directly. The script also
+writes target-view, background-intervention, and recommendation-audit results as
+supporting diagnostics without making them part of the headline claim.
 
 ```bash
 poetry install -E backbone-selection

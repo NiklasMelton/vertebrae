@@ -328,7 +328,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                     selected_head=selected_head,
                     selection_reason=selection_reason,
                     head_evidence=head_evidence,
-                    near_optimal_margin=args.near_optimal_margin,
                     mlp_min_improvement=args.mlp_min_improvement,
                     mlp_trigger_skill_threshold=args.mlp_trigger_skill_threshold,
                 )
