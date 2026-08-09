@@ -234,10 +234,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             torch=torch,
         ):
             global_step += 1
-            if (
-                global_step % args.snapshot_every_batches != 0
-                and batch_number != total_batches
-            ):
+            if global_step % args.snapshot_every_batches != 0 and batch_number != total_batches:
                 continue
             snapshots.append(
                 _capture_snapshot(
@@ -633,9 +630,7 @@ def _render_frame(
             np.linspace(y_min, y_max, 240),
         )
         grid = np.column_stack([grid_x.ravel(), grid_y.ravel()])
-        predicted = (
-            grid @ snapshot.classifier_weight.T + snapshot.classifier_bias
-        ).argmax(axis=1)
+        predicted = (grid @ snapshot.classifier_weight.T + snapshot.classifier_bias).argmax(axis=1)
         background_colors = [(*to_rgb(color), 0.12) for color in _CLASS_COLORS]
         axis.contourf(
             grid_x,
@@ -646,9 +641,7 @@ def _render_frame(
             antialiased=False,
         )
 
-        for class_id, (class_name, color) in enumerate(
-            zip(_FASHION_CLASS_NAMES, _CLASS_COLORS)
-        ):
+        for class_id, (class_name, color) in enumerate(zip(_FASHION_CLASS_NAMES, _CLASS_COLORS)):
             mask = labels == class_id
             axis.scatter(
                 snapshot.embeddings[mask, 0],

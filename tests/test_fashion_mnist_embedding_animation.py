@@ -128,8 +128,7 @@ def test_fashion_mnist_split_is_deterministic_stratified_and_disjoint(tmp_path):
 
     def restore_ids(values):
         return np.rint(
-            (values[:, 0] * module._NORMALIZATION_STD + module._NORMALIZATION_MEAN)
-            * 255.0
+            (values[:, 0] * module._NORMALIZATION_STD + module._NORMALIZATION_MEAN) * 255.0
         ).astype(int)
 
     train_ids = restore_ids(train_x)
@@ -161,8 +160,7 @@ def test_fashion_mnist_split_handles_promoted_large_sizes_and_capacity_guard(tmp
 
     def restore_ids(values):
         raw_pixels = np.rint(
-            (values[:, :2] * module._NORMALIZATION_STD + module._NORMALIZATION_MEAN)
-            * 255.0
+            (values[:, :2] * module._NORMALIZATION_STD + module._NORMALIZATION_MEAN) * 255.0
         ).astype(np.int64)
         return raw_pixels[:, 0] + 256 * raw_pixels[:, 1]
 
@@ -256,8 +254,7 @@ def test_display_alignment_reduces_rigid_coordinate_mismatch_and_preserves_geome
         assert np.allclose(display_distances, source_distances)
         source_logits = source.embeddings @ source.classifier_weight.T + source.classifier_bias
         display_logits = (
-            displayed.embeddings @ displayed.classifier_weight.T
-            + displayed.classifier_bias
+            displayed.embeddings @ displayed.classifier_weight.T + displayed.classifier_bias
         )
         assert np.allclose(display_logits, source_logits)
 
@@ -350,8 +347,7 @@ def test_display_interpolation_preserves_endpoints_and_linearly_interpolates_mod
         (2 * displayed[0].classifier_bias + displayed[1].classifier_bias) / 3,
     )
     first_tween_logits = (
-        first_tween.embeddings @ first_tween.classifier_weight.T
-        + first_tween.classifier_bias
+        first_tween.embeddings @ first_tween.classifier_weight.T + first_tween.classifier_bias
     )
     assert np.array_equal(first_tween_logits.argmax(axis=1), np.array([0, 1, 1]))
     assert first_tween.source.validation_accuracy == pytest.approx(2 / 3)

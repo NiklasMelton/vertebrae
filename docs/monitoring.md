@@ -222,7 +222,7 @@ initialization through three epochs at optimizer-step cadence, evaluates only ag
 a stratified held-out validation set, disables Separatix and stability repeats, and
 renders the network architecture beside the layer-wise OverlapIndex trajectories.
 
-#### True 2D bottleneck animation
+### True 2D bottleneck animation
 
 [`examples/fashion_mnist_embedding_animation.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_embedding_animation.py)
 is a complementary visual workflow for watching a representation organize itself in
