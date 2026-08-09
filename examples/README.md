@@ -27,6 +27,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_embedding_animation.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_corruption_atlas.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/tiny_shakespeare_transformer_visual_suite.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_overfitting.py
@@ -87,6 +88,15 @@ Each script writes reports to `examples/output/`.
   representation-monitoring, compression-frontier, and layer-by-hierarchy figures.
   The first run downloads Fashion-MNIST through torchvision; install all required
   optional dependencies with `poetry install -E visuals`.
+- `fashion_mnist_embedding_animation.py`: train a classifier with a true linear 2D
+  bottleneck and animate the same fixed, stratified held-out validation points as
+  the representation learns. Each snapshot scores the exact unaligned 2D
+  bottleneck with raw OverlapIndex geometry (`normalize_embeddings=False`); the
+  default rigid display-only alignment transforms the classifier regions
+  equivalently, so the plotted boundaries remain the same model. The GIF loops
+  forever and writes a sidecar CSV with snapshot loss, accuracy, and OverlapIndex
+  values. The first run downloads Fashion-MNIST through torchvision and requires
+  the `visuals` extra.
 - `fashion_mnist_corruption_atlas.py`: reuse that trained checkpoint (or train it once
   when absent), then evaluate a fixed official-test probe under blur, Gaussian noise,
   occlusion, contrast reduction, and rotation at four increasing severities. The atlas

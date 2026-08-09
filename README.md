@@ -478,6 +478,36 @@ diagnostic. For complementary visual examples of the underlying metrics, see the
 [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) and
 [Separatix](https://github.com/NiklasMelton/Separatix) repositories.
 
+#### True 2D bottleneck animation
+
+[`fashion_mnist_embedding_animation.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_embedding_animation.py)
+shows a related question without hiding the geometry behind a projection. Its
+classifier has a genuine linear 2D bottleneck followed by a linear ten-class head,
+so the plotted coordinates are the exact representation consumed by the head—not
+PCA, UMAP, or another post-hoc reduction. A stratified validation subset is held out
+from the Fashion-MNIST training split before training, and every frame reuses those
+same validation points.
+
+Every snapshot scores the exact unaligned 2D bottleneck with raw OverlapIndex
+geometry (`normalize_embeddings=False`). The default display applies a rigid
+alignment only to make successive frames easier to follow; it transforms the
+classifier weights and bias by the same coordinate change, keeping logits and
+decision regions equivalent. Use `--no-align` to display raw model coordinates.
+The output GIF loops forever and is accompanied by a same-stem CSV containing the
+epoch/step, loss, validation accuracy, and raw 2D OverlapIndex history.
+
+```bash
+poetry install -E visuals
+poetry run python examples/fashion_mnist_embedding_animation.py
+```
+
+By default these files are
+`examples/output/fashion_mnist_embedding_evolution.gif` and
+`examples/output/fashion_mnist_embedding_evolution.csv`; set
+`VERTABRAE_EXAMPLE_OUTPUT_DIR` or pass `--output` to choose another destination.
+
+![Fashion-MNIST true 2D bottleneck embedding evolution](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-embedding-evolution.gif)
+
 #### Representation trajectories
 
 Two spatial convolutional representations and the learned 128-dimensional embedding
@@ -631,6 +661,7 @@ Reproduce the visual suites with:
 ```bash
 poetry install -E visuals
 poetry run python examples/fashion_mnist_visual_suite.py
+poetry run python examples/fashion_mnist_embedding_animation.py
 poetry run python examples/fashion_mnist_corruption_atlas.py
 poetry run python examples/fashion_mnist_overfitting.py
 poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5

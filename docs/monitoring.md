@@ -222,6 +222,36 @@ initialization through three epochs at optimizer-step cadence, evaluates only ag
 a stratified held-out validation set, disables Separatix and stability repeats, and
 renders the network architecture beside the layer-wise OverlapIndex trajectories.
 
+#### True 2D bottleneck animation
+
+[`examples/fashion_mnist_embedding_animation.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_embedding_animation.py)
+is a complementary visual workflow for watching a representation organize itself in
+the coordinates the classifier actually sees. The model has a genuine linear 2D
+bottleneck (with no activation after the bottleneck) followed by a linear ten-class
+head; there is no PCA, UMAP, or other post-hoc projection. A stratified validation
+subset is carved out of the Fashion-MNIST training split before training, and every
+frame plots those same held-out points. Each snapshot scores the exact, unaligned 2D
+embedding with raw OverlapIndex geometry by setting
+`normalize_embeddings=False`.
+
+For visual continuity, the default renderer applies only a rigid, display-only
+alignment between successive frames. It applies the corresponding coordinate
+transform to the classifier weights and bias, so the displayed decision regions and
+every classifier logit remain exactly equivalent to the model snapshot. Alignment
+therefore changes neither the OverlapIndex values nor the model; pass `--no-align` to
+see the raw model coordinates. Install the visualization extra and run:
+
+```bash
+poetry install -E visuals
+poetry run python examples/fashion_mnist_embedding_animation.py
+```
+
+The command writes a forever-looping
+`fashion_mnist_embedding_evolution.gif` and a same-stem `.csv` snapshot history to
+`examples/output/` (or `VERTABRAE_EXAMPLE_OUTPUT_DIR`; `--output` chooses another GIF
+path). The CSV records epoch, optimizer step, batch position, training loss,
+validation accuracy, and raw 2D OverlapIndex for each frame.
+
 [`examples/fashion_mnist_corruption_atlas.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_corruption_atlas.py)
 reuses the suite's trained checkpoint as a model-release audit. A fixed, stratified
 official-test probe is evaluated clean and under blur, noise, occlusion, contrast
