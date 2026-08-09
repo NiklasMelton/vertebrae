@@ -478,6 +478,67 @@ diagnostic. For complementary visual examples of the underlying metrics, see the
 [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) and
 [Separatix](https://github.com/NiklasMelton/Separatix) repositories.
 
+#### True 2D bottleneck animation
+
+[`fashion_mnist_embedding_animation.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_embedding_animation.py)
+shows a related question without hiding the geometry behind a projection. Its
+classifier uses a `Linear(3136, 256) -> ReLU -> Linear(256, 128) -> ReLU ->
+Linear(128, 2)` stack before a linear ten-class head. There is deliberately no
+activation after the 2D bottleneck, so the plotted coordinates are the exact
+representation consumed by the head—not PCA, UMAP, or another post-hoc reduction.
+A stratified validation subset is held out from the Fashion-MNIST training split
+before training, and every frame reuses those same validation points. The default
+protocol uses 50,000 training examples
+and a disjoint, fixed 1,000-example validation probe from the 60,000-example
+Fashion-MNIST training split; the official test split stays untouched, leaving
+9,000 training-split rows unused.
+
+Every snapshot scores the exact unaligned 2D bottleneck with raw OverlapIndex
+geometry (`normalize_embeddings=False`). The default display applies a rigid
+alignment only to make successive frames easier to follow; it transforms the
+classifier weights and bias by the same coordinate change, keeping logits and
+decision regions equivalent. Use `--no-align` to display raw model coordinates.
+For each display-only tween, the renderer linearly interpolates the displayed
+embeddings and aligned classifier weights/bias, recomputes OverlapIndex on that
+displayed tween geometry, and computes accuracy from the interpolated head. With
+the default `--interpolation-frames 2`, it inserts two linear tween frames at
+fractions `1/3` and `2/3` between each aligned checkpoint pair. These synthetic frames are labeled `Display
+interpolation` in the overlay and make no claim to be actual model states; set
+`--interpolation-frames 0` for the faster checkpoint-only path (`0` through `4`
+are allowed). Two tweens are the default balance between playback smoothness and
+GIF size; use `--fps` to choose a rate such as 16–24 FPS for your display.
+The overlay is a fixed-size, high-contrast panel with one invariant monospaced
+`STEP …   OVERLAPINDEX …   ACCURACY …` template on both checkpoint and tween
+frames; only its step/OI/accuracy digits change (tween values are interpolated).
+A static footer distinguishes genuine checkpoint metrics from display-only tweens.
+Epoch, batch position, and training loss remain in the CSV rather than moving the
+overlay.
+The output GIF loops forever and is accompanied by a same-stem CSV containing the
+epoch/step, loss, validation accuracy, and raw 2D OverlapIndex history.
+The default run spans five epochs and captures a snapshot every eight optimizer
+batches, including the epoch-end checkpoints. At the nominal 24 FPS, it produces
+126 genuine model checkpoint frames (and 126 CSV rows) plus 250 display-only linear
+tweens, for 376 rendered frames; the measured final-frame hold makes the
+forever-loop last about 16.55 seconds before repeating. It uses AdamW with a default
+learning rate of `0.002`; pass `--learning-rate` to override it. In the checked-in
+default run, the final frame reaches 89.8% validation accuracy and raw 2D
+OverlapIndex `0.793`;
+validation accuracy peaks at 90.3% at an earlier checkpoint. These are run-specific
+observations on this fixed probe, not universal performance claims.
+
+```bash
+poetry install -E visuals
+poetry run python examples/fashion_mnist_embedding_animation.py
+```
+
+By default these files are
+`examples/output/fashion_mnist_embedding_evolution.gif` and
+`examples/output/fashion_mnist_embedding_evolution.csv`; set
+`VERTABRAE_EXAMPLE_OUTPUT_DIR` or pass `--output` to choose another destination.
+The checked-in GIF is approximately 14 MB.
+
+![Fashion-MNIST true 2D bottleneck embedding evolution](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-embedding-evolution.gif)
+
 #### Representation trajectories
 
 Two spatial convolutional representations and the learned 128-dimensional embedding
@@ -631,6 +692,7 @@ Reproduce the visual suites with:
 ```bash
 poetry install -E visuals
 poetry run python examples/fashion_mnist_visual_suite.py
+poetry run python examples/fashion_mnist_embedding_animation.py
 poetry run python examples/fashion_mnist_corruption_atlas.py
 poetry run python examples/fashion_mnist_overfitting.py
 poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
