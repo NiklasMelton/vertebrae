@@ -89,22 +89,47 @@ class DisplaySnapshot:
     embeddings: np.ndarray
     classifier_weight: np.ndarray
     classifier_bias: np.ndarray
+    interpolation: Optional[InterpolationInfo] = None
+
+
+@dataclass(frozen=True)
+class InterpolationInfo:
+    """Provenance for a synthetic display frame between real model checkpoints."""
+
+    start_step: int
+    end_step: int
+    fraction: float
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--train-size", type=int, default=12_000)
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--train-size", type=int, default=50_000)
     parser.add_argument("--validation-size", type=int, default=1_000)
     parser.add_argument("--train-batch-size", type=int, default=256)
     parser.add_argument("--embedding-batch-size", type=int, default=256)
     parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=0.002,
+        help="AdamW learning rate tuned for the compact animation run.",
+    )
+    parser.add_argument(
         "--snapshot-every-batches",
         type=int,
-        default=2,
+        default=8,
         help="Capture the fixed validation probe after this many optimizer steps.",
     )
-    parser.add_argument("--fps", type=float, default=8.0)
+    parser.add_argument(
+        "--interpolation-frames",
+        type=int,
+        default=2,
+        help=(
+            "Display-only linear tween frames inserted between model checkpoints; "
+            "set 0 to disable the extra scoring and rendering work."
+        ),
+    )
+    parser.add_argument("--fps", type=float, default=24.0)
     parser.add_argument(
         "--final-hold-seconds",
         type=float,
@@ -166,7 +191,11 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         download=not args.no_download,
     )
     model = _build_model(torch)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.0001)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=args.learning_rate,
+        weight_decay=0.0001,
+    )
     loss_fn = torch.nn.CrossEntropyLoss()
     scoring_config = _scoring_config(args.seed)
 
@@ -231,6 +260,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             )
 
     display_snapshots = _display_snapshots(snapshots, align=not args.no_align)
+    display_frames = _interpolate_display_snapshots(
+        display_snapshots,
+        validation_y,
+        frames_between=args.interpolation_frames,
+        scoring_config=scoring_config,
+    )
     output_dir = ensure_output_dir()
     output_path = args.output or output_dir / "fashion_mnist_embedding_evolution.gif"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,17 +274,18 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     frame_duration_ms = max(20, int(round(1_000.0 / args.fps)))
     final_hold_frames = max(0, int(round(args.final_hold_seconds * args.fps)))
-    axis_limits = _shared_axis_limits(display_snapshots)
+    axis_limits = _shared_axis_limits(display_frames)
     frames = (
         _render_frame(
             snapshot,
             validation_y,
             axis_limits=axis_limits,
             aligned=not args.no_align,
+            interpolation_enabled=args.interpolation_frames > 0,
             plt=plt,
             image_module=Image,
         )
-        for snapshot in display_snapshots
+        for snapshot in display_frames
     )
     _save_looping_gif(
         frames,
@@ -271,6 +307,7 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         "embedding_batch_size",
         "snapshot_every_batches",
         "fps",
+        "learning_rate",
     )
     for name in positive_options:
         value = getattr(args, name)
@@ -293,6 +330,8 @@ def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error(f"--seed must be between 0 and {np.iinfo(np.uint32).max}")
     if args.output is not None and args.output.suffix.lower() != ".gif":
         parser.error("--output must use a .gif suffix")
+    if not 0 <= args.interpolation_frames <= 4:
+        parser.error("--interpolation-frames must be between 0 and 4")
 
 
 def _build_model(torch: Any) -> Any:
@@ -311,14 +350,20 @@ def _build_model(torch: Any) -> Any:
                 torch.nn.ReLU(),
                 torch.nn.MaxPool2d(kernel_size=2),
             )
+            self.pre_bottleneck = torch.nn.Sequential(
+                torch.nn.Linear(64 * 7 * 7, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, 128),
+                torch.nn.ReLU(),
+            )
             # Deliberately no activation: all of R^2 remains available to the model.
-            self.bottleneck = torch.nn.Linear(64 * 7 * 7, 2)
+            self.bottleneck = torch.nn.Linear(128, 2)
             self.classifier = torch.nn.Linear(2, len(_FASHION_CLASS_NAMES))
 
         def forward(self, values: Any) -> dict[str, Any]:
             images = values.reshape(-1, 1, 28, 28)
             features = self.features(images).flatten(start_dim=1)
-            embedding = self.bottleneck(features)
+            embedding = self.bottleneck(self.pre_bottleneck(features))
             logits = self.classifier(embedding)
             return {"embedding": embedding, "logits": logits}
 
@@ -467,6 +512,70 @@ def _display_snapshots(
     return displayed
 
 
+def _interpolate_display_snapshots(
+    snapshots: Sequence[DisplaySnapshot],
+    labels: np.ndarray,
+    *,
+    frames_between: int,
+    scoring_config: OverlapScoringConfig,
+) -> list[DisplaySnapshot]:
+    """Insert explicitly synthetic linear display frames between checkpoints."""
+
+    if frames_between < 0:
+        raise ValueError("frames_between must be >= 0.")
+    if not snapshots or frames_between == 0:
+        return list(snapshots)
+
+    frames = []
+    labels = np.asarray(labels)
+    for left, right in zip(snapshots[:-1], snapshots[1:]):
+        frames.append(left)
+        for offset in range(1, frames_between + 1):
+            fraction = offset / (frames_between + 1)
+            embeddings = _linear_interpolate(left.embeddings, right.embeddings, fraction)
+            classifier_weight = _linear_interpolate(
+                left.classifier_weight,
+                right.classifier_weight,
+                fraction,
+            )
+            classifier_bias = _linear_interpolate(
+                left.classifier_bias,
+                right.classifier_bias,
+                fraction,
+            )
+            logits = embeddings @ classifier_weight.T + classifier_bias
+            source = EmbeddingSnapshot(
+                epoch=-1,
+                global_step=-1,
+                batch_in_epoch=-1,
+                training_loss=float("nan"),
+                validation_accuracy=float(np.mean(logits.argmax(axis=1) == labels)),
+                overlap_index=_score_embeddings(embeddings, labels, scoring_config),
+                embeddings=embeddings,
+                classifier_weight=classifier_weight,
+                classifier_bias=classifier_bias,
+            )
+            frames.append(
+                DisplaySnapshot(
+                    source=source,
+                    embeddings=embeddings,
+                    classifier_weight=classifier_weight,
+                    classifier_bias=classifier_bias,
+                    interpolation=InterpolationInfo(
+                        start_step=left.source.global_step,
+                        end_step=right.source.global_step,
+                        fraction=fraction,
+                    ),
+                )
+            )
+    frames.append(snapshots[-1])
+    return frames
+
+
+def _linear_interpolate(left: np.ndarray, right: np.ndarray, fraction: float) -> np.ndarray:
+    return (1.0 - fraction) * left + fraction * right
+
+
 def _shared_axis_limits(snapshots: Sequence[DisplaySnapshot]) -> Tuple[float, float, float, float]:
     values = np.concatenate([snapshot.embeddings for snapshot in snapshots], axis=0)
     x_min, y_min = values.min(axis=0)
@@ -476,17 +585,34 @@ def _shared_axis_limits(snapshots: Sequence[DisplaySnapshot]) -> Tuple[float, fl
     return x_min - x_pad, x_max + x_pad, y_min - y_pad, y_max + y_pad
 
 
+def _frame_overlay_text(snapshot: DisplaySnapshot) -> str:
+    if snapshot.interpolation is None:
+        step = float(snapshot.source.global_step)
+    else:
+        interpolation = snapshot.interpolation
+        step = (1.0 - interpolation.fraction) * interpolation.start_step + (
+            interpolation.fraction * interpolation.end_step
+        )
+    return (
+        f"STEP {step:06.1f}   "
+        f"OVERLAPINDEX {snapshot.source.overlap_index:.3f}   "
+        f"ACCURACY {snapshot.source.validation_accuracy:6.1%}"
+    )
+
+
 def _render_frame(
     snapshot: DisplaySnapshot,
     labels: np.ndarray,
     *,
     axis_limits: Tuple[float, float, float, float],
     aligned: bool,
+    interpolation_enabled: bool,
     plt: Any,
     image_module: Any,
 ) -> Any:
     from matplotlib.colors import ListedColormap, to_rgb
     from matplotlib.lines import Line2D
+    from matplotlib.patches import FancyBboxPatch
 
     x_min, x_max, y_min, y_max = axis_limits
     with plt.rc_context(
@@ -536,7 +662,6 @@ def _render_frame(
                 label=class_name,
             )
 
-        source = snapshot.source
         axis.set_xlim(x_min, x_max)
         axis.set_ylim(y_min, y_max)
         axis.set_aspect("equal", adjustable="box")
@@ -550,26 +675,29 @@ def _render_frame(
             fontweight="semibold",
             pad=14,
         )
+        panel = FancyBboxPatch(
+            (0.012, 0.92),
+            0.75,
+            0.065,
+            boxstyle="round,pad=0.01",
+            transform=axis.transAxes,
+            facecolor="white",
+            edgecolor="#CBD5E1",
+            linewidth=1.0,
+            alpha=0.94,
+            zorder=5,
+        )
+        axis.add_patch(panel)
         axis.text(
-            0.01,
-            0.99,
-            (
-                f"Epoch {source.epoch}  •  optimizer step {source.global_step}\n"
-                f"OverlapIndex  {source.overlap_index:.3f}  •  "
-                f"validation accuracy  {source.validation_accuracy:.1%}  •  "
-                f"training loss  {source.training_loss:.3f}"
-            ),
+            0.027,
+            0.952,
+            _frame_overlay_text(snapshot),
             transform=axis.transAxes,
             ha="left",
-            va="top",
-            fontsize=10.5,
-            linespacing=1.5,
-            bbox={
-                "boxstyle": "round,pad=0.55",
-                "facecolor": "white",
-                "edgecolor": "#CBD5E1",
-                "alpha": 0.94,
-            },
+            va="center",
+            fontsize=10.0,
+            family="DejaVu Sans Mono",
+            zorder=6,
         )
         handles = [
             Line2D(
@@ -594,18 +722,25 @@ def _render_frame(
             handletextpad=0.25,
             columnspacing=0.9,
         )
-        alignment_note = (
-            "rigidly aligned display and head"
-            if aligned
-            else "raw model coordinates"
-        )
+        alignment_note = "rigid display alignment" if aligned else "raw-coordinate display"
+        if interpolation_enabled:
+            footer_text = (
+                "Fixed held-out points  •  checkpoint frames/metrics are genuine  •  "
+                "tween frames/metrics are display-only\n"
+                f"Metrics match plotted geometry/head  •  {alignment_note}  •  "
+                "background = displayed prediction"
+            )
+        else:
+            footer_text = (
+                "Fixed held-out points  •  checkpoint frames/metrics are genuine  •  "
+                "checkpoint-only rendering\n"
+                f"Metrics match plotted geometry/head  •  {alignment_note}  •  "
+                "background = displayed prediction"
+            )
         figure.text(
             0.5,
             0.018,
-            (
-                "Fixed held-out points  •  exact model bottleneck  •  "
-                f"{alignment_note}\nBackground = classifier prediction"
-            ),
+            footer_text,
             ha="center",
             va="bottom",
             fontsize=8.5,
