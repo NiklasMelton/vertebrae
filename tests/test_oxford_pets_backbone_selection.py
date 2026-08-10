@@ -448,6 +448,8 @@ def test_model_recipes_are_lazy_and_expose_expected_layers():
     assert [spec.name for spec in extractors[3].output_specs()] == ["final_image"]
     assert extractors[0].processor_kwargs == {"use_fast": False}
     assert extractors[1].processor_kwargs == {"use_fast": False}
+    assert extractors[0].model_kwargs == {}
+    assert extractors[1].model_kwargs == {"add_pooling_layer": False}
 
 
 def test_candidate_ranking_uses_clean_overlap_not_test_accuracy_or_shift():

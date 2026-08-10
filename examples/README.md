@@ -35,6 +35,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/keras_local_model.
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/onnx_extractor.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/hf_multimodal_image_text.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/caltech101_vision_foundation_models.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/food101_nonlinear_backbone_bridge.py
 ```
 
 Each script writes reports to `examples/output/`.
@@ -207,6 +208,61 @@ Each script writes reports to `examples/output/`.
   backbone-selection`; the first run downloads the dataset and requested checkpoints.
   Use `--replot-from examples/output/oxford_pets_backbone_selection.json` to regenerate
   the figures without rerunning feature extraction or head training.
+- `food101_nonlinear_backbone_bridge.py`: run the independent Food-101 Q1
+  confirmatory experiment. The frozen panel is the alphabetical first 40 classes,
+  with five paired replicates, disjoint official-train selector/development cohorts
+  (80 and 52 images per class), a fixed 52-image-per-class official-test reference
+  cohort, and nested selector budgets `(64, 68, 72, 80)`. Split-local donor,
+  mode, and nuisance banks are copied for each backbone; Q1 compares baseline,
+  full-nonlinearity, and full-nuisance arms. Five-fold cross-fitted OverlapIndex
+  (`k=10`) is paired with a fixed five-fold out-of-fold L2 logistic probe. Fixed
+  quadratic, linear, cosine `k=15` kNN, and RBF heads are evaluated on the reference
+  rows, with quadratic primary. The detailed protocol and artifact schema are in the
+  [scoring guide](../docs/scoring.md#food-101-nonlinear-backbone-experiment-q1-confirmatory-protocol).
+  Run it with:
+
+  ```bash
+  poetry install -E backbone-selection
+  poetry run python examples/food101_nonlinear_backbone_bridge.py
+  ```
+
+  Regenerate the README figure from the tracked
+  `examples/assets/food101_overlap_vs_linear_probe_story_summary.json` (or pass a
+  completed result artifact with `--results`):
+
+  ```bash
+  poetry run python examples/plot_food101_overlap_vs_linear_probe_story.py
+  ```
+
+  The plot writes `../img/visuals/food101-overlap-vs-linear-probe-story.png` and
+  `.svg`. Its runtime panel compares summed selector scoring-call time across 120
+  paired calls per replicate; shared feature extraction and downstream-head evaluation
+  are excluded. Existing `food101_nonlinear_backbone_bridge_*` filenames and artifact
+  stems remain technical identifiers; no universal claim is implied by this experiment.
+- `food101_selector_runtime_scaling.py`: run the separate post-hoc Food-101 selector
+  runtime diagnostic from completed embedding and label manifests. The default nested
+  grid is `64, 128, 256, 512, 640` samples per class, paired five-fold cross-fitted
+  OverlapIndex (`k=10`) against a five-fold out-of-fold L2 probe across ten frozen
+  backbones and five timing repeats. It is intentionally serial/one-thread so worker
+  contention cannot enter per-call timings; cache loading, subset materialization,
+  imports, warmup, extraction, and downstream-head evaluation are excluded. Artifacts
+  always set `claim_supported=false`. With a completed Food-101 experiment cohort
+  and its local cache, run and plot it with:
+
+  ```bash
+  poetry run python examples/food101_selector_runtime_scaling.py --output-dir examples/output
+  poetry run python examples/plot_food101_selector_runtime_scaling.py
+  ```
+
+  The driver validates the unique cohort/cache identity and writes configuration-hashed
+  planned/completed/failed JSON plus per-backbone checkpoints, printing progress outside
+  timed intervals. `--resume` reuses validated checkpoints. Explicit repeated
+  `--embedding-manifest` and `--labels-manifest` paths support exploratory panels.
+  The figure shows elapsed time with paired-cell spread and median/IQR
+  probe/OverlapIndex speedup. In the completed canonical run, the paired median
+  speedup rose from `0.70×` at 2,560 embeddings to `2.00×` at 25,600 embeddings;
+  the tracked compact summary is
+  `assets/food101_selector_runtime_scaling_summary.json`.
 - `zero_shot_transfer_structure.py`: flagship CIFAR-10 OpenCLIP experiment that
   encodes images once, varies only explicit text prompt sets, and contrasts fixed
   global/per-class OverlapIndex with prompt-sensitive zero-shot accuracy/F1. Requires
@@ -220,8 +276,10 @@ embeddings, graph models, and hosted embedding APIs. Those integrations are
 covered in unit tests with fake modules today; dedicated runnable example
 scripts can be added as the public ergonomics settle.
 
-The examples configure small `k` values and a few stability repeats so they finish
-quickly while still exercising the real MiniBatchKMeans-backed OverlapIndex path.
+Most compact examples configure small `k` values and a few stability repeats so they
+finish quickly while still exercising the real MiniBatchKMeans-backed OverlapIndex
+path. The Food-101 protocol is intentionally a substantial multi-backbone run; use
+its documented checkpoints and resume controls when running the full analysis.
 
 Run the Hugging Face vision example after installing optional dependencies:
 

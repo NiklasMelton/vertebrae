@@ -11,6 +11,7 @@ from vertebrae.config import ContinuousOverlapScoringConfig, OverlapScoringConfi
 from vertebrae.utils.labels import (
     MULTI_LABEL_TARGET,
     REGRESSION_TARGET,
+    SINGLE_LABEL_TARGET,
     class_counts,
     display_label,
     multilabel_indicator,
@@ -190,6 +191,193 @@ class OverlapIndexScorer:
             normalized_labels,
             label_metadata,
             seed=seed,
+        )
+
+    def score_cross_fitted(
+        self,
+        Z: Any,
+        y: Any,
+        *,
+        n_splits: int = 5,
+        seed: Optional[int] = None,
+        label_names: Optional[Any] = None,
+        label_catalog: Optional[Any] = None,
+    ) -> OverlapScoreResult:
+        """Score held-out rows against fold-fitted classification prototypes.
+
+        Each stratified fold fits a fresh MiniBatchKMeans-backed OverlapIndex on
+        its training rows and evaluates overlap events on its held-out rows via
+        the upstream ``score_fixed`` API. Fold macro scores and diagnostics are
+        then averaged. This method intentionally supports single-label
+        classification only; regression and multi-label targets require
+        different fold aggregation semantics.
+        """
+        if isinstance(n_splits, bool) or not isinstance(n_splits, Integral):
+            raise TypeError("n_splits must be an integer >= 2.")
+        if int(n_splits) < 2:
+            raise ValueError("n_splits must be >= 2.")
+
+        embeddings = ensure_numeric_matrix(Z, "embeddings", allow_sparse=True)
+        normalized_labels, label_metadata = normalize_targets(
+            y,
+            label_names=label_names,
+            target_type="auto",
+        )
+        if label_metadata["target_type"] != SINGLE_LABEL_TARGET:
+            raise ValueError("score_cross_fitted supports single-label classification only.")
+        labels = np.asarray(semantic_label_keys(normalized_labels.tolist()), dtype=object)
+        if embeddings.shape[0] != labels.shape[0]:
+            raise ValueError(
+                "embeddings and labels must have the same length; "
+                f"got {embeddings.shape[0]} and {labels.shape[0]}."
+            )
+        if labels.shape[0] == 0:
+            raise ValueError("score_cross_fitted requires at least one sample; got empty inputs.")
+
+        counts = class_counts(normalized_labels)
+        smallest_class = min(counts.values())
+        if smallest_class < int(n_splits):
+            raise ValueError(
+                "Each class must contain at least n_splits samples for stratified "
+                f"cross-fitting; smallest class has {smallest_class}, "
+                f"n_splits={int(n_splits)}."
+            )
+
+        config = _coerce_classification_config(self.config)
+        sparse_input = is_sparse_matrix(embeddings)
+        if config.normalize_embeddings:
+            embeddings = l2_normalize_rows(embeddings)
+
+        from sklearn.model_selection import StratifiedKFold
+
+        splitter = StratifiedKFold(
+            n_splits=int(n_splits),
+            shuffle=True,
+            random_state=seed,
+        )
+        OverlapIndex = _load_overlap_index()
+        fold_rows: List[Dict[str, Any]] = []
+        fold_scores: List[float] = []
+        fold_weighted_scores: List[float] = []
+        per_class_values: Dict[Any, List[float]] = {}
+        pairwise_values: Dict[Any, List[float]] = {}
+        sparse_adjacency: Dict[Any, int] = {}
+        fold_k_values: List[Dict[Any, int]] = []
+        warnings: List[str] = []
+
+        for fold, (train_indices, holdout_indices) in enumerate(
+            splitter.split(np.zeros(labels.shape[0], dtype=np.uint8), labels)
+        ):
+            fold_seed = None if seed is None else int(seed) + int(fold)
+            train_labels = labels[train_indices]
+            train_original_labels = normalized_labels[train_indices]
+            k_per_class, k_warnings = resolve_kmeans_k(
+                train_original_labels,
+                config,
+                return_warnings=True,
+            )
+            warnings.extend(f"Fold {fold}: {message}" for message in k_warnings)
+            fold_k_values.append(k_per_class)
+            kmeans_kwargs = dict(config.kmeans_kwargs or {})
+            if fold_seed is not None:
+                kmeans_kwargs["random_state"] = fold_seed
+            backend_excluded_classes = config.exclude_classes
+            if backend_excluded_classes is not None:
+                backend_excluded_classes = _semantic_excluded_classes(backend_excluded_classes)
+            index = _instantiate_with_supported_kwargs(
+                OverlapIndex,
+                {
+                    "model_type": "MiniBatchKMeans",
+                    "kmeans_k": k_per_class,
+                    "kmeans_kwargs": kmeans_kwargs,
+                    "offline_chunk_size": config.offline_chunk_size,
+                    "exclude_classes": backend_excluded_classes,
+                },
+            )
+            if not hasattr(index, "score_fixed"):
+                raise RuntimeError(
+                    "Cross-fitted overlap requires an OverlapIndex version exposing "
+                    "score_fixed(X, y). Install an OverlapIndex version that provides "
+                    "this API."
+                )
+            fold_warnings: List[str] = []
+            with _capture_runtime_warnings(fold_warnings):
+                index.fit(embeddings[train_indices], train_labels)
+                raw_score = index.score_fixed(
+                    embeddings[holdout_indices],
+                    labels[holdout_indices],
+                )
+            warnings.extend(f"Fold {fold}: {message}" for message in fold_warnings)
+            macro_score = _extract_macro_score(index, raw_score)
+            weighted_score = _extract_optional_score(getattr(index, "weighted_index", None))
+            fold_scores.append(macro_score)
+            fold_weighted_scores.append(macro_score if weighted_score is None else weighted_score)
+            for label, value in getattr(index, "singleton_index", {}).items():
+                per_class_values.setdefault(label, []).append(float(value))
+            for pair, value in getattr(index, "pairwise_index", {}).items():
+                if np.isfinite(value):
+                    pairwise_values.setdefault(pair, []).append(float(value))
+            for pair, value in getattr(index, "sparse_adj", {}).items():
+                sparse_adjacency[pair] = sparse_adjacency.get(pair, 0) + int(value)
+            fold_rows.append(
+                {
+                    "fold": int(fold),
+                    "train_size": int(train_indices.size),
+                    "holdout_size": int(holdout_indices.size),
+                    "seed": fold_seed,
+                    "score": macro_score,
+                    "weighted_score": weighted_score,
+                    "k_per_class": make_json_safe(k_per_class),
+                    "warnings": fold_warnings,
+                }
+            )
+
+        resolved_k = {
+            label: min(int(fold_k[label]) for fold_k in fold_k_values) for label in fold_k_values[0]
+        }
+        catalog = list(label_catalog or label_metadata.get("label_catalog") or [])
+        if not catalog:
+            catalog = semantic_label_catalog(normalized_labels.tolist())
+        excluded_class_keys = semantic_label_keys(
+            _normalized_excluded_classes(config.exclude_classes)
+        )
+        excluded_key_set = set(excluded_class_keys)
+        observed_classes = list(target_summary(normalized_labels)["class_counts"])
+        included_classes = [label for label in observed_classes if label not in excluded_key_set]
+        return OverlapScoreResult(
+            score=float(np.mean(fold_scores)),
+            macro_score=float(np.mean(fold_scores)),
+            weighted_score=float(np.mean(fold_weighted_scores)),
+            per_class_scores=make_json_safe(
+                {label: float(np.mean(values)) for label, values in per_class_values.items()}
+            ),
+            pairwise_scores=make_json_safe(
+                {pair: float(np.mean(values)) for pair, values in pairwise_values.items()}
+            ),
+            sparse_adjacency=make_json_safe(sparse_adjacency),
+            class_counts=counts,
+            k_per_class=resolved_k,
+            warnings=warnings,
+            metadata={
+                "backend": "MiniBatchKMeans",
+                "score_kind": "classification_overlap_cross_fitted",
+                "score_label": "overlap_macro",
+                "normalize_embeddings": config.normalize_embeddings,
+                "offline_chunk_size": config.offline_chunk_size,
+                "seed": seed,
+                "sparse_input": sparse_input,
+                "scoring_input_format": "csr" if sparse_input else "dense",
+                "target_type": label_metadata["target_type"],
+                "label_catalog": catalog,
+                "exclude_classes": excluded_class_keys,
+                "aggregation_classes": make_json_safe(included_classes),
+                "aggregate_valid": bool(included_classes),
+                "cross_fit": {
+                    "n_splits": int(n_splits),
+                    "aggregation": "mean_fold_macro",
+                    "folds": fold_rows,
+                },
+            },
         )
 
     def _score_classification(

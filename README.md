@@ -45,7 +45,7 @@ This makes OverlapIndex useful for questions such as:
 - During training or deployment shift, does useful geometry degrade before the
   headline model metric moves?
 
-### Separable does not necessarily mean linearly separable
+## Why not just use a linear probe?
 
 One common way to evaluate a pretrained backbone is to freeze it and train a linear
 head on the target task. This is an inexpensive and useful baseline, but a weak linear
@@ -53,23 +53,51 @@ result only shows that the target structure was not readily accessible through t
 linear decision rule and training protocol. It does not prove that the embedding lacks
 useful separation.
 
-Classes can be well separated while requiring curved, local, or otherwise nonlinear
-boundaries. OverlapIndex helps determine whether that separation exists. When it does,
-[Separatix](https://github.com/NiklasMelton/Separatix) provides evidence
-about whether a linear model is likely sufficient or whether nonlinear approaches are
-worth testing. Together, they help distinguish a poor representation from a promising
-representation whose geometry is simply non-trivial.
+That separation may follow curved, local, or multimodal boundaries. OverlapIndex helps
+determine whether it exists without committing the evaluation to a particular
+downstream head. When it does,
+[Separatix](https://github.com/NiklasMelton/Separatix) provides evidence about whether
+a linear model is likely sufficient or whether nonlinear approaches are worth testing.
+Together, they help distinguish a poor representation from a promising representation
+whose geometry is simply non-trivial.
 
-Vertebrae integrates Separatix `0.1.1` or newer. Its machine-readable guidance uses
-one canonical vocabulary across classification, multi-label, and regression targets:
-`linear_likely_sufficient`, `smooth_nonlinear_recommended`,
-`kernel_or_local_recommended`, `high_capacity_or_partitioning_recommended`,
-`feedforward_mlp_recommended`, `feature_or_target_bottleneck_likely`,
-`insufficient_data_or_unreliable_geometry`, and `inconclusive`. The label is
-shared, while the rendered headline and suggested models remain target-specific.
+The tools are complementary:
 
-Separatix remains a diagnostic. Its probe evidence does not change the OverlapIndex
-score or the default ranking, and neither diagnostic guarantees downstream performance.
+| Tool | Practical question |
+| --- | --- |
+| Linear probe | Can this representation be decoded by the linear head I trained? |
+| OverlapIndex | Does the representation organize the labeled data into distinct regions? |
+| Separatix | What level of downstream decision-boundary complexity is worth trying? |
+
+The Food-101 example below shows why the distinction can matter. A linear probe and
+OverlapIndex agree when target structure is readily linear. When useful structure is
+nonlinear, OverlapIndex can recommend better backbones; when the geometry is dominated
+by irrelevant nuisance structure, it can also be misled. The lesson is not that one
+score always wins, but that a linear probe should not be treated as a complete audit of
+the representation.
+
+![Food-101 comparison showing that OverlapIndex and the linear probe agree on baseline geometry, diverge under label-relevant nonlinearity, reverse under irrelevant nuisance, and that OverlapIndex uses less selector compute](img/visuals/food101-overlap-vs-linear-probe-story.png)
+
+The practical workflow is to treat the two diagnostics as complementary:
+
+| Diagnostic pattern | Practical interpretation |
+| --- | --- |
+| OverlapIndex high, probe high | Strong class organization that is also linearly accessible. |
+| OverlapIndex high, probe lower | Nonlinear or multimodal transfer potential may be hidden from a linear decoder. |
+| Probe high, OverlapIndex lower | A linear head works, but broader geometry may be fragmented or nuisance-sensitive. |
+| Both low | The representation is a weak candidate for this target under the evaluated protocol. |
+
+Use OverlapIndex to compare or shortlist representations before committing to a head.
+Use a linear probe when linear-head behavior is the deployment objective. When the
+scores disagree, inspect the geometry and validate a small set of appropriate head
+families instead of assuming either score is universally correct.
+
+> **Takeaway:** a linear probe evaluates one way of reading a representation;
+> OverlapIndex evaluates how the labeled representation is organized.
+
+Neither diagnostic replaces held-out downstream validation. See the
+[scoring guide](docs/scoring.md) for configuration, interpretation, and detailed
+experimental evidence.
 
 ### What OverlapIndex can and cannot tell you
 
@@ -422,11 +450,10 @@ for a more realistic DINOv2/ViT workflow.
 
 ## Practical diagnostic stories
 
-The examples below make the opening distinction concrete. Each visual treats
-OverlapIndex as evidence about representation geometry and pairs it with an independent
-behavioral metric, controlled comparison, or intervention whenever the claim extends
-beyond geometry. Together they show not only which representation is stronger, but
-where structure appears, what it aligns with, and how that changes the next experiment.
+The examples below show how representation geometry can guide practical decisions:
+which layer to use, where a distribution shift first causes damage, whether a model
+learned a shortcut, and which backbone or downstream head to try next. Full protocols
+and result tables live in the linked guides and runnable scripts.
 
 ### Representation monitoring during training
 
@@ -478,66 +505,27 @@ diagnostic. For complementary visual examples of the underlying metrics, see the
 [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) and
 [Separatix](https://github.com/NiklasMelton/Separatix) repositories.
 
-#### True 2D bottleneck animation
+#### Watch a representation take shape
 
 [`fashion_mnist_embedding_animation.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_embedding_animation.py)
-shows a related question without hiding the geometry behind a projection. Its
-classifier uses a `Linear(3136, 256) -> ReLU -> Linear(256, 128) -> ReLU ->
-Linear(128, 2)` stack before a linear ten-class head. There is deliberately no
-activation after the 2D bottleneck, so the plotted coordinates are the exact
-representation consumed by the head—not PCA, UMAP, or another post-hoc reduction.
-A stratified validation subset is held out from the Fashion-MNIST training split
-before training, and every frame reuses those same validation points. The default
-protocol uses 50,000 training examples
-and a disjoint, fixed 1,000-example validation probe from the 60,000-example
-Fashion-MNIST training split; the official test split stays untouched, leaving
-9,000 training-split rows unused.
+trains a Fashion-MNIST classifier through a true two-dimensional bottleneck. The
+points in the animation are the exact features consumed by the linear head—not a
+PCA or UMAP projection—so the figure shows class geometry and validation accuracy
+developing together on the same fixed, held-out examples.
 
-Every snapshot scores the exact unaligned 2D bottleneck with raw OverlapIndex
-geometry (`normalize_embeddings=False`). The default display applies a rigid
-alignment only to make successive frames easier to follow; it transforms the
-classifier weights and bias by the same coordinate change, keeping logits and
-decision regions equivalent. Use `--no-align` to display raw model coordinates.
-For each display-only tween, the renderer linearly interpolates the displayed
-embeddings and aligned classifier weights/bias, recomputes OverlapIndex on that
-displayed tween geometry, and computes accuracy from the interpolated head. With
-the default `--interpolation-frames 2`, it inserts two linear tween frames at
-fractions `1/3` and `2/3` between each aligned checkpoint pair. These synthetic frames are labeled `Display
-interpolation` in the overlay and make no claim to be actual model states; set
-`--interpolation-frames 0` for the faster checkpoint-only path (`0` through `4`
-are allowed). Two tweens are the default balance between playback smoothness and
-GIF size; use `--fps` to choose a rate such as 16–24 FPS for your display.
-The overlay is a fixed-size, high-contrast panel with one invariant monospaced
-`STEP …   OVERLAPINDEX …   ACCURACY …` template on both checkpoint and tween
-frames; only its step/OI/accuracy digits change (tween values are interpolated).
-A static footer distinguishes genuine checkpoint metrics from display-only tweens.
-Epoch, batch position, and training loss remain in the CSV rather than moving the
-overlay.
-The output GIF loops forever and is accompanied by a same-stem CSV containing the
-epoch/step, loss, validation accuracy, and raw 2D OverlapIndex history.
-The default run spans five epochs and captures a snapshot every eight optimizer
-batches, including the epoch-end checkpoints. At the nominal 24 FPS, it produces
-126 genuine model checkpoint frames (and 126 CSV rows) plus 250 display-only linear
-tweens, for 376 rendered frames; the measured final-frame hold makes the
-forever-loop last about 16.55 seconds before repeating. It uses AdamW with a default
-learning rate of `0.002`; pass `--learning-rate` to override it. In the checked-in
-default run, the final frame reaches 89.8% validation accuracy and raw 2D
-OverlapIndex `0.793`;
-validation accuracy peaks at 90.3% at an earlier checkpoint. These are run-specific
-observations on this fixed probe, not universal performance claims.
+The display aligns successive checkpoints to avoid distracting rotations without
+changing the classifier's decisions. Frames labeled **Display interpolation** only
+smooth the animation and are not trained model states; the accompanying CSV retains
+the raw checkpoint metrics. In the checked-in run, the final bottleneck reaches raw
+OverlapIndex `0.793` and `89.8%` validation accuracy. Those values illustrate one
+run rather than a general performance claim.
+
+![Fashion-MNIST true 2D bottleneck embedding evolution](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-embedding-evolution.gif)
 
 ```bash
 poetry install -E visuals
 poetry run python examples/fashion_mnist_embedding_animation.py
 ```
-
-By default these files are
-`examples/output/fashion_mnist_embedding_evolution.gif` and
-`examples/output/fashion_mnist_embedding_evolution.csv`; set
-`VERTABRAE_EXAMPLE_OUTPUT_DIR` or pass `--output` to choose another destination.
-The checked-in GIF is approximately 14 MB.
-
-![Fashion-MNIST true 2D bottleneck embedding evolution](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-embedding-evolution.gif)
 
 #### Representation trajectories
 
@@ -687,7 +675,26 @@ exact-class label views before and after training.
 
 ![Fashion-MNIST layer by label hierarchy OverlapIndex heatmaps before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/fashion-mnist-hierarchy-heatmap.png)
 
-Reproduce the visual suites with:
+#### Tiny Shakespeare transformer representations
+
+[`tiny_shakespeare_transformer_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/tiny_shakespeare_transformer_visual_suite.py)
+extends the same monitoring pattern to a character GPT. It tracks named hidden states
+against a fixed next-character probe while language-model loss and accuracy remain
+separate behavioral measures. In the checked 5,000-step run, validation cross-entropy
+falls from `4.1555` to `1.6097` while final-block macro OverlapIndex rises from `0.173`
+to `0.351`, localizing most of the learned target geometry to the transformer blocks.
+
+![Tiny Shakespeare causal GPT architecture, layer-wise OverlapIndex trajectories, and validation cross-entropy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-representation-monitoring.png)
+
+![Tiny Shakespeare compression frontier](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-compression-frontier.png)
+
+![Tiny Shakespeare next-token heatmap](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-next-token-heatmap.png)
+
+The [monitoring guide](docs/monitoring.md#hierarchical-fashion-mnist-and-tiny-shakespeare)
+contains the full data split, support rules, compression results, and reproduction
+profiles.
+
+Reproduce these monitoring examples with:
 
 ```bash
 poetry install -E visuals
@@ -696,102 +703,66 @@ poetry run python examples/fashion_mnist_embedding_animation.py
 poetry run python examples/fashion_mnist_corruption_atlas.py
 poetry run python examples/fashion_mnist_overfitting.py
 poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
+poetry run python examples/tiny_shakespeare_transformer_visual_suite.py
 ```
 
-#### Backbone and downstream-head selection
+### Choosing backbones and downstream heads
 
 [`oxford_pets_backbone_selection.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/oxford_pets_backbone_selection.py)
-turns representation diagnostics into a controlled model-selection decision. It
-compares frozen supervised, self-supervised, efficient, and image-text-pretrained
-vision backbones on disjoint Oxford-IIIT Pet head-training, representation-selection,
-head-validation, and final-test roles. Trimap annotations create foreground-only and
-balanced background-swapped probes. DINOv2 and DeiT expose quarter-, middle-, late-,
-and final-block CLS representations, adding lower-quality transfer candidates without
-extra image forward passes.
-
-**Headline:** representation quality and head complexity are separate decisions.
-Vertebrae first measures whether a frozen representation organizes the target usefully;
-Separatix then diagnoses the minimum credible family for the downstream boundary. The
-result is not merely a backbone leaderboard: it distinguishes missing representation
-quality from avoidable downstream complexity.
-
-**1. Screen frozen representations before committing to a downstream model.** The
-backbone/layer ranking uses clean breed OverlapIndex on the representation-selection
-split; final test accuracy is never consulted. The same standardized linear head is used
-only as a retrospective behavioral check so that head-family choice cannot explain the
-differences between points.
+shows the two decisions separately: use OverlapIndex to shortlist frozen backbone
+outputs, then use Separatix to decide which downstream family is worth testing. On
+Oxford-IIIT Pet, the representation ranking tracks held-out transfer quality while the
+head guidance distinguishes genuinely nonlinear structure from a relationship that can
+be made linear with better features.
 
 ![Oxford-IIIT Pet clean breed OverlapIndex versus held-out standardized linear-head accuracy across frozen backbone outputs](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/oxford-pets-overlap-vs-head-accuracy.png)
 
-Across eleven frozen outputs, clean breed OverlapIndex has a descriptive Spearman
-correlation of `0.95` with held-out linear-head accuracy. ConvNeXt-Tiny ranks first by
-OverlapIndex and reaches `0.931` test accuracy; DINOv2-Small's final CLS output follows
-closely at `0.926`. Early and middle transformer outputs provide deliberately weak
-controls. The absolute OverlapIndex value is not an accuracy estimate—the useful result
-is that representation geometry orders downstream transfer quality without using the
-test outcome or committing the ranking to a tuned head.
-
-**2. Treat nonlinear guidance as a diagnosis, not automatically as a request for a
-bigger model.** The same cached embeddings are reused for balanced same-breed
-verification with different-breed, same-species hard negatives. With raw endpoint
-concatenation, `[left, right]`, the comparison itself is hidden from a linear readout.
-With interaction-aware composition, `[abs(left - right), left * right]`, the relevant
-relationship is made explicit.
+The second plot shows the practical payoff: exposing difference and product features
+can turn an apparently nonlinear comparison into one that a simple linear head handles
+well. Try a clearer task representation before automatically paying for a larger head.
 
 ![Oxford-IIIT Pet held-out relational head-family accuracy for raw concatenation and interaction-aware pair composition](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/oxford-pets-relational-composition-heads.png)
-
-For raw concatenation, Separatix recommends smooth nonlinearity in all nine conclusive
-cases, and a smooth-nonlinear family is retrospectively the simplest near-best choice for
-ten of eleven outputs. After adding explicit interactions, Separatix recommends a linear
-family in nine of ten conclusive cases, while linear is retrospectively simplest
-near-best in ten of eleven. The composition change improves mean linear balanced
-accuracy by `0.195`. For example, DINOv2-Small's final output moves from `0.497` linear
-accuracy under concatenation—versus `0.814` with a smooth-nonlinear head—to `0.885` with
-an interaction-aware linear head.
-
-Separatix sees only the combined non-test development pairs. Every family is rebuilt
-from its exact versioned Separatix recipe and evaluated once on untouched test pairs. In
-the heatmap, the orange border is the selected deployment family, orange dots are the
-plausible core families, and the star is the retrospective simplest family within `0.02`
-of the best observed test score. The star never participates in selection. Across the
-nineteen conclusive cases, the selected family is test-near-best in `16/19`, its plausible
-set covers the retrospective near-best family in `17/19`, and mean selected-family test
-regret is `0.013` balanced accuracy.
-
-Together, the figures show the intended workflow: use representation geometry to find
-where target information is accessible, then use family guidance to decide whether to
-increase head complexity or expose the task relationship more directly. The script also
-writes target-view, background-intervention, and recommendation-audit results as
-supporting diagnostics without making them part of the headline claim.
 
 ```bash
 poetry install -E backbone-selection
 poetry run python examples/oxford_pets_backbone_selection.py
 ```
 
-#### Tiny Shakespeare transformer representations
+#### Food-101: when nonlinear geometry matters
 
-[`tiny_shakespeare_transformer_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/tiny_shakespeare_transformer_visual_suite.py)
-trains a character GPT on the first 90% of a checksum-pinned corpus. The next 5%
-supplies both a fixed, class-balanced next-character representation probe and naturally
-distributed language-model validation; the final 5% remains untouched. Named hidden
-states are evaluated at initialization and throughout training, while cross-entropy,
-perplexity, and accuracy remain separate behavior metrics.
+[`food101_nonlinear_backbone_bridge.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/food101_nonlinear_backbone_bridge.py) is
+the runnable example behind the opening story. It compares a linear probe with
+OverlapIndex while fixed linear, quadratic, kNN, and RBF heads provide independent
+downstream checks. The useful pattern is simple: the methods agree on easy linear
+geometry, but OverlapIndex is better able to surface useful nonlinear organization.
+The nuisance control is a reminder to validate the shortlisted model on the real task.
 
-![Tiny Shakespeare causal GPT architecture, layer-wise OverlapIndex trajectories, and validation cross-entropy](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-representation-monitoring.png)
+See the [scoring guide](docs/scoring.md#food-101-nonlinear-backbone-experiment-q1-confirmatory-protocol)
+for the full methodology and results.
 
-In the checked 5,000-step CPU run, validation cross-entropy falls from `4.1555` to
-`1.6097`, top-1 accuracy rises from `0.8%` to `51.6%`, and final-block macro OI rises
-from `0.173` to `0.351`. Token-plus-position changes little, localizing learned
-next-character geometry to the transformer blocks.
+```bash
+poetry install -E backbone-selection
+poetry run python examples/food101_nonlinear_backbone_bridge.py
+poetry run python examples/plot_food101_overlap_vs_linear_probe_story.py
+```
 
-![Tiny Shakespeare final-representation PCA and quantization frontier](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-compression-frontier.png)
+#### Selector cost as the dataset grows
 
-![Tiny Shakespeare complete per-character OverlapIndex heatmap before and after training](https://raw.githubusercontent.com/NiklasMelton/vertebrae/develop/img/visuals/tiny-shakespeare-next-token-heatmap.png)
+[`food101_selector_runtime_scaling.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/food101_selector_runtime_scaling.py)
+compares the cost of scoring the same frozen embeddings. A linear probe is faster on
+the smallest panel; OverlapIndex catches up as the dataset grows and reaches a **2×
+median speedup at 25,600 embeddings** in this Food-101 run.
 
-The [monitoring guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md#hierarchical-fashion-mnist-and-tiny-shakespeare)
-documents the fast and quality profiles, probe support rules, device selection,
-reproduction commands, and complete outputs.
+![Food-101 selector scoring time and paired probe-over-OverlapIndex speedup as the nested evaluation set grows](img/visuals/food101-selector-runtime-scaling.png)
+
+The crossover depends on hardware, feature dimension, class count, and implementation,
+so benchmark on your own embeddings when runtime matters. The script and tracked
+[summary](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/assets/food101_selector_runtime_scaling_summary.json) make that easy.
+
+```bash
+poetry run python examples/food101_selector_runtime_scaling.py --output-dir examples/output
+poetry run python examples/plot_food101_selector_runtime_scaling.py
+```
 
 ## Other evaluation protocols
 

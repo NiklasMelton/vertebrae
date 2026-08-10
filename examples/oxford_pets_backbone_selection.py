@@ -845,6 +845,7 @@ def _build_extractors(
                     image_mode="rgb",
                     device=device,
                     processor_kwargs={"use_fast": False},
+                    model_kwargs={"add_pooling_layer": False},
                 )
             )
         elif model_name == "convnext-tiny":
