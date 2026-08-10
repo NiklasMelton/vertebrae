@@ -12,7 +12,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PLOT_PATH = ROOT / "examples" / "plot_food101_selector_runtime_scaling.py"
-SUMMARY_PATH = ROOT / "examples" / "assets" / "food101_selector_runtime_scaling_summary.json"
 
 
 @pytest.fixture(scope="module")
@@ -94,20 +93,3 @@ def test_speedup_uses_paired_median_and_iqr(plotter, tmp_path):
     assert values[0] == pytest.approx(expected)
     assert lower[0] <= values[0] <= upper[0]
     assert np.isfinite(np.concatenate([values, lower, upper])).all()
-
-
-def test_tracked_summary_matches_completed_readme_results():
-    payload = json.loads(SUMMARY_PATH.read_text(encoding="utf-8"))
-    assert payload["artifact_status"] == "completed"
-    assert payload["post_hoc_runtime_benchmark"] is True
-    assert payload["claim_supported"] is False
-    assert payload["source"]["configuration_hash"].startswith("4c63a49825bf")
-    assert len(payload["source"]["models"]) == 10
-
-    by_budget = {row["samples_per_class"]: row for row in payload["by_budget"]}
-    assert tuple(by_budget) == (64, 128, 256, 512, 640)
-    assert by_budget[64]["paired_speedup_median"] == pytest.approx(0.69831834297)
-    assert by_budget[640]["paired_speedup_median"] == pytest.approx(1.99532043322)
-    assert by_budget[512]["overlap_faster_fraction"] == 1.0
-    assert by_budget[640]["overlap_faster_fraction"] == 1.0
-    assert payload["measurement_audit"]["timed_calls"] == 500

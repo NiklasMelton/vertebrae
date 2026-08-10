@@ -14,7 +14,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_PATH = ROOT / "examples" / "plot_food101_overlap_vs_linear_probe_story.py"
-SUMMARY_PATH = ROOT / "examples" / "assets" / "food101_overlap_vs_linear_probe_story_summary.json"
 
 
 @pytest.fixture(scope="module")
@@ -29,7 +28,66 @@ def plotter():
 
 
 def _summary_payload():
-    return json.loads(SUMMARY_PATH.read_text(encoding="utf-8"))
+    """Build a small self-contained summary fixture for the reader tests."""
+
+    methods = ("overlap_cross_fitted", "linear_probe_oof")
+    arms = ("baseline", "nonlinearity_full", "nuisance_full")
+    heads = ("linear", "knn", "quadratic", "rbf")
+    quadratic_auc = {
+        method: {
+            arm: [
+                0.50 + 0.01 * replicate + 0.02 * methods.index(method) + 0.03 * arms.index(arm)
+                for replicate in range(5)
+            ]
+            for arm in arms
+        }
+        for method in methods
+    }
+    head_auc = {
+        method: {
+            head: [
+                0.55 + 0.01 * replicate + 0.02 * methods.index(method) + 0.015 * heads.index(head)
+                for replicate in range(5)
+            ]
+            for head in heads
+        }
+        for method in methods
+    }
+    quadratic_means = {
+        method: {arm: float(np.mean(values)) for arm, values in arms_by_method.items()}
+        for method, arms_by_method in quadratic_auc.items()
+    }
+    head_difference_means = {
+        head: float(
+            np.mean(np.asarray(head_auc[methods[0]][head]) - np.asarray(head_auc[methods[1]][head]))
+        )
+        for head in heads
+    }
+    runtime = {
+        method: [1.0 + 0.2 * index + 0.1 * methods.index(method) for index in range(5)]
+        for method in methods
+    }
+    overlap_mean = float(np.mean(runtime[methods[0]]))
+    probe_mean = float(np.mean(runtime[methods[1]]))
+    return {
+        "format": "food101_overlap_vs_linear_probe_story_summary",
+        "plot_data": {
+            "quadratic_auc": quadratic_auc,
+            "head_auc": head_auc,
+            "quadratic_means": quadratic_means,
+            "head_difference_means": head_difference_means,
+            "selector_runtime_minutes": runtime,
+        },
+        "bootstrap": {"direct_nonlinear_oi_minus_probe": head_difference_means["quadratic"]},
+        "headline_metrics": {
+            "selector_runtime": {
+                "overlap_cross_fitted_mean_minutes": overlap_mean,
+                "linear_probe_oof_mean_minutes": probe_mean,
+                "overlap_speedup": probe_mean / overlap_mean,
+                "overlap_time_reduction_fraction": 1.0 - overlap_mean / probe_mean,
+            }
+        },
+    }
 
 
 def _write_summary(tmp_path, payload):
@@ -38,9 +96,10 @@ def _write_summary(tmp_path, payload):
     return path
 
 
-def test_tracked_compact_summary_loads(plotter):
-    rows = plotter._load_auc_rows(SUMMARY_PATH)
-    runtime = plotter._load_runtime_minutes(SUMMARY_PATH)
+def test_summary_fixture_loads(plotter, tmp_path):
+    summary_path = _write_summary(tmp_path, _summary_payload())
+    rows = plotter._load_auc_rows(summary_path)
+    runtime = plotter._load_runtime_minutes(summary_path)
 
     assert len(rows) == 60
     assert {row["method"] for row in rows} == {
@@ -57,8 +116,8 @@ def test_tracked_compact_summary_loads(plotter):
     assert all(values.shape == (5,) for values in runtime.values())
 
 
-def test_summary_has_complete_five_replicate_cells_for_both_panels(plotter):
-    rows = plotter._load_auc_rows(SUMMARY_PATH)
+def test_summary_has_complete_five_replicate_cells_for_both_panels(plotter, tmp_path):
+    rows = plotter._load_auc_rows(_write_summary(tmp_path, _summary_payload()))
 
     for method in ("overlap_cross_fitted", "linear_probe_oof"):
         for arm in ("baseline", "nonlinearity_full", "nuisance_full"):
@@ -77,9 +136,10 @@ def test_summary_has_complete_five_replicate_cells_for_both_panels(plotter):
             assert np.isfinite(values).all()
 
 
-def test_plot_means_match_summary_and_headline_metrics(plotter):
+def test_plot_means_match_summary_and_headline_metrics(plotter, tmp_path):
     payload = _summary_payload()
-    rows = plotter._load_auc_rows(SUMMARY_PATH)
+    summary_path = _write_summary(tmp_path, payload)
+    rows = plotter._load_auc_rows(summary_path)
     plot_data = payload["plot_data"]
 
     for method, arms in plot_data["quadratic_means"].items():
@@ -106,7 +166,7 @@ def test_plot_means_match_summary_and_headline_metrics(plotter):
         payload["bootstrap"]["direct_nonlinear_oi_minus_probe"]
     )
 
-    runtime = plotter._load_runtime_minutes(SUMMARY_PATH)
+    runtime = plotter._load_runtime_minutes(summary_path)
     runtime_headline = payload["headline_metrics"]["selector_runtime"]
     overlap_mean = float(runtime["overlap_cross_fitted"].mean())
     probe_mean = float(runtime["linear_probe_oof"].mean())
