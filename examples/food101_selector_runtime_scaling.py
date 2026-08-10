@@ -331,9 +331,7 @@ def _load_discovered_cohort(
     train_rows = int(payload.get("extracted_train_rows", 0))
     test_rows = int(payload.get("extracted_test_rows", 0))
     if train_rows != 26_400 or test_rows != 2_080 or train_rows + test_rows != len(sample_ids):
-        raise ValueError(
-            "Canonical Food-101 cohort must contain 26,400 train and 2,080 test rows."
-        )
+        raise ValueError("Canonical Food-101 cohort must contain 26,400 train and 2,080 test rows.")
     ids = [str(value) for value in sample_ids]
     labels: list[str] = []
     for index, sample_id in enumerate(ids):
@@ -613,12 +611,10 @@ def benchmark_embedding_matrix(
                             "model": str(model),
                             "samples_per_class": int(budget),
                             "repeat": int(repeat),
-                            "overlap_elapsed_seconds": timed[
-                                "overlap_cross_fitted"
-                            ]["elapsed_seconds"],
-                            "probe_elapsed_seconds": timed["linear_probe_oof"][
+                            "overlap_elapsed_seconds": timed["overlap_cross_fitted"][
                                 "elapsed_seconds"
                             ],
+                            "probe_elapsed_seconds": timed["linear_probe_oof"]["elapsed_seconds"],
                             "ratio": float(ratio),
                         }
                     )
@@ -766,9 +762,7 @@ def _read_results(
     if _configuration_hash(configuration) != config_hash:
         raise ValueError("Runtime-scaling configuration hash does not match configuration.")
     artifact_stem = payload.get("artifact_stem")
-    if not isinstance(artifact_stem, str) or not artifact_stem.endswith(
-        f"_{config_hash[:12]}"
-    ):
+    if not isinstance(artifact_stem, str) or not artifact_stem.endswith(f"_{config_hash[:12]}"):
         raise ValueError("Runtime-scaling artifact_stem does not match configuration hash.")
     required = {"backbone", "samples_per_class", "repeat", "method", "elapsed_seconds", "score"}
     for row in rows:
@@ -788,9 +782,7 @@ def _read_results(
         or not isinstance(budgets, list)
         or not isinstance(repeats, int)
     ):
-        raise ValueError(
-            "Runtime configuration is missing models, budgets, or timing_repeats."
-        )
+        raise ValueError("Runtime configuration is missing models, budgets, or timing_repeats.")
     _validate_complete_grid(rows, models=models, budgets=budgets, repeats=repeats)
     _paired_summary(rows)
     return payload
@@ -818,9 +810,7 @@ def run_runtime_scaling(
     labels_array = np.asarray(labels, dtype=object)
     resolved_models = tuple(str(model) for model in embeddings)
     if precomputed_rows is not None:
-        resolved_models = tuple(
-            sorted({str(row["backbone"]) for row in precomputed_rows}, key=str)
-        )
+        resolved_models = tuple(sorted({str(row["backbone"]) for row in precomputed_rows}, key=str))
     if not resolved_models:
         raise ValueError("At least one embedding model is required.")
     selected_classes = validate_nested_class_balanced_samples(
@@ -834,9 +824,7 @@ def run_runtime_scaling(
         for model_index, model in enumerate(resolved_models):
             artifact = embeddings[model]
             matrix = (
-                artifact.matrix
-                if isinstance(artifact, EmbeddingManifest)
-                else np.asarray(artifact)
+                artifact.matrix if isinstance(artifact, EmbeddingManifest) else np.asarray(artifact)
             )
             if matrix.ndim != 2 or len(matrix) != len(labels_array):
                 raise ValueError(f"Embedding model {model!r} has a row-count mismatch.")
@@ -1043,15 +1031,10 @@ def _run(args: argparse.Namespace) -> int:
             full_labels, sample_ids, train_rows = _load_discovered_cohort(
                 cohort_path, cohort_payload
             )
-            cache_manifest_dir = (
-                args.cache_manifest_dir
-                or args.cache_dir
-                or output_dir / "cache"
-            )
+            cache_manifest_dir = args.cache_manifest_dir or args.cache_dir or output_dir / "cache"
             requested_models = _parse_models(args.models) if args.models else _DEFAULT_MODELS
             manifest_paths = [
-                cache_manifest_dir / f"food101_{model}_final.json"
-                for model in requested_models
+                cache_manifest_dir / f"food101_{model}_final.json" for model in requested_models
             ]
             manifests = load_embedding_manifests(
                 manifest_paths,
@@ -1225,9 +1208,7 @@ def _run(args: argparse.Namespace) -> int:
         if checkpoint_rows is None:
             artifact = embeddings[model]
             matrix = (
-                artifact.matrix
-                if isinstance(artifact, EmbeddingManifest)
-                else np.asarray(artifact)
+                artifact.matrix if isinstance(artifact, EmbeddingManifest) else np.asarray(artifact)
             )
             checkpoint_rows = benchmark_embedding_matrix(
                 matrix,

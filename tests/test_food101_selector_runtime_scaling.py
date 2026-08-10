@@ -141,9 +141,9 @@ def test_canonical_cohort_validation_and_restriction(driver, tmp_path):
         tmp_path / "toy.npy",
         matrix,
         {
-            "sample_ids_sha256": __import__("hashlib").sha256(
-                json.dumps(sample_ids).encode()
-            ).hexdigest(),
+            "sample_ids_sha256": __import__("hashlib")
+            .sha256(json.dumps(sample_ids).encode())
+            .hexdigest(),
             "labels_sha256": driver._labels_sha256(labels.tolist()),
         },
     )

@@ -101,9 +101,7 @@ def _roles(value):
         nested = _extract(value, "roles", "cohorts", "splits")
         if isinstance(nested, Mapping):
             value = nested
-        if isinstance(value, Mapping) and all(
-            key in value for key in ("selector", "development")
-        ):
+        if isinstance(value, Mapping) and all(key in value for key in ("selector", "development")):
             test_key = next(
                 (key for key in ("test", "bridge_test", "heldout_test") if key in value),
                 None,
@@ -193,8 +191,10 @@ def _three_arm_rows(*, backbones=5, replicates=5, include_linear=False):
             # gate.
             direct = 0.12 if backbone_index < max(0, backbones - 1) else -0.02
             for arm, overlap, probe in arms:
-                overlap_value = overlap + (0.01 * backbone_index) + direct * (
-                    1.0 if arm == "nonlinearity" else 0.0
+                overlap_value = (
+                    overlap
+                    + (0.01 * backbone_index)
+                    + direct * (1.0 if arm == "nonlinearity" else 0.0)
                 )
                 rows.append(
                     {
@@ -322,14 +322,10 @@ def test_help_is_lazy_and_defaults_are_frozen(experiment):
     assert "extracting" not in completed.stdout.lower()
 
     quality = tuple(
-        _constant(experiment, name)
-        for name in ("_QUALITY_LEVELS",)
-        if hasattr(experiment, name)
+        _constant(experiment, name) for name in ("_QUALITY_LEVELS",) if hasattr(experiment, name)
     )
     assert quality, "quality ladder must be declared as a module constant"
-    assert tuple(float(value) for value in quality[0]) == pytest.approx(
-        (1.0,)
-    )
+    assert tuple(float(value) for value in quality[0]) == pytest.approx((1.0,))
     heads = tuple(_constant(experiment, "_HEAD_FAMILIES"))
     assert heads == ("linear", "quadratic", "knn", "rbf")
     methods = tuple(_constant(experiment, "_METHODS"))
@@ -399,9 +395,7 @@ def test_final_output_factory_builds_one_declared_output_per_frozen_backbone(
         },
     }
     models = tuple(experiment._DEFAULT_MODELS)
-    extractors = experiment._build_final_output_extractors(
-        models, batch_size=8, device="cpu"
-    )
+    extractors = experiment._build_final_output_extractors(models, batch_size=8, device="cpu")
 
     assert len(extractors) == len(models) == len(expected)
     assert len(records) == len(models)
@@ -423,9 +417,7 @@ def test_final_output_factory_builds_one_declared_output_per_frozen_backbone(
     assert records[4][1].kwargs["input_modalities"] == {"image": "image"}
     for _, extractor in records:
         if extractor.kwargs["name"] != "deit-tiny":
-            assert extractor.kwargs.get("model_kwargs", {}).get(
-                "add_pooling_layer"
-            ) is not False
+            assert extractor.kwargs.get("model_kwargs", {}).get("add_pooling_layer") is not False
 
 
 def test_final_output_transform_uses_openclip_image_mapping(experiment):
@@ -518,8 +510,10 @@ def test_official_train_test_isolation_and_80_52_52_cohorts(experiment):
         seed=17,
     )
     assert repr(first) == repr(second) or str(first) == str(second)
-    replicates = [first] if isinstance(first, Mapping) and "selector" in first else (
-        list(first.values()) if isinstance(first, Mapping) else list(first)
+    replicates = (
+        [first]
+        if isinstance(first, Mapping) and "selector" in first
+        else (list(first.values()) if isinstance(first, Mapping) else list(first))
     )
     official_test_ids = {_sample_id(row) for row in official_test}
     train_role_ids = []
@@ -595,6 +589,7 @@ def test_q1_bridge_has_exact_three_arm_geometry_and_unit_rows(experiment):
     donor = np.roll(x, 1, axis=0)
     mode = np.asarray([-1.0, 1.0, -1.0, 1.0], dtype=np.float32)
     nuisance = np.flip(x, axis=1).astype(np.float32)
+
     def call(**kwargs):
         return np.asarray(
             _call_with_supported_kwargs(
@@ -612,6 +607,7 @@ def test_q1_bridge_has_exact_three_arm_geometry_and_unit_rows(experiment):
                 **kwargs,
             )
         )
+
     outputs = {}
     for row in arms:
         name = row[0] if isinstance(row, (tuple, list)) else row.get("name", row.get("arm"))
@@ -639,12 +635,8 @@ def test_q1_bridge_has_exact_three_arm_geometry_and_unit_rows(experiment):
         np.testing.assert_allclose(np.linalg.norm(array, axis=1), 1.0, atol=1e-5)
     zeros = np.zeros_like(x)
     expected_baseline = np.concatenate((x, zeros, np.zeros((len(x), 1)), zeros), axis=1)
-    expected_nonlinear = np.concatenate(
-        (zeros, mode[:, None] * x, mode[:, None], zeros), axis=1
-    )
-    expected_nuisance = np.concatenate(
-        (x, zeros, np.zeros((len(x), 1)), 1.5 * nuisance), axis=1
-    )
+    expected_nonlinear = np.concatenate((zeros, mode[:, None] * x, mode[:, None], zeros), axis=1)
+    expected_nuisance = np.concatenate((x, zeros, np.zeros((len(x), 1)), 1.5 * nuisance), axis=1)
     expected_nonlinear /= np.linalg.norm(expected_nonlinear, axis=1, keepdims=True)
     expected_nuisance /= np.linalg.norm(expected_nuisance, axis=1, keepdims=True)
     np.testing.assert_allclose(outputs["baseline"], expected_baseline, atol=1e-6)
@@ -710,8 +702,7 @@ def test_fixed_head_recipes_have_quadratic_primary(experiment):
     recipe = _helper(experiment, "_head_recipe")
     signature = inspect.signature(make_head)
     assert not any(
-        name in signature.parameters
-        for name in ("grid", "search", "select_family", "validation")
+        name in signature.parameters for name in ("grid", "search", "select_family", "validation")
     )
     for family in families:
         estimator = _call_with_supported_kwargs(make_head, family=family, seed=11)
@@ -725,9 +716,7 @@ def test_fixed_head_recipes_have_quadratic_primary(experiment):
     assert recipes["knn"]["metric"] == "cosine"
     assert recipes["rbf"]["kernel"] == "rbf"
     assert recipes["rbf"]["C"] == 1.0
-    protocol = _helper(experiment, "_master_protocol")(
-        _helper(experiment, "_configuration")()
-    )
+    protocol = _helper(experiment, "_master_protocol")(_helper(experiment, "_configuration")())
     assert protocol["frozen"]["primary_reference_head"] == "quadratic"
 
 
@@ -756,9 +745,7 @@ def test_nested_budgets_are_balanced_nested_and_paired(experiment):
     # donor or nuisance sample for one arm.
     matrix = np.eye(5, dtype=np.float32)
     labels_small = np.arange(5)
-    bank = _helper(experiment, "_paired_split_banks")(
-        matrix, labels_small, seed=13
-    )
+    bank = _helper(experiment, "_paired_split_banks")(matrix, labels_small, seed=13)
     bank_before = {key: np.asarray(value).copy() for key, value in bank.items()}
     transform = _helper(experiment, "_bridge_transform")
     arms = _constant(experiment, "_FOOD101_ARMS")
@@ -766,8 +753,7 @@ def test_nested_budgets_are_balanced_nested_and_paired(experiment):
         key: value for key, value in bank.items() if key in {"donor", "mode", "nuisance"}
     }
     transformed = [
-        transform(matrix, **transform_bank, q=1.0, lam=lam, nu=nu)
-        for _, lam, nu in arms
+        transform(matrix, **transform_bank, q=1.0, lam=lam, nu=nu) for _, lam, nu in arms
     ]
     assert all(not np.shares_memory(transformed[0], current) for current in transformed[1:])
     for key, value in bank.items():
@@ -1191,15 +1177,12 @@ def test_protocol_schema_and_confirmatory_claim_scope_are_explicit(experiment):
         for key in ("claim", "claim_text", "claim_scope", "interpretation")
     ).lower()
     assert all(
-        token not in claim_text
-        for token in ("all backbones", "universal", "every representation")
+        token not in claim_text for token in ("all backbones", "universal", "every representation")
     )
     json.dumps(protocol)
 
     canonical = _helper(experiment, "_is_canonical_configuration")
-    defaults = _helper(experiment, "_configuration")(
-        stage="all", jobs="auto", seed=42
-    )
+    defaults = _helper(experiment, "_configuration")(stage="all", jobs="auto", seed=42)
     true_result = _call_with_supported_kwargs(
         canonical, **defaults, configuration=defaults, config=defaults
     )

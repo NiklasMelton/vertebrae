@@ -86,8 +86,7 @@ def test_speedup_uses_paired_median_and_iqr(plotter, tmp_path):
     expected = float(
         np.median(
             [
-                (2.0 + 64.0 / 100.0 + repeat / 10.0)
-                / (1.0 + 64.0 / 100.0 + repeat / 10.0)
+                (2.0 + 64.0 / 100.0 + repeat / 10.0) / (1.0 + 64.0 / 100.0 + repeat / 10.0)
                 for repeat in (0, 1)
             ]
         )
@@ -105,9 +104,7 @@ def test_tracked_summary_matches_completed_readme_results():
     assert payload["source"]["configuration_hash"].startswith("4c63a49825bf")
     assert len(payload["source"]["models"]) == 10
 
-    by_budget = {
-        row["samples_per_class"]: row for row in payload["by_budget"]
-    }
+    by_budget = {row["samples_per_class"]: row for row in payload["by_budget"]}
     assert tuple(by_budget) == (64, 128, 256, 512, 640)
     assert by_budget[64]["paired_speedup_median"] == pytest.approx(0.69831834297)
     assert by_budget[640]["paired_speedup_median"] == pytest.approx(1.99532043322)

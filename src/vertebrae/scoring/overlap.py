@@ -224,9 +224,7 @@ class OverlapIndexScorer:
             target_type="auto",
         )
         if label_metadata["target_type"] != SINGLE_LABEL_TARGET:
-            raise ValueError(
-                "score_cross_fitted supports single-label classification only."
-            )
+            raise ValueError("score_cross_fitted supports single-label classification only.")
         labels = np.asarray(semantic_label_keys(normalized_labels.tolist()), dtype=object)
         if embeddings.shape[0] != labels.shape[0]:
             raise ValueError(
@@ -234,9 +232,7 @@ class OverlapIndexScorer:
                 f"got {embeddings.shape[0]} and {labels.shape[0]}."
             )
         if labels.shape[0] == 0:
-            raise ValueError(
-                "score_cross_fitted requires at least one sample; got empty inputs."
-            )
+            raise ValueError("score_cross_fitted requires at least one sample; got empty inputs.")
 
         counts = class_counts(normalized_labels)
         smallest_class = min(counts.values())
@@ -287,9 +283,7 @@ class OverlapIndexScorer:
                 kmeans_kwargs["random_state"] = fold_seed
             backend_excluded_classes = config.exclude_classes
             if backend_excluded_classes is not None:
-                backend_excluded_classes = _semantic_excluded_classes(
-                    backend_excluded_classes
-                )
+                backend_excluded_classes = _semantic_excluded_classes(backend_excluded_classes)
             index = _instantiate_with_supported_kwargs(
                 OverlapIndex,
                 {
@@ -315,13 +309,9 @@ class OverlapIndexScorer:
                 )
             warnings.extend(f"Fold {fold}: {message}" for message in fold_warnings)
             macro_score = _extract_macro_score(index, raw_score)
-            weighted_score = _extract_optional_score(
-                getattr(index, "weighted_index", None)
-            )
+            weighted_score = _extract_optional_score(getattr(index, "weighted_index", None))
             fold_scores.append(macro_score)
-            fold_weighted_scores.append(
-                macro_score if weighted_score is None else weighted_score
-            )
+            fold_weighted_scores.append(macro_score if weighted_score is None else weighted_score)
             for label, value in getattr(index, "singleton_index", {}).items():
                 per_class_values.setdefault(label, []).append(float(value))
             for pair, value in getattr(index, "pairwise_index", {}).items():
@@ -343,8 +333,7 @@ class OverlapIndexScorer:
             )
 
         resolved_k = {
-            label: min(int(fold_k[label]) for fold_k in fold_k_values)
-            for label in fold_k_values[0]
+            label: min(int(fold_k[label]) for fold_k in fold_k_values) for label in fold_k_values[0]
         }
         catalog = list(label_catalog or label_metadata.get("label_catalog") or [])
         if not catalog:
@@ -354,24 +343,16 @@ class OverlapIndexScorer:
         )
         excluded_key_set = set(excluded_class_keys)
         observed_classes = list(target_summary(normalized_labels)["class_counts"])
-        included_classes = [
-            label for label in observed_classes if label not in excluded_key_set
-        ]
+        included_classes = [label for label in observed_classes if label not in excluded_key_set]
         return OverlapScoreResult(
             score=float(np.mean(fold_scores)),
             macro_score=float(np.mean(fold_scores)),
             weighted_score=float(np.mean(fold_weighted_scores)),
             per_class_scores=make_json_safe(
-                {
-                    label: float(np.mean(values))
-                    for label, values in per_class_values.items()
-                }
+                {label: float(np.mean(values)) for label, values in per_class_values.items()}
             ),
             pairwise_scores=make_json_safe(
-                {
-                    pair: float(np.mean(values))
-                    for pair, values in pairwise_values.items()
-                }
+                {pair: float(np.mean(values)) for pair, values in pairwise_values.items()}
             ),
             sparse_adjacency=make_json_safe(sparse_adjacency),
             class_counts=counts,

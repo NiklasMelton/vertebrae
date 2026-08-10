@@ -169,9 +169,7 @@ def _speedup_summary(
 
     cells = [
         paired[int(budget)]["linear_probe_oof"]
-        / np.maximum(
-            paired[int(budget)]["overlap_cross_fitted"], np.finfo(float).eps
-        )
+        / np.maximum(paired[int(budget)]["overlap_cross_fitted"], np.finfo(float).eps)
         for budget in budgets
     ]
     medians = np.asarray([float(np.median(values)) for values in cells])

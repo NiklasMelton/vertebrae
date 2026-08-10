@@ -43,8 +43,7 @@ class FakeOverlapIndex:
         self.__class__.calls[-1]["score_fixed_X_shape"] = list(Z.shape)
         self.__class__.calls[-1]["score_fixed_y"] = y_arr.copy()
         self.cluster_cardinality = {
-            str(label): int(np.count_nonzero(y_arr == label))
-            for label in np.unique(y_arr)
+            str(label): int(np.count_nonzero(y_arr == label)) for label in np.unique(y_arr)
         }
         return self.index
 

@@ -31,9 +31,7 @@ def test_overlap_scorer_cross_fits_fixed_prototypes_with_paired_fold_seeds(
 ):
     embeddings = np.arange(48, dtype=float).reshape(12, 4)
     labels = np.asarray(["a"] * 6 + ["b"] * 6)
-    scorer = OverlapIndexScorer(
-        OverlapScoringConfig(k=2, min_samples_per_cluster=1)
-    )
+    scorer = OverlapIndexScorer(OverlapScoringConfig(k=2, min_samples_per_cluster=1))
 
     result = scorer.score_cross_fitted(
         embeddings,
@@ -68,18 +66,14 @@ def test_overlap_scorer_cross_fits_fixed_prototypes_with_paired_fold_seeds(
 def test_overlap_scorer_cross_fit_validates_fold_support(fake_overlapindex, n_splits):
     embeddings = np.arange(24, dtype=float).reshape(6, 4)
     labels = np.asarray(["a"] * 3 + ["b"] * 3)
-    scorer = OverlapIndexScorer(
-        OverlapScoringConfig(k=2, min_samples_per_cluster=1)
-    )
+    scorer = OverlapIndexScorer(OverlapScoringConfig(k=2, min_samples_per_cluster=1))
 
     with pytest.raises(ValueError, match="n_splits"):
         scorer.score_cross_fitted(embeddings, labels, n_splits=n_splits)
 
 
 def test_overlap_scorer_cross_fit_rejects_empty_inputs(fake_overlapindex):
-    scorer = OverlapIndexScorer(
-        OverlapScoringConfig(k=2, min_samples_per_cluster=1)
-    )
+    scorer = OverlapIndexScorer(OverlapScoringConfig(k=2, min_samples_per_cluster=1))
 
     with pytest.raises(ValueError, match="at least one sample"):
         scorer.score_cross_fitted(np.empty((0, 4)), np.asarray([], dtype=object))

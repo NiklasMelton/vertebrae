@@ -683,7 +683,9 @@ def _normalized_log_auc(budgets: Sequence[int], values: Sequence[float]) -> Opti
     if len(x) < 2 or len(x) != len(y) or not np.all(np.isfinite(y)) or x[-1] <= x[0]:
         return None
     normalized_x = (x - x[0]) / float(x[-1] - x[0])
-    trapezoid = getattr(np, "trapezoid", np.trapz)
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is None:  # NumPy < 2.0
+        trapezoid = np.trapz
     return float(trapezoid(y, x=normalized_x))
 
 
@@ -2157,11 +2159,7 @@ def _extract_final_embeddings(
         )[0]
         try:
             outputs = _transform_final_outputs(extractor, list(images))
-            final = [
-                output
-                for output in outputs
-                if str(output.name) in _FINAL_OUTPUTS
-            ]
+            final = [output for output in outputs if str(output.name) in _FINAL_OUTPUTS]
             if len(final) != 1:
                 raise ValueError(f"{model} must emit exactly one final output")
             matrix = np.asarray(final[0].embeddings, dtype=np.float32)
