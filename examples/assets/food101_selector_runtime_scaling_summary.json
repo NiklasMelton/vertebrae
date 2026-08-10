@@ -1,0 +1,151 @@
+{
+  "artifact_status": "completed",
+  "format": "food101_selector_runtime_scaling_summary",
+  "study": "food101_selector_runtime_scaling",
+  "schema_version": 1,
+  "post_hoc_runtime_benchmark": true,
+  "claim_supported": false,
+  "source": {
+    "artifact_name": "food101_selector_runtime_scaling_4c63a49825bf.json",
+    "artifact_sha256": "e9f041933f7809406f28d6c5aabe65cc3a2f21c9377bd5151e1a601b3c448513",
+    "configuration_hash": "4c63a49825bff6b6197215eeaa2c79ac03520e0e3f5f3bfedf5b5e110b345ad4",
+    "models": [
+      "dinov2-small",
+      "deit-tiny",
+      "convnext-tiny",
+      "mobilenetv3-large",
+      "openclip-vit-b-32",
+      "resnet50",
+      "efficientnet-b0",
+      "swin-tiny",
+      "vit-small-16",
+      "densenet121"
+    ],
+    "budgets_samples_per_class": [
+      64,
+      128,
+      256,
+      512,
+      640
+    ],
+    "classes": 40,
+    "timing_repeats": 5
+  },
+  "timing_protocol": {
+    "methods": [
+      "overlap_cross_fitted",
+      "linear_probe_oof"
+    ],
+    "folds": 5,
+    "overlap_k": 10,
+    "serial_one_thread": true,
+    "warmup_excluded": true,
+    "speedup_definition": "linear_probe_oof_elapsed / overlap_cross_fitted_elapsed",
+    "timed_stage": "selector_scoring_calls_only",
+    "excluded_from_timing": [
+      "embedding_cache_reads",
+      "subset_materialization",
+      "imports",
+      "warmup",
+      "feature_extraction",
+      "downstream_head_evaluation",
+      "plotting"
+    ]
+  },
+  "headline": {
+    "aggregate_crossover": "between 128 and 256 samples per class",
+    "all_paired_cells_overlap_faster_from_samples_per_class": 512,
+    "maximum_budget_samples_per_class": 640,
+    "maximum_budget_total_samples": 25600,
+    "maximum_budget_paired_median_speedup": 1.995320433219392,
+    "maximum_budget_overlap_mean_seconds": 3.039187923300002,
+    "maximum_budget_linear_probe_mean_seconds": 6.155114915800003,
+    "maximum_budget_overlap_time_reduction_fraction": 0.5062337641335511,
+    "maximum_budget_backbone_median_speedup_range": [
+      1.1980954361346703,
+      2.8265784460748997
+    ],
+    "empirical_log_log_scaling_exponent": {
+      "overlap_cross_fitted": 0.7908874601360972,
+      "linear_probe_oof": 1.1975548411050978
+    }
+  },
+  "by_budget": [
+    {
+      "samples_per_class": 64,
+      "total_samples": 2560,
+      "paired_cells": 50,
+      "overlap_mean_seconds": 0.5051376192000038,
+      "overlap_sd_seconds": 0.11837834831470737,
+      "linear_probe_mean_seconds": 0.3891078675200096,
+      "linear_probe_sd_seconds": 0.2485120115633386,
+      "paired_speedup_median": 0.6983183429726527,
+      "paired_speedup_q25": 0.5098238711624445,
+      "paired_speedup_q75": 0.9010051616079124,
+      "overlap_faster_fraction": 0.1
+    },
+    {
+      "samples_per_class": 128,
+      "total_samples": 5120,
+      "paired_cells": 50,
+      "overlap_mean_seconds": 0.8420060217400132,
+      "overlap_sd_seconds": 0.22454200504895078,
+      "linear_probe_mean_seconds": 0.8780703216999991,
+      "linear_probe_sd_seconds": 0.5627960398386808,
+      "paired_speedup_median": 0.9794522826477623,
+      "paired_speedup_q25": 0.6509270590751327,
+      "paired_speedup_q75": 1.1436937388633215,
+      "overlap_faster_fraction": 0.4
+    },
+    {
+      "samples_per_class": 256,
+      "total_samples": 10240,
+      "paired_cells": 50,
+      "overlap_mean_seconds": 1.627095195780007,
+      "overlap_sd_seconds": 0.7874767642082948,
+      "linear_probe_mean_seconds": 1.952952296700004,
+      "linear_probe_sd_seconds": 1.1915203490494413,
+      "paired_speedup_median": 1.2559964765881166,
+      "paired_speedup_q25": 0.9272876203642002,
+      "paired_speedup_q75": 1.310409972284221,
+      "overlap_faster_fraction": 0.7
+    },
+    {
+      "samples_per_class": 512,
+      "total_samples": 20480,
+      "paired_cells": 50,
+      "overlap_mean_seconds": 2.6082463700399963,
+      "overlap_sd_seconds": 1.34160888908517,
+      "linear_probe_mean_seconds": 4.640622030019989,
+      "linear_probe_sd_seconds": 3.0354553708183625,
+      "paired_speedup_median": 1.8412212115580964,
+      "paired_speedup_q25": 1.2858698479647568,
+      "paired_speedup_q75": 1.96654135554066,
+      "overlap_faster_fraction": 1.0
+    },
+    {
+      "samples_per_class": 640,
+      "total_samples": 25600,
+      "paired_cells": 50,
+      "overlap_mean_seconds": 3.039187923300002,
+      "overlap_sd_seconds": 1.6151128808406063,
+      "linear_probe_mean_seconds": 6.155114915800003,
+      "linear_probe_sd_seconds": 3.852267011376351,
+      "paired_speedup_median": 1.995320433219392,
+      "paired_speedup_q25": 1.4704299484866277,
+      "paired_speedup_q75": 2.3617657853311216,
+      "overlap_faster_fraction": 1.0
+    }
+  ],
+  "measurement_audit": {
+    "timed_calls": 500,
+    "paired_cells": 250,
+    "total_overlap_timed_seconds": 431.08365650300107,
+    "total_linear_probe_timed_seconds": 700.7933715870003,
+    "repeat_timing_cv_median": 0.0039947802299010885,
+    "repeat_timing_cv_p90": 0.008135576840652614,
+    "repeat_timing_cv_max": 0.02387623518903091,
+    "process_to_elapsed_ratio_median": 1.0000004347235225,
+    "maximum_within_cell_score_spread": 0.0
+  }
+}

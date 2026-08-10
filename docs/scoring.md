@@ -265,6 +265,50 @@ complete-grid and finite-draw/regret gates, top-level
 ranking, accuracy, support flag, or other result should be cited until a conformant
 run has completed and its JSON/CSV artifacts have been inspected.
 
+## Food-101 selector runtime scaling (post-hoc computational benchmark)
+
+`examples/food101_selector_runtime_scaling.py` is intentionally separate from the
+Q1 accuracy protocol above. It measures selector compute only and always writes
+`claim_supported=false`; it is not evidence for the nonlinear-backbone accuracy
+claim. The default grid is `64, 128, 256, 512, 640` nested samples per class over
+the same ten frozen backbones and five timing repeats. Each repeat reuses one
+deterministic class-balanced nested subset for both methods: five-fold
+cross-fitted OverlapIndex (`k=10`) and a five-fold out-of-fold L2 probe.
+
+The driver runs serially with one scoring worker on purpose. Concurrent workers
+would fold scheduling, CPU contention, and process-launch effects into a per-call
+measurement. The timed interval excludes embedding-cache reads, subset
+materialization, imports, warmup, feature extraction, downstream-head evaluation,
+and plotting. The paired speedup is probe elapsed time divided by OverlapIndex
+elapsed time; the figure annotates the paired-cell median speedup with its
+interquartile range. This is descriptive spread across paired backbone/repeat
+cells, not a population confidence interval.
+
+With a completed Food-101 experiment cohort and its local cache manifests, the
+driver discovers the unique cohort, validates sample/label hashes, and excludes
+the fixed official-test rows automatically:
+
+```bash
+poetry run python examples/food101_selector_runtime_scaling.py --output-dir examples/output
+poetry run python examples/plot_food101_selector_runtime_scaling.py
+```
+
+For an exploratory panel, pass repeated `--embedding-manifest` paths and a
+`--labels-manifest`, then pass the completed configuration-hashed JSON to the
+plotter with `--results`. The driver writes planned/completed/failed JSON,
+per-backbone checkpoints, and raw/paired CSV rows, printing progress outside the
+timed intervals; `--resume` reuses validated checkpoints. Runtime artifacts are
+computational diagnostics with explicit boundaries; do not merge them into the
+confirmatory accuracy table or infer total experiment wall-clock time.
+
+In the completed canonical run, the paired median probe-over-OverlapIndex speedup
+rose from `0.70×` at 2,560 embeddings to `2.00×` at 25,600 embeddings. OverlapIndex
+was faster in all 50 paired cells at both 20,480 and 25,600 embeddings. The compact
+tracked summary at
+`examples/assets/food101_selector_runtime_scaling_summary.json` records the plotted
+aggregates and source-artifact checksum; these remain descriptive, hardware-specific
+runtime results rather than representation-quality evidence.
+
 ## Returned diagnostics
 
 `OverlapIndexScorer.score(...)` returns an `OverlapScoreResult` with:

@@ -90,6 +90,13 @@ extraction, downstream-head evaluation, bootstrap analysis, and process-launch
 overhead. It should therefore be read as selector compute, not total experiment
 wall-clock time.
 
+A separate [Food-101 runtime-scaling benchmark](#food-101-selector-runtime-scaling-post-hoc-computational-benchmark)
+shows where that computational advantage appears. The linear probe was faster on the
+smallest 2,560-embedding panel, the methods were approximately even around 5,120
+embeddings, and OverlapIndex reached a **2.00× median speedup at 25,600 embeddings**.
+At 20,480 and 25,600 embeddings, OverlapIndex was faster in every paired
+backbone/repeat timing cell.
+
 ![Food-101 comparison showing that OverlapIndex and the linear probe agree on baseline geometry, diverge under label-relevant nonlinearity, reverse under irrelevant nuisance, and that OverlapIndex uses less selector compute](img/visuals/food101-overlap-vs-linear-probe-story.png)
 
 *The quadratic endpoint is prespecified as primary. Points show the five paired
@@ -877,6 +884,72 @@ summary records the plotted replicate values, means, bootstrap gates, and source
 configuration hash, including paired selector runtimes with shared extraction and head
 evaluation excluded. The experiment's existing `food101_nonlinear_backbone_bridge_*`
 filename and artifact stems are retained for reproducibility.
+
+#### Food-101 selector runtime scaling (post-hoc computational benchmark)
+
+[`food101_selector_runtime_scaling.py`](examples/food101_selector_runtime_scaling.py)
+is a separate, post-hoc timing diagnostic. It is not part of the confirmatory
+Food-101 accuracy evidence and every artifact sets `claim_supported=false`. The
+default grid is `64, 128, 256, 512, 640` nested selector samples per class across
+the same ten frozen backbones, with five timing repeats. Each repeat uses one
+shared deterministic class-balanced nested subset for the paired five-fold
+cross-fitted OverlapIndex selector (`k=10`) and five-fold out-of-fold L2 probe.
+
+The benchmark is intentionally serial and one-thread: concurrent workers would
+measure scheduling and contention rather than per-call selector cost. Timings
+cover scoring calls only; embedding-cache reads, subset materialization, imports,
+warmup, extraction, and downstream-head evaluation are excluded. Reported
+speedup is probe time divided by OverlapIndex time; the plot annotates paired-cell
+median speedup with its interquartile range. With a completed Food-101 experiment
+cohort and its local embedding caches, the driver discovers the unique cohort and
+validates the ten cache manifests automatically:
+
+![Food-101 selector scoring time and paired probe-over-OverlapIndex speedup as the nested evaluation set grows](img/visuals/food101-selector-runtime-scaling.png)
+
+The completed ten-backbone run shows a clear size-dependent crossover:
+
+| Samples per class | Total embeddings | OverlapIndex mean | Linear probe mean | Paired median speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| `64` | `2,560` | `0.51 s` | **`0.39 s`** | `0.70×` |
+| `128` | `5,120` | **`0.84 s`** | `0.88 s` | `0.98×` |
+| `256` | `10,240` | **`1.63 s`** | `1.95 s` | `1.26×` |
+| `512` | `20,480` | **`2.61 s`** | `4.64 s` | `1.84×` |
+| `640` | `25,600` | **`3.04 s`** | `6.16 s` | **`2.00×`** |
+
+At the two largest budgets, OverlapIndex was faster in all 50 paired
+backbone/repeat cells. At 640 samples per class, backbone-level median speedups
+ranged from `1.20×` to `2.83×`; the interquartile range across all paired cells was
+`1.47×` to `2.36×`. The widening gap is descriptive rather than an asymptotic
+complexity claim, but it is consistent with the measured curves: over this range,
+elapsed time grew approximately as \(n^{0.79}\) for OverlapIndex and \(n^{1.20}\)
+for the probe.
+
+The timing evidence is stable: median repeat-to-repeat coefficient of variation was
+`0.4%`, process time matched elapsed time, and counterbalanced method order produced
+no material order effect. Absolute times remain specific to this implementation,
+hardware, and one-thread protocol. The practical conclusion is therefore scoped:
+OverlapIndex has a small-sample overhead, becomes competitive around 5,000–10,000
+embeddings in this panel, and can be materially faster for larger or
+higher-dimensional selector evaluations. The tracked
+[`food101_selector_runtime_scaling_summary.json`](examples/assets/food101_selector_runtime_scaling_summary.json)
+records the plotted aggregates, timing audit, configuration hash, and source-artifact
+checksum.
+
+```bash
+poetry run python examples/food101_selector_runtime_scaling.py --output-dir examples/output
+poetry run python examples/plot_food101_selector_runtime_scaling.py
+```
+
+The completed artifact uses a configuration-hashed stem
+`food101_selector_runtime_scaling_<12hex>` and writes planned/completed/failed
+JSON, per-backbone checkpoints, and raw/paired CSV rows. Pass explicit repeated
+`--embedding-manifest` and `--labels-manifest` paths for an exploratory panel;
+the plot then takes `--results <completed.json>`. The CLI prints warmup and
+per-budget/repeat progress outside timed intervals, and `--resume` reuses
+validated per-backbone checkpoints. The plot is a runtime-scaling curve, not a
+representation-quality result. The compact tracked summary and figure are sufficient
+to audit the README numbers without committing the 503 KB raw result artifact; rerun
+the canonical command to reproduce all 500 timed scoring rows.
 
 #### Tiny Shakespeare transformer representations
 

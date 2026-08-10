@@ -239,6 +239,30 @@ Each script writes reports to `examples/output/`.
   paired calls per replicate; shared feature extraction and downstream-head evaluation
   are excluded. Existing `food101_nonlinear_backbone_bridge_*` filenames and artifact
   stems remain technical identifiers; no universal claim is implied by this experiment.
+- `food101_selector_runtime_scaling.py`: run the separate post-hoc Food-101 selector
+  runtime diagnostic from completed embedding and label manifests. The default nested
+  grid is `64, 128, 256, 512, 640` samples per class, paired five-fold cross-fitted
+  OverlapIndex (`k=10`) against a five-fold out-of-fold L2 probe across ten frozen
+  backbones and five timing repeats. It is intentionally serial/one-thread so worker
+  contention cannot enter per-call timings; cache loading, subset materialization,
+  imports, warmup, extraction, and downstream-head evaluation are excluded. Artifacts
+  always set `claim_supported=false`. With a completed Food-101 experiment cohort
+  and its local cache, run and plot it with:
+
+  ```bash
+  poetry run python examples/food101_selector_runtime_scaling.py --output-dir examples/output
+  poetry run python examples/plot_food101_selector_runtime_scaling.py
+  ```
+
+  The driver validates the unique cohort/cache identity and writes configuration-hashed
+  planned/completed/failed JSON plus per-backbone checkpoints, printing progress outside
+  timed intervals. `--resume` reuses validated checkpoints. Explicit repeated
+  `--embedding-manifest` and `--labels-manifest` paths support exploratory panels.
+  The figure shows elapsed time with paired-cell spread and median/IQR
+  probe/OverlapIndex speedup. In the completed canonical run, the paired median
+  speedup rose from `0.70×` at 2,560 embeddings to `2.00×` at 25,600 embeddings;
+  the tracked compact summary is
+  `assets/food101_selector_runtime_scaling_summary.json`.
 - `zero_shot_transfer_structure.py`: flagship CIFAR-10 OpenCLIP experiment that
   encodes images once, varies only explicit text prompt sets, and contrasts fixed
   global/per-class OverlapIndex with prompt-sensitive zero-shot accuracy/F1. Requires
