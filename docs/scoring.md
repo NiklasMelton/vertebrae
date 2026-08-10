@@ -135,6 +135,136 @@ explicit regression targets.
 This keeps extractor and caching layers free to preserve sparse artifacts longer,
 while still meeting the MiniBatchKMeans backend requirements.
 
+The internal `OverlapIndexScorer.score_cross_fitted(...)` path is available for
+single-label cross-fitted diagnostics. It uses shuffled stratified folds, fits a fresh
+MiniBatchKMeans-backed OverlapIndex on each training fold, scores only held-out rows
+against those fixed prototypes through upstream `score_fixed(X, y)`, and returns the
+mean fold macro score with fold diagnostics in metadata. It is not a replacement for
+ordinary benchmark scoring and is not currently exposed as a public `Benchmark`
+configuration. Multi-label and regression targets are rejected because their fold
+aggregation semantics require separate protocols.
+
+## Food-101 nonlinear-backbone experiment (Q1 confirmatory protocol)
+
+`examples/food101_nonlinear_backbone_bridge.py` is the independent, frozen
+Food-101 protocol used for the linear-accessibility story in the README. It has a
+narrow, protocol-bound support flag; its universal `claim_supported` field is always
+`false`, and no claim about every backbone or representation is permitted. This page
+is the detailed protocol source: it records the frozen design, estimands, gates,
+artifact schema, and reproducibility checks rather than duplicating numerical results.
+
+### Frozen Food-101 design
+
+The driver reads the official Food-101 metadata, sorts class names, and selects the
+alphabetical first 40 classes. Five deterministic replicates use 80 official-train
+images per class for selectors and 52 official-train images per class for head
+development. The official test split remains untouched except for a 52-image-per-class
+reference cohort. Replicate cohort maps are persisted; roles are disjoint and nested
+selector budgets are `64, 68, 72, 80` images per class.
+
+The 52 official-test reference IDs are fixed across all replicates. Split-local
+donor/mode/nuisance banks are regenerated from each replicate seed, while the same
+seed pattern pairs bank permutations and class-balanced modes across the ten
+backbones and both selector methods. The prespecified per-class `{-1,+1}` mode is
+part of the semi-synthetic intervention; reference test labels never fit a
+selector/probe/head or choose a model. The compact analyzed extraction union is
+exactly 28,480 rows: 26,400 official-train cohort rows plus 2,080 fixed official-test
+reference rows (rather than the full first-40-class 40,000-row split).
+
+Q1 fixes quality to `q=1` and evaluates exactly `baseline`, `nonlinearity_full`, and
+`nuisance_full` arms. Donor, mode, and nuisance banks are split-local and copied in
+each backbone's native dimension, so a development or reference row cannot draw a
+donor from another split. The panel is the same ten final models used by the prior
+backbone study. Each model is extracted once and released before the next model is
+loaded.
+
+The selector method is five-fold cross-fitted OverlapIndex through
+`OverlapIndexScorer` with fixed `k=10` and the adapter's minimum five training
+examples per prototype. The baseline is a fixed five-fold out-of-fold L2 linear
+probe (`LogisticRegression(C=1)`). Four fixed heads are fit on development rows and
+evaluated once on the reference rows: quadratic degree two is primary; linear,
+cosine-distance kNN (`k=15`), and RBF are secondary. No family, standardization, or
+hyperparameter search is allowed to alter the endpoint.
+
+Each selector call is timed around scoring only. The paired runtime diagnostic sums
+the 120 calls in each replicate (ten backbones by three arms by four budgets) for each
+method. Shared feature extraction, reference-head fitting/evaluation, bootstrap work,
+and process-launch overhead are excluded, so this measures selector compute rather
+than complete experiment wall-clock time.
+
+For each backbone, replicate, arm, and budget, the primary ranking statistic is the
+quadratic-head Spearman log-budget AUC. The direct nonlinear effect is the
+full-nonlinearity OverlapIndex-minus-OOF-probe AUC difference. The interaction is
+the nonlinear-minus-baseline change in that OverlapIndex-minus-probe difference. A
+full-nuisance direct contrast and its nuisance-minus-baseline interaction are
+reported as diagnostics and do not replace the primary test. Kendall, regret,
+exact-best, and within-tolerance summaries are secondary.
+
+Uncertainty is a paired hierarchical bootstrap: resampling keeps each backbone's
+replicate cells, arm, method, head, and nested budget grid together before drawing
+the declared backbone/replicate hierarchy. The narrow confirmatory flag can be true
+only for a canonical complete run when both primary 95% lower bounds are positive,
+at least four of the five replicate summaries are positive, the quadratic-regret
+gate passes, the complete factorial grid has no missing, duplicate, or nonfinite
+cells, and at least 90% of hierarchical bootstrap draws are finite. Failed,
+interrupted, partial, and exploratory artifacts never pass these gates. The nuisance
+interval, complete-grid status, and finite-draw fraction are retained in the result
+for auditability.
+
+### Food-101 execution and artifacts
+
+Install the vision dependencies and run from the repository root:
+
+```bash
+poetry install -E backbone-selection
+poetry run python examples/food101_nonlinear_backbone_bridge.py
+```
+
+The tracked `examples/assets/food101_overlap_vs_linear_probe_story_summary.json`
+renders the README figure without requiring the full result artifact:
+
+```bash
+poetry run python examples/plot_food101_overlap_vs_linear_probe_story.py
+```
+
+Pass a completed result JSON with `--results` when reproducing from a local run.
+
+The CLI exposes `--jobs`, `--device`, `--resume`, `--data-dir`, `--cache-dir`,
+`--output-dir`, `--models`, `--embedding-batch-size`, `--budgets`, `--seed`,
+`--no-download`, `--replicates`, and `--bootstrap-resamples`; `--replicates` must
+remain 5 for the frozen protocol. Worker count, device, cache/output paths, and
+resume are operational controls; dataset path, model subset, batch size, budgets,
+seed, and bootstrap count remain scientific configuration fields. Fresh-process
+`multiprocessing` spawn workers score CPU blocks with
+`maxtasksperchild=1`. Each completed block is written atomically to
+`<stem>.checkpoints/<20hex>.json`, progress is printed as blocks complete, and merged
+rows are sorted by block key. Resume accepts only complete checkpoints whose
+deterministic key/path and configuration hash match. Embedding-cache reuse verifies
+sample IDs, labels, scientific identity, array SHA-256, dtype, and shape; per-model
+cache manifests persist extractor recipes, but recipes are not compared or persisted
+in aggregate protocol metadata. Runtime metadata records worker count and resolved
+device without changing scientific/cache identity. CUDA, Apple MPS, then CPU
+are selected by `--device auto`; MPS is used for sequential extraction only, while
+OverlapIndex, probes, fixed heads, bootstrap, and serialization remain CPU work.
+
+Artifacts use the exact stem
+`food101_nonlinear_backbone_bridge_food101_k10_<12hex>`, where `<12hex>` is the
+scientific configuration hash. The output directory contains
+`<stem>_planned_protocol.json`, `<stem>.json`, `<stem>.cohorts.json`,
+`<stem>_reference.csv`, `<stem>_selector.csv`, and `<stem>_ranking.csv`;
+`<stem>.cohorts.json` records replicate role indices, extracted sample IDs, train/test
+counts, and the configuration hash. Model caches are `food101_<model>_final.npy` with
+adjacent JSON manifests, and checkpoints are
+`<stem>.checkpoints/<20hex>.json`. The aggregate JSON stores `auc_rows` and
+compact quadratic `test_prediction_rows`, plus matching `schema_version` and
+`protocol_version`, `artifact_status`, configuration/hash and runtime metadata,
+three-arm factorial rows, direct/interaction and nuisance bootstrap summaries,
+complete-grid and finite-draw/regret gates, top-level
+`food101_nonlinearity_supported`, and
+`claim_supported=false`. Custom hashes cannot overwrite canonical artifacts. No
+ranking, accuracy, support flag, or other result should be cited until a conformant
+run has completed and its JSON/CSV artifacts have been inspected.
+
 ## Returned diagnostics
 
 `OverlapIndexScorer.score(...)` returns an `OverlapScoreResult` with:

@@ -34,6 +34,24 @@ class FakeOverlapIndex:
         self.rev_map = {idx: str(label) for idx, label in enumerate(labels)}
         return self.index
 
+    def fit(self, Z, y):
+        self.fit_offline(Z, y, reset_state=True)
+        return self
+
+    def score_fixed(self, Z, y):
+        y_arr = np.asarray(y)
+        self.__class__.calls[-1]["score_fixed_X_shape"] = list(Z.shape)
+        self.__class__.calls[-1]["score_fixed_y"] = y_arr.copy()
+        self.cluster_cardinality = {
+            str(label): int(np.count_nonzero(y_arr == label))
+            for label in np.unique(y_arr)
+        }
+        return self.index
+
+    @property
+    def weighted_index(self):
+        return self.index
+
 
 class FakeContinuousOverlapIndex:
     calls = []

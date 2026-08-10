@@ -125,6 +125,11 @@ extractor = HFVisionExtractor(
 )
 ```
 
+Use `processor_kwargs` only for `AutoImageProcessor.from_pretrained(...)` options such
+as `use_fast`. Use `preprocess_kwargs` for arguments applied to each processor call,
+such as per-run resizing or padding overrides. Keeping these mappings separate avoids
+silently forwarding construction-only options into image preprocessing.
+
 ### Named local-model outputs
 
 Local Torch and Keras models use the same explicit ordinary `outputs` mapping. These

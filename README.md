@@ -45,20 +45,85 @@ This makes OverlapIndex useful for questions such as:
 - During training or deployment shift, does useful geometry degrade before the
   headline model metric moves?
 
-### Separable does not necessarily mean linearly separable
+## Why not just use a linear probe?
 
-One common way to evaluate a pretrained backbone is to freeze it and train a linear
-head on the target task. This is an inexpensive and useful baseline, but a weak linear
-result only shows that the target structure was not readily accessible through that
-linear decision rule and training protocol. It does not prove that the embedding lacks
-useful separation.
+A linear probe and OverlapIndex answer different questions:
 
-Classes can be well separated while requiring curved, local, or otherwise nonlinear
-boundaries. OverlapIndex helps determine whether that separation exists. When it does,
-[Separatix](https://github.com/NiklasMelton/Separatix) provides evidence
-about whether a linear model is likely sufficient or whether nonlinear approaches are
-worth testing. Together, they help distinguish a poor representation from a promising
-representation whose geometry is simply non-trivial.
+| Method | Question it answers | Most useful when |
+| --- | --- | --- |
+| Fixed linear probe | Can this representation be decoded by this linear classifier and training protocol? | The deployed head will be linear, or linear accessibility is itself the target. |
+| OverlapIndex | How much do the observed class-conditioned regions overlap? | The downstream head is undecided, nonlinear heads are plausible, or the representation itself is being audited. |
+
+A linear probe is not wrong or obsolete. It is a direct, valuable measurement of
+**linear accessibility**. But it judges every backbone through one decoder family. A
+weak probe result can therefore mean either that the representation is poor or that
+its useful structure requires curved, local, or multimodal decision regions.
+OverlapIndex is less tied to one global decision rule: it examines class organization
+through multiple prototypes and can expose useful separation that a linear decoder
+does not make accessible.
+
+This distinction matters in practice. In the frozen, independent
+[Food-101 nonlinear-backbone experiment](#food-101-nonlinear-backbone-experiment-q1-confirmatory-protocol),
+both selectors ranked ten real image backbones well under ordinary baseline geometry.
+After a prespecified intervention made label-relevant geometry nonlinear, their
+recommendations diverged:
+
+| Quadratic-head recommendation result | Linear probe | OverlapIndex |
+| --- | ---: | ---: |
+| Spearman log-budget AUC | `0.850` | **`0.990`** |
+| Selected within one accuracy point of the best backbone | `15%` | **`95%`** |
+| Mean accuracy regret | `3.25` points | **`0.19` points** |
+| Mean selector scoring time per replicate | `3.56 min` | **`2.82 min`** |
+
+The direct OverlapIndex-minus-probe AUC advantage was `+0.140` with a paired 95%
+bootstrap interval of `[+0.004, +0.461]`. The nonlinear-minus-baseline interaction
+was `+0.152` with interval `[+0.006, +0.485]`, and all five prespecified replicates
+favored OverlapIndex. Just as importantly, the effect followed the downstream model
+family: OverlapIndex improved recommendation AUC for fixed quadratic, kNN, and RBF
+heads, but not for the fixed linear head. That is the expected signature of nonlinear
+class organization rather than a universal ranking advantage.
+
+OverlapIndex was also **1.26× faster** in this protocol, using 20.9% less summed
+selector scoring time across 600 paired evaluations. This comparison times only the
+five-fold selector calls on the same frozen embeddings; it excludes shared feature
+extraction, downstream-head evaluation, bootstrap analysis, and process-launch
+overhead. It should therefore be read as selector compute, not total experiment
+wall-clock time.
+
+![Food-101 comparison showing that OverlapIndex and the linear probe agree on baseline geometry, diverge under label-relevant nonlinearity, reverse under irrelevant nuisance, and that OverlapIndex uses less selector compute](img/visuals/food101-overlap-vs-linear-probe-story.png)
+
+*The quadratic endpoint is prespecified as primary. Points show the five paired
+replicates and error bars show one standard deviation. Head-family and runtime
+comparisons are descriptive secondary results; runtime is summed scoring-call elapsed
+time per replicate, excluding shared extraction and downstream-head evaluation.*
+
+The experiment also exposes the boundary of the claim. Under an irrelevant nuisance
+intervention, OverlapIndex AUC fell to `0.418` while the probe remained at `0.940`.
+OverlapIndex is therefore not immune to nuisance geometry, and neither method is a
+substitute for held-out downstream validation.
+
+The practical workflow is to treat the two diagnostics as complementary:
+
+| Diagnostic pattern | Practical interpretation |
+| --- | --- |
+| OverlapIndex high, probe high | Strong class organization that is also linearly accessible. |
+| OverlapIndex high, probe lower | Nonlinear or multimodal transfer potential may be hidden from a linear decoder. |
+| Probe high, OverlapIndex lower | A linear head works, but broader geometry may be fragmented or nuisance-sensitive. |
+| Both low | The representation is a weak candidate for this target under the evaluated protocol. |
+
+Use OverlapIndex to compare or shortlist representations before committing to a head.
+Use a linear probe when linear-head behavior is the deployment objective. When the
+scores disagree, inspect the geometry and validate a small set of appropriate head
+families instead of assuming either score is universally correct.
+
+> **Takeaway:** a linear probe evaluates one way of reading a representation;
+> OverlapIndex evaluates how the labeled representation is organized.
+
+When OverlapIndex finds promising but non-trivial geometry,
+[Separatix](https://github.com/NiklasMelton/Separatix) provides evidence about whether
+a linear model is likely sufficient or whether nonlinear approaches are worth testing.
+Together, they help distinguish a poor representation from a promising representation
+whose geometry is simply non-trivial.
 
 Vertebrae integrates Separatix `0.1.1` or newer. Its machine-readable guidance uses
 one canonical vocabulary across classification, multi-label, and regression targets:
@@ -638,7 +703,7 @@ poetry run python examples/colored_fashion_mnist_shortcut.py --repeats 5
 
 #### Backbone and downstream-head selection
 
-[`oxford_pets_backbone_selection.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/oxford_pets_backbone_selection.py)
+[`oxford_pets_backbone_selection.py`](examples/oxford_pets_backbone_selection.py)
 turns representation diagnostics into a controlled model-selection decision. It
 compares frozen supervised, self-supervised, efficient, and image-text-pretrained
 vision backbones on disjoint Oxford-IIIT Pet head-training, representation-selection,
@@ -706,6 +771,50 @@ supporting diagnostics without making them part of the headline claim.
 poetry install -E backbone-selection
 poetry run python examples/oxford_pets_backbone_selection.py
 ```
+
+#### Food-101 nonlinear-backbone experiment (Q1 confirmatory protocol)
+
+[`food101_nonlinear_backbone_bridge.py`](examples/food101_nonlinear_backbone_bridge.py) is an
+independent, frozen Food-101 experiment that tests when a linear probe can miss
+label-relevant geometry. The completed canonical run summarized above is evidence for
+this protocol and dataset only; `claim_supported` remains `false`, and it does not
+claim that every backbone benefits.
+
+The design is deliberately compact and reproducible: the alphabetically first 40
+Food-101 classes, five deterministic replicates, disjoint official-train selector and
+development cohorts (80 and 52 images per class), a fixed 52-image-per-class official
+test reference cohort, and nested selector budgets of `64, 68, 72, 80`. Q1 compares
+`baseline`, `nonlinearity_full`, and `nuisance_full` with split-local geometry banks.
+Five-fold cross-fitted OverlapIndex (`k=10`) and a fixed five-fold out-of-fold L2
+logistic probe select among the ten frozen final-backbone outputs. Four fixed reference
+heads are evaluated once; quadratic is primary, while linear, cosine kNN (`k=15`), and
+RBF are secondary. The direct nonlinear contrast and its nonlinear-minus-baseline
+interaction are paired hierarchical-bootstrap diagnostics; nuisance is a boundary
+control, not a rescue endpoint.
+
+The detailed frozen protocol, gating rules, artifact schema, and cache/resume checks
+live in the [scoring guide](docs/scoring.md#food-101-nonlinear-backbone-experiment-q1-confirmatory-protocol).
+Run the experiment from the repository root with:
+
+```bash
+poetry install -E backbone-selection
+poetry run python examples/food101_nonlinear_backbone_bridge.py
+```
+
+After a completed run, regenerate the README figure from the tracked compact summary
+(`examples/assets/food101_overlap_vs_linear_probe_story_summary.json`; the default
+works in a clean checkout):
+
+```bash
+poetry run python examples/plot_food101_overlap_vs_linear_probe_story.py
+```
+
+To plot a full completed artifact instead, pass `--results` with its JSON path. The
+script writes `img/visuals/food101-overlap-vs-linear-probe-story.png` and `.svg`; the
+summary records the plotted replicate values, means, bootstrap gates, and source
+configuration hash, including paired selector runtimes with shared extraction and head
+evaluation excluded. The experiment's existing `food101_nonlinear_backbone_bridge_*`
+filename and artifact stems are retained for reproducibility.
 
 #### Tiny Shakespeare transformer representations
 

@@ -62,7 +62,10 @@ class FakeTorch:
 
 
 class FakeProcessor:
+    last_call_kwargs = None
+
     def __call__(self, images, **kwargs):
+        self.__class__.last_call_kwargs = kwargs
         return {"pixel_values": FakeTensor(np.zeros((len(images), 3, 2, 2)))}
 
 
@@ -100,8 +103,11 @@ class FakeSpatialPoolerVisionModel(FakeVisionModel):
 
 
 class FakeAutoImageProcessor:
+    last_from_pretrained_kwargs = None
+
     @classmethod
     def from_pretrained(cls, model_id, **kwargs):
+        cls.last_from_pretrained_kwargs = kwargs
         return FakeProcessor()
 
 
@@ -132,6 +138,8 @@ class FakeImageModule:
 @pytest.fixture
 def fake_vision_modules(monkeypatch):
     FakeVisionModel.call_count = 0
+    FakeProcessor.last_call_kwargs = None
+    FakeAutoImageProcessor.last_from_pretrained_kwargs = None
     monkeypatch.setitem(sys.modules, "torch", FakeTorch)
     monkeypatch.setitem(sys.modules, "PIL", types.SimpleNamespace(Image=FakeImageModule))
     monkeypatch.setitem(
@@ -171,6 +179,24 @@ def test_hf_vision_recipe_includes_image_conversion_options():
     assert recipe["hidden_layer"] == 2
     assert recipe["image_mode"] == "grayscale"
     assert recipe["alpha_mode"] == "white_background"
+
+
+def test_hf_vision_separates_processor_loading_and_preprocessing_kwargs(
+    fake_vision_modules,
+):
+    extractor = HFVisionExtractor(
+        "vit",
+        "fake-vision",
+        processor_kwargs={"use_fast": False},
+        preprocess_kwargs={"do_resize": False},
+    )
+
+    extractor.transform([np.zeros((4, 4, 3), dtype=np.uint8)])
+
+    assert FakeAutoImageProcessor.last_from_pretrained_kwargs["use_fast"] is False
+    assert "use_fast" not in FakeProcessor.last_call_kwargs
+    assert FakeProcessor.last_call_kwargs["do_resize"] is False
+    assert extractor.recipe()["preprocess_kwargs"] == {"do_resize": False}
 
 
 def test_hf_vision_flattens_spatial_pooler_output(fake_vision_modules, monkeypatch):
