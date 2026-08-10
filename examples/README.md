@@ -27,6 +27,7 @@ POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/structured_latent_
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/torch_local_model.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/representation_monitoring.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_visual_suite.py
+POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_embedding_animation.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_corruption_atlas.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/tiny_shakespeare_transformer_visual_suite.py
 POETRY_VIRTUALENVS_IN_PROJECT=true poetry run python examples/fashion_mnist_overfitting.py
@@ -88,6 +89,38 @@ Each script writes reports to `examples/output/`.
   representation-monitoring, compression-frontier, and layer-by-hierarchy figures.
   The first run downloads Fashion-MNIST through torchvision; install all required
   optional dependencies with `poetry install -E visuals`.
+- `fashion_mnist_embedding_animation.py`: train a classifier with a
+  `Linear(3136, 256) -> ReLU -> Linear(256, 128) -> ReLU -> Linear(128, 2)` stack
+  and no activation after the 2D bottleneck, then animate the same fixed, stratified
+  held-out validation points as the representation learns. Each snapshot scores the
+  exact unaligned 2D bottleneck with raw OverlapIndex geometry
+  (`normalize_embeddings=False`); the
+  default rigid display-only alignment transforms the classifier regions
+  equivalently, so the plotted boundaries remain the same model. The default uses
+  50,000 training examples and a disjoint fixed 1,000-example validation probe,
+  runs five epochs, captures a snapshot every eight optimizer batches (including
+  epoch-end checkpoints), and renders at the nominal 24 FPS. The default
+  `--interpolation-frames 2` inserts two display-only linear tween frames at
+  fractions `1/3` and `2/3` between each pair of aligned checkpoints: 126 genuine
+  model checkpoint frames/CSV rows plus 250 synthetic tweens produce 376 rendered
+  frames and a measured 16.55-second forever-loop after the final-frame hold. Tween
+  OverlapIndex is recomputed on displayed geometry and accuracy from the interpolated
+  head; overlays label these frames `Display interpolation`, not model states. Two
+  tweens balance playback smoothness and GIF size; use `--fps` to choose a rate such
+  as 16–24 FPS. Use
+  `--interpolation-frames 0` for a faster checkpoint-only path (`0` through `4` are
+  allowed). A fixed-size, high-contrast monospaced panel keeps one
+  `STEP …   OVERLAPINDEX …   ACCURACY …` template on checkpoints and tweens;
+  only its step/OI/accuracy digits change (tween values are interpolated). Its
+  static footer distinguishes genuine checkpoint metrics from display-only tweens,
+  while epoch, batch position, and training loss remain in the CSV. AdamW learning
+  rate defaults to `0.002` (override with
+  `--learning-rate`). The checked-in default reaches 89.8% validation accuracy and
+  raw 2D OverlapIndex `0.793` on its fixed probe; validation accuracy peaks at 90.3%
+  at an earlier checkpoint. The official test split remains untouched. The GIF
+  writes a sidecar CSV with snapshot loss, accuracy, and OverlapIndex values. The
+  first run downloads Fashion-MNIST through torchvision and requires the `visuals`
+  extra.
 - `fashion_mnist_corruption_atlas.py`: reuse that trained checkpoint (or train it once
   when absent), then evaluate a fixed official-test probe under blur, Gaussian noise,
   occlusion, contrast reduction, and rotation at four increasing severities. The atlas
