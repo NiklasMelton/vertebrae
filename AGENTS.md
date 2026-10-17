@@ -30,7 +30,7 @@ Treat the repository as the source of truth. The project now includes single-lab
 - Use Poetry for dependency management and packaging.
 - Use the `src/` layout.
 - Current Python target in `pyproject.toml`: `>=3.9,<3.15`.
-- Current metric dependencies in `pyproject.toml`: `overlapindex>=0.1.3a3` and `separatix>=0.1.1`.
+- Current metric dependencies in `pyproject.toml`: `overlapindex>=0.1.5,<0.2.0` and `separatix>=0.1.1`.
 - Public CLI entry point: `vertebrae = vertebrae.cli:main`.
 - Core dependencies include NumPy, SciPy, scikit-learn, pandas, joblib, pydantic, psutil, pillow, overlapindex, and separatix.
 - Optional extras currently include `hf`, `audio`, `timeseries`, `video`, `torch`, `timm`, `torchvision`, `openclip`, `mlp`, `keras`, `tensorflow`, `tensorflow-hub`, `jax`, `trees`, `graph`, `onnx`, `ray`, `dask`, `distributed`, `s3`, `gcs`, and `cloud`.
@@ -105,6 +105,7 @@ Users may configure MiniBatchKMeans-relevant and implemented overlap options, su
 - `normalize_embeddings`
 - `max_dense_bytes`
 - `exclude_classes`
+- `prototype_refinement` (strict boolean, default `False`, single-label targets only)
 
 ## Current Public Workflow
 
@@ -304,6 +305,7 @@ OverlapScoringConfig(
     normalize_embeddings=True,
     max_dense_bytes=2_000_000_000,
     exclude_classes=None,
+    prototype_refinement=False,
 )
 ```
 
@@ -312,6 +314,10 @@ OverlapScoringConfig(
 Scoring rules:
 
 - Resolve classification `k` per class with `resolve_kmeans_k(...)`.
+- Opt-in `prototype_refinement=True` delegates refinement to upstream OverlapIndex.
+  Reject multi-label/regression requests and incompatible upstream constructors.
+  Keep initial resolved `k_per_class` separate from upstream refinement diagnostics
+  in result metadata (per fold for cross-fitting); retain the MiniBatchKMeans backend.
 - If requested or automatic `k` is reduced because a class is too small, surface a warning in the result and reports.
 - L2-normalize embeddings by default unless the user disables it.
 - Sparse embeddings are allowed upstream and in artifact stores, but are densified only inside scoring/diagnostic adapters when required, guarded by memory limits.

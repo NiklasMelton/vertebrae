@@ -2201,6 +2201,14 @@ class Benchmark:
             return _default_scoring_config_for_dataset(dataset)
         if target_type == REGRESSION_TARGET:
             if not isinstance(self._explicit_scoring_config, ContinuousOverlapScoringConfig):
+                if (
+                    isinstance(self._explicit_scoring_config, OverlapScoringConfig)
+                    and self._explicit_scoring_config.prototype_refinement
+                ):
+                    raise ValueError(
+                        "prototype_refinement=True supports single-label classification only; "
+                        "regression requires ContinuousOverlapScoringConfig."
+                    )
                 raise ValueError("Regression target views require ContinuousOverlapScoringConfig.")
             return self._explicit_scoring_config
         if isinstance(self._explicit_scoring_config, ContinuousOverlapScoringConfig):

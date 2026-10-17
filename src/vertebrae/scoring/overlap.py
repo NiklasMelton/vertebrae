@@ -7,7 +7,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-from vertebrae.config import ContinuousOverlapScoringConfig, OverlapScoringConfig
+from vertebrae.config import (
+    ContinuousOverlapScoringConfig,
+    OverlapScoringConfig,
+    overlap_scoring_config_recipe,
+)
 from vertebrae.utils.labels import (
     MULTI_LABEL_TARGET,
     REGRESSION_TARGET,
@@ -163,6 +167,15 @@ class OverlapIndexScorer:
             target_type=target_type,
             target_names=target_names,
         )
+        if (
+            isinstance(self.config, OverlapScoringConfig)
+            and self.config.prototype_refinement
+            and label_metadata["target_type"] != SINGLE_LABEL_TARGET
+        ):
+            raise ValueError(
+                "prototype_refinement=True supports single-label classification only; "
+                "disable it for multi-label or regression targets."
+            )
         if label_metadata["target_type"] == MULTI_LABEL_TARGET:
             labels = multilabel_indicator(
                 normalized_labels,
@@ -292,6 +305,7 @@ class OverlapIndexScorer:
                     "kmeans_kwargs": kmeans_kwargs,
                     "offline_chunk_size": config.offline_chunk_size,
                     "exclude_classes": backend_excluded_classes,
+                    "prototype_refinement": config.prototype_refinement,
                 },
             )
             if not hasattr(index, "score_fixed"):
@@ -328,6 +342,9 @@ class OverlapIndexScorer:
                     "score": macro_score,
                     "weighted_score": weighted_score,
                     "k_per_class": make_json_safe(k_per_class),
+                    "prototype_refinement_diagnostics": make_json_safe(
+                        getattr(index, "prototype_refinement_", None)
+                    ),
                     "warnings": fold_warnings,
                 }
             )
@@ -361,6 +378,8 @@ class OverlapIndexScorer:
             metadata={
                 "backend": "MiniBatchKMeans",
                 "score_kind": "classification_overlap_cross_fitted",
+                "prototype_refinement": config.prototype_refinement,
+                "requested_k": (overlap_scoring_config_recipe(config) or {})["k"],
                 "score_label": "overlap_macro",
                 "normalize_embeddings": config.normalize_embeddings,
                 "offline_chunk_size": config.offline_chunk_size,
@@ -438,6 +457,7 @@ class OverlapIndexScorer:
                 "kmeans_kwargs": kmeans_kwargs,
                 "offline_chunk_size": config.offline_chunk_size,
                 "exclude_classes": backend_excluded_classes,
+                "prototype_refinement": config.prototype_refinement,
             },
         )
         with _capture_runtime_warnings(warnings):
@@ -474,6 +494,11 @@ class OverlapIndexScorer:
         metadata = {
             "backend": "MiniBatchKMeans",
             "score_kind": "classification_overlap",
+            "prototype_refinement": config.prototype_refinement,
+            "prototype_refinement_diagnostics": make_json_safe(
+                getattr(index, "prototype_refinement_", None)
+            ),
+            "requested_k": (overlap_scoring_config_recipe(config) or {})["k"],
             "score_label": "overlap_macro",
             "normalize_embeddings": config.normalize_embeddings,
             "offline_chunk_size": config.offline_chunk_size,
@@ -655,7 +680,7 @@ def _load_overlap_index() -> Any:
         from overlapindex import OverlapIndex
     except ImportError as exc:
         raise ImportError(
-            "overlapindex>=0.1.3a4 is required for scoring. Install dependencies with "
+            "overlapindex>=0.1.5,<0.2.0 is required for scoring. Install dependencies with "
             "Poetry or install overlapindex directly."
         ) from exc
     return OverlapIndex
@@ -666,7 +691,7 @@ def _load_continuous_overlap_index() -> Any:
         from overlapindex import ContinuousOverlapIndex
     except ImportError as exc:
         raise ImportError(
-            "overlapindex>=0.1.3a4 is required for regression scoring. Install "
+            "overlapindex>=0.1.5,<0.2.0 is required for regression scoring. Install "
             "dependencies with Poetry or install overlapindex directly."
         ) from exc
     return ContinuousOverlapIndex
@@ -683,6 +708,12 @@ def _instantiate_with_supported_kwargs(cls: Any, kwargs: Dict[str, Any]) -> Any:
     ):
         return cls(**kwargs)
     supported = {name: value for name, value in kwargs.items() if name in signature.parameters}
+    if kwargs.get("prototype_refinement") is True and "prototype_refinement" not in supported:
+        raise RuntimeError(
+            "prototype_refinement=True requires an OverlapIndex constructor supporting "
+            "prototype_refinement. Install overlapindex>=0.1.5,<0.2.0; the requested "
+            "refinement cannot be silently disabled."
+        )
     return cls(**supported)
 
 

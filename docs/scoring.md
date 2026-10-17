@@ -50,6 +50,7 @@ config = OverlapScoringConfig(
     offline_chunk_size=10_000,
     normalize_embeddings=True,
     exclude_classes=None,
+    prototype_refinement=False,
 )
 ```
 
@@ -71,6 +72,10 @@ Key fields:
   the full embedding matrix.
 - `exclude_classes`: class id or ids retained during fitting and detailed
   diagnostics but omitted from global macro and weighted aggregation.
+- `prototype_refinement`: strict boolean, default `False`. Enable upstream prototype
+  refinement for single-label classification with OverlapIndex `>=0.1.5,<0.2.0`.
+  Multi-label and regression requests raise an error; an incompatible dependency
+  cannot silently discard an enabled request.
 
 Typed labels are translated through the dataset's semantic label catalog before the
 OverlapIndex adapter is called. `k` mappings and `exclude_classes` may still use the
@@ -143,6 +148,40 @@ mean fold macro score with fold diagnostics in metadata. It is not a replacement
 ordinary benchmark scoring and is not currently exposed as a public `Benchmark`
 configuration. Multi-label and regression targets are rejected because their fold
 aggregation semantics require separate protocols.
+
+## Optional prototype refinement and backbone ranking
+
+Set `OverlapScoringConfig(prototype_refinement=True)` to refine the initial
+MiniBatchKMeans prototypes through upstream OverlapIndex. The flag applies to ordinary
+single-label scoring, each training fold of `score_cross_fitted`, and stability
+repetitions. The default remains `False`. Normalization, adaptive per-class `k`,
+sample-count guardrails, fold defaults, seeds, and ranking rules retain their existing
+behavior. Refinement does not add a head-training or model-selection workflow.
+
+`metadata["requested_k"]` records the initial request and `k_per_class` records the
+resolved initial counts. Upstream `prototype_refinement_` diagnostics are preserved as
+JSON-safe `metadata["prototype_refinement_diagnostics"]`; refined counts must be read
+there, not interpreted as a change to `k_per_class`. Cross-fitted results preserve these
+diagnostics separately in each `metadata["cross_fit"]["folds"]` entry. Config recipes,
+score artifacts, and CLI pickles retain the flag. Changing it changes scoring and
+stability cache identities while preserving reusable raw embedding artifacts.
+
+OI-first shortlisting can reserve downstream training and cross-validation for a small
+set of promising representations. A separate six-source prospective study evaluated
+KMeans with 16 initial prototypes plus refinement, fold-local centering and scalar-RMS
+geometry, and three-fold cross-fitting. It shortlisted the top two with OI and selected
+the finalist by training cross-validation. Mean held-out regret was **1.2249 percentage
+points**, versus **1.9085** for the linear-probe control; post-embedding logical component
+cost was **37.4843%** of the full bank. All prespecified gates passed, with worst-case
+regret **7.8125 percentage points**.
+
+Those results concern the complete tested protocol. They do not validate Vertebrae's
+unchanged MiniBatchKMeans and normalization defaults, isolate refinement's contribution,
+or establish a universal advantage. Downstream held-out validation remains necessary;
+head training and finalist selection remain the caller's responsibility. Historical
+Food-101 and Oxford-IIIT Pet examples retain their original protocols and results.
+The [upstream canonical evidence page](https://github.com/NiklasMelton/OverlapIndex/blob/native-oi-refinement-release/docs/native_refinement_evidence.md)
+records the frozen cohort, gate outcomes, provenance, and uncertainty.
 
 ## Food-101 nonlinear-backbone experiment (Q1 confirmatory protocol)
 

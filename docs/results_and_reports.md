@@ -36,6 +36,13 @@ recipes emitted by Separatix 0.1.1. The raw report remains available for audit;
 consumers should use the normalized fields and recipe helpers rather than
 reimplementing Separatix's selection logic.
 
+For single-label overlap, metric metadata records the `prototype_refinement` setting,
+the initial `requested_k`, and upstream `prototype_refinement_` diagnostics under
+`prototype_refinement_diagnostics`. `k_per_class` remains the resolved initial count,
+not the refined count. Internal cross-fitted scoring retains the upstream diagnostics
+per fold. These fields survive JSON and artifact reconstruction; see
+[optional prototype refinement](scoring.md#optional-prototype-refinement-and-backbone-ranking).
+
 ## Resource profiles and quality cohorts
 
 `ResourceProfilingConfig(enabled=True)` adds a serialized profile containing observed
