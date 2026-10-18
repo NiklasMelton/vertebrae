@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -1110,6 +1111,20 @@ def test_protocol_key_helpers_reject_incomplete_identities():
     )
 
 
+def test_separatix_artifact_keys_include_release_contract_and_schema():
+    first = _default_separatix_key("embeddings/a", "labels/a", "scores/a")
+    second = separatix_artifact_key(
+        "embeddings/a",
+        labels_key="labels/a",
+        groups_key=None,
+        score_key="scores/a",
+        separatix_config=SeparatixConfig(mlp_probes=True),
+    )
+
+    assert first.startswith("embeddings/a/diagnostics/separatix-v3-")
+    assert first != second
+
+
 def test_label_and_group_keys_digest_exact_aligned_content():
     class ProtocolDataset:
         metadata = {"target_type": "single_label", "group_name": "source"}
@@ -1376,12 +1391,42 @@ def test_diagnose_embedding_artifact_and_attach_to_benchmark_result(
     assert diagnostic["diagnostic"]["ran"] is True
     assert fake_separatix.ComplexityProfiler.calls[-1]["n_labels"] == 4
     assert diagnostic["diagnostic"]["probe_summary"]["status"] == "executed"
+    diagnostic_payload = diagnostic["diagnostic"]
+    guidance = diagnostic_payload["family_guidance"]
+    assert guidance["minimum_recommended_family"] == "smooth_nonlinear"
+    assert guidance["selected_probe"] == "smooth_poly"
+    assert guidance["selected_recipe_id"] == "fake-smooth_poly"
+    assert guidance["paired_status"] == "available"
+    assert guidance["paired_method"] == "paired_oof_bootstrap"
+    assert diagnostic_payload["probe_summary"]["evaluation"]["alignment_status"] == "aligned"
+    assert diagnostic_payload["probe_summary"]["evaluation"]["evaluation_plan_id"] == ("fake-plan")
+    assert (
+        diagnostic_payload["probe_summary"]["evaluation"]["effective_train_size_summary"]["mean"]
+        == 2.0
+    )
     assert result["extractor_results"][0]["separatix"]["recommendation"] == (
         "smooth_nonlinear_recommended"
     )
     assert (
         result["extractor_results"][0]["separatix"]["probe_summary"]["best_probe"] == "smooth_poly"
     )
+    hydrated_guidance = result["extractor_results"][0]["separatix"]["family_guidance"]
+    assert hydrated_guidance["selected_recipe_id"] == "fake-smooth_poly"
+    assert hydrated_guidance["paired_status"] == "available"
+
+    # Artifacts written before family_guidance existed remain readable, but
+    # they explicitly expose an empty guidance object rather than inventing a
+    # recommendation or recipe.
+    legacy_artifact = deepcopy(diagnostic)
+    legacy_artifact["diagnostic"].pop("family_guidance", None)
+    legacy_key = diagnostic["output_key"] + "/legacy"
+    store.put_json(legacy_key, legacy_artifact)
+    legacy_result = benchmark_result_from_artifacts(
+        score_key=score["output_key"],
+        store=store,
+        separatix_key=legacy_key,
+    )
+    assert legacy_result["extractor_results"][0]["separatix"]["family_guidance"] == {}
 
 
 @pytest.mark.parametrize(

@@ -101,6 +101,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         help="Figure destination; defaults to VERTABRAE_EXAMPLE_OUTPUT_DIR.",
     )
     parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Trained-model destination; defaults to "
+            "VERTABRAE_EXAMPLE_OUTPUT_DIR/fashion_mnist_cnn.pt."
+        ),
+    )
+    parser.add_argument(
         "--no-download",
         action="store_true",
         help="Require Fashion-MNIST to already exist under --data-dir.",
@@ -196,6 +205,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     output_dir = ensure_output_dir()
     figure_dir = args.figure_dir or output_dir
     figure_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = args.checkpoint or output_dir / "fashion_mnist_cnn.pt"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "state_dict": model.state_dict(),
+            "architecture": "fashion_mnist_visual_suite.compact_cnn.v1",
+            "epochs": args.epochs,
+            "train_size": args.train_size,
+            "seed": args.seed,
+            "normalization_mean": _NORMALIZATION_MEAN,
+            "normalization_std": _NORMALIZATION_STD,
+        },
+        checkpoint_path,
+    )
     history = monitor.history.to_dataframe()
     history.to_csv(output_dir / "fashion_mnist_representation_history.csv", index=False)
 
@@ -237,6 +260,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         history.sort_values("global_step")["context_metadata.validation_accuracy"].dropna().iloc[-1]
     )
     print(f"Final Fashion-MNIST validation accuracy: {final_accuracy:.3f}")
+    print(f"Wrote trained checkpoint {checkpoint_path}")
     for path in (*monitoring_paths, *compression_paths, *hierarchy_paths):
         print(f"Wrote {path}")
     print(f"Metrics written to {output_dir}")

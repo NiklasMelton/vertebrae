@@ -189,6 +189,24 @@ vertebrae compress \
 The resulting compressed artifact can be passed to `vertebrae score` just like a
 raw embedding artifact.
 
+## Storage-quality frontier example
+
+[`fashion_mnist_visual_suite.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/fashion_mnist_visual_suite.py)
+compares raw, PCA-reduced, and quantized variants of a trained Fashion-MNIST
+penultimate embedding. Each plotted point uses the measured encoded bytes per sample
+and the resulting OverlapIndex score; the dashed line marks the non-dominated frontier.
+This keeps two questions separate: whether a representation retains labeled geometry
+and how much storage its encoded form requires.
+
+The frontier is specific to that embedding and dataset. PCA can trade dimensions for
+quality while quantization trades numeric precision for storage, so neither should be
+treated as a universally superior compression method. Reproduce it with:
+
+```bash
+poetry install -E visuals
+poetry run python examples/fashion_mnist_visual_suite.py
+```
+
 ## Choosing a method
 
 - Use `truncated_svd` for sparse text features.

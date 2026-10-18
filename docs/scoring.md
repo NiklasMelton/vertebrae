@@ -3,11 +3,14 @@
 All [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) scoring in
 `vertebrae` goes through one internal adapter: `OverlapIndexScorer`.
 
-`vertebrae` can also run a default
+`vertebrae` can also run an opt-in, rankable fixed-capacity linear probe and a default
 [Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic
 through the internal `SeparatixScorer` adapter. Separatix does not affect
 extractor ranking; it adds classifier-complexity guidance on top of the overlap
 result when enabled.
+The adapter targets Separatix `0.1.1` or newer. That release uses one canonical
+recommendation vocabulary for classification, multi-label, and regression
+diagnostics while retaining target-specific explanatory text.
 When a dataset declares groups, vertebrae forwards them to Separatix so supervised
 evaluation and structural evidence respect those independence units. A grouped
 diagnostic that lacks sufficient cross-group class support is recorded as skipped;
@@ -47,6 +50,7 @@ config = OverlapScoringConfig(
     offline_chunk_size=10_000,
     normalize_embeddings=True,
     exclude_classes=None,
+    prototype_refinement=False,
 )
 ```
 
@@ -68,6 +72,10 @@ Key fields:
   the full embedding matrix.
 - `exclude_classes`: class id or ids retained during fitting and detailed
   diagnostics but omitted from global macro and weighted aggregation.
+- `prototype_refinement`: strict boolean, default `False`. Enable upstream prototype
+  refinement for single-label classification with OverlapIndex `>=0.1.5,<0.2.0`.
+  Multi-label and regression requests raise an error; an incompatible dependency
+  cannot silently discard an enabled request.
 
 Typed labels are translated through the dataset's semantic label catalog before the
 OverlapIndex adapter is called. `k` mappings and `exclude_classes` may still use the
@@ -131,6 +139,214 @@ explicit regression targets.
 
 This keeps extractor and caching layers free to preserve sparse artifacts longer,
 while still meeting the MiniBatchKMeans backend requirements.
+
+The internal `OverlapIndexScorer.score_cross_fitted(...)` path is available for
+single-label cross-fitted diagnostics. It uses shuffled stratified folds, fits a fresh
+MiniBatchKMeans-backed OverlapIndex on each training fold, scores only held-out rows
+against those fixed prototypes through upstream `score_fixed(X, y)`, and returns the
+mean fold macro score with fold diagnostics in metadata. It is not a replacement for
+ordinary benchmark scoring and is not currently exposed as a public `Benchmark`
+configuration. Multi-label and regression targets are rejected because their fold
+aggregation semantics require separate protocols.
+
+## Optional prototype refinement and backbone ranking
+
+Set `OverlapScoringConfig(prototype_refinement=True)` to refine the initial
+MiniBatchKMeans prototypes through upstream OverlapIndex. The flag applies to ordinary
+single-label scoring, each training fold of `score_cross_fitted`, and stability
+repetitions. The default remains `False`. Normalization, adaptive per-class `k`,
+sample-count guardrails, fold defaults, seeds, and ranking rules retain their existing
+behavior. Refinement does not add a head-training or model-selection workflow.
+
+`metadata["requested_k"]` records the initial request and `k_per_class` records the
+resolved initial counts. Upstream `prototype_refinement_` diagnostics are preserved as
+JSON-safe `metadata["prototype_refinement_diagnostics"]`; refined counts must be read
+there, not interpreted as a change to `k_per_class`. Cross-fitted results preserve these
+diagnostics separately in each `metadata["cross_fit"]["folds"]` entry. Config recipes,
+score artifacts, and CLI pickles retain the flag. Changing it changes scoring and
+stability cache identities while preserving reusable raw embedding artifacts.
+
+OI-first shortlisting can reserve downstream training and cross-validation for a small
+set of promising representations. A separate six-source prospective study evaluated
+KMeans with 16 initial prototypes plus refinement, fold-local centering and scalar-RMS
+geometry, and three-fold cross-fitting. It shortlisted the top two with OI and selected
+the finalist by training cross-validation. Mean held-out regret was **1.2249 percentage
+points**, versus **1.9085** for the linear-probe control; post-embedding logical component
+cost was **37.4843%** of the full bank. All prespecified gates passed, with worst-case
+regret **7.8125 percentage points**.
+
+Those results concern the complete tested protocol. They do not validate Vertebrae's
+unchanged MiniBatchKMeans and normalization defaults, isolate refinement's contribution,
+or establish a universal advantage. Downstream held-out validation remains necessary;
+head training and finalist selection remain the caller's responsibility. Historical
+Food-101 and Oxford-IIIT Pet examples retain their original protocols and results.
+The [upstream canonical evidence page](https://github.com/NiklasMelton/OverlapIndex/blob/native-oi-refinement-release/docs/native_refinement_evidence.md)
+records the frozen cohort, gate outcomes, provenance, and uncertainty.
+
+## Food-101 nonlinear-backbone experiment (Q1 confirmatory protocol)
+
+`examples/food101_nonlinear_backbone_bridge.py` is the independent, frozen
+Food-101 protocol used for the linear-accessibility story in the README. It has a
+narrow, protocol-bound support flag; its universal `claim_supported` field is always
+`false`, and no claim about every backbone or representation is permitted. This page
+is the detailed protocol source: it records the frozen design, estimands, gates,
+artifact schema, and reproducibility checks rather than duplicating numerical results.
+
+### Frozen Food-101 design
+
+The driver reads the official Food-101 metadata, sorts class names, and selects the
+alphabetical first 40 classes. Five deterministic replicates use 80 official-train
+images per class for selectors and 52 official-train images per class for head
+development. The official test split remains untouched except for a 52-image-per-class
+reference cohort. Replicate cohort maps are persisted; roles are disjoint and nested
+selector budgets are `64, 68, 72, 80` images per class.
+
+The 52 official-test reference IDs are fixed across all replicates. Split-local
+donor/mode/nuisance banks are regenerated from each replicate seed, while the same
+seed pattern pairs bank permutations and class-balanced modes across the ten
+backbones and both selector methods. The prespecified per-class `{-1,+1}` mode is
+part of the semi-synthetic intervention; reference test labels never fit a
+selector/probe/head or choose a model. The compact analyzed extraction union is
+exactly 28,480 rows: 26,400 official-train cohort rows plus 2,080 fixed official-test
+reference rows (rather than the full first-40-class 40,000-row split).
+
+Q1 fixes quality to `q=1` and evaluates exactly `baseline`, `nonlinearity_full`, and
+`nuisance_full` arms. Donor, mode, and nuisance banks are split-local and copied in
+each backbone's native dimension, so a development or reference row cannot draw a
+donor from another split. The panel is the same ten final models used by the prior
+backbone study. Each model is extracted once and released before the next model is
+loaded.
+
+The selector method is five-fold cross-fitted OverlapIndex through
+`OverlapIndexScorer` with fixed `k=10` and the adapter's minimum five training
+examples per prototype. The baseline is a fixed five-fold out-of-fold L2 linear
+probe (`LogisticRegression(C=1)`). Four fixed heads are fit on development rows and
+evaluated once on the reference rows: quadratic degree two is primary; linear,
+cosine-distance kNN (`k=15`), and RBF are secondary. No family, standardization, or
+hyperparameter search is allowed to alter the endpoint.
+
+Each selector call is timed around scoring only. The paired runtime diagnostic sums
+the 120 calls in each replicate (ten backbones by three arms by four budgets) for each
+method. Shared feature extraction, reference-head fitting/evaluation, bootstrap work,
+and process-launch overhead are excluded, so this measures selector compute rather
+than complete experiment wall-clock time.
+
+For each backbone, replicate, arm, and budget, the primary ranking statistic is the
+quadratic-head Spearman log-budget AUC. The direct nonlinear effect is the
+full-nonlinearity OverlapIndex-minus-OOF-probe AUC difference. The interaction is
+the nonlinear-minus-baseline change in that OverlapIndex-minus-probe difference. A
+full-nuisance direct contrast and its nuisance-minus-baseline interaction are
+reported as diagnostics and do not replace the primary test. Kendall, regret,
+exact-best, and within-tolerance summaries are secondary.
+
+Uncertainty is a paired hierarchical bootstrap: resampling keeps each backbone's
+replicate cells, arm, method, head, and nested budget grid together before drawing
+the declared backbone/replicate hierarchy. The narrow confirmatory flag can be true
+only for a canonical complete run when both primary 95% lower bounds are positive,
+at least four of the five replicate summaries are positive, the quadratic-regret
+gate passes, the complete factorial grid has no missing, duplicate, or nonfinite
+cells, and at least 90% of hierarchical bootstrap draws are finite. Failed,
+interrupted, partial, and exploratory artifacts never pass these gates. The nuisance
+interval, complete-grid status, and finite-draw fraction are retained in the result
+for auditability.
+
+### Food-101 execution and artifacts
+
+Install the vision dependencies and run from the repository root:
+
+```bash
+poetry install -E backbone-selection
+poetry run python examples/food101_nonlinear_backbone_bridge.py
+```
+
+The tracked `examples/assets/food101_overlap_vs_linear_probe_story_summary.json`
+renders the README figure without requiring the full result artifact:
+
+```bash
+poetry run python examples/plot_food101_overlap_vs_linear_probe_story.py
+```
+
+Pass a completed result JSON with `--results` when reproducing from a local run.
+
+The CLI exposes `--jobs`, `--device`, `--resume`, `--data-dir`, `--cache-dir`,
+`--output-dir`, `--models`, `--embedding-batch-size`, `--budgets`, `--seed`,
+`--no-download`, `--replicates`, and `--bootstrap-resamples`; `--replicates` must
+remain 5 for the frozen protocol. Worker count, device, cache/output paths, and
+resume are operational controls; dataset path, model subset, batch size, budgets,
+seed, and bootstrap count remain scientific configuration fields. Fresh-process
+`multiprocessing` spawn workers score CPU blocks with
+`maxtasksperchild=1`. Each completed block is written atomically to
+`<stem>.checkpoints/<20hex>.json`, progress is printed as blocks complete, and merged
+rows are sorted by block key. Resume accepts only complete checkpoints whose
+deterministic key/path and configuration hash match. Embedding-cache reuse verifies
+sample IDs, labels, scientific identity, array SHA-256, dtype, and shape; per-model
+cache manifests persist extractor recipes, but recipes are not compared or persisted
+in aggregate protocol metadata. Runtime metadata records worker count and resolved
+device without changing scientific/cache identity. CUDA, Apple MPS, then CPU
+are selected by `--device auto`; MPS is used for sequential extraction only, while
+OverlapIndex, probes, fixed heads, bootstrap, and serialization remain CPU work.
+
+Artifacts use the exact stem
+`food101_nonlinear_backbone_bridge_food101_k10_<12hex>`, where `<12hex>` is the
+scientific configuration hash. The output directory contains
+`<stem>_planned_protocol.json`, `<stem>.json`, `<stem>.cohorts.json`,
+`<stem>_reference.csv`, `<stem>_selector.csv`, and `<stem>_ranking.csv`;
+`<stem>.cohorts.json` records replicate role indices, extracted sample IDs, train/test
+counts, and the configuration hash. Model caches are `food101_<model>_final.npy` with
+adjacent JSON manifests, and checkpoints are
+`<stem>.checkpoints/<20hex>.json`. The aggregate JSON stores `auc_rows` and
+compact quadratic `test_prediction_rows`, plus matching `schema_version` and
+`protocol_version`, `artifact_status`, configuration/hash and runtime metadata,
+three-arm factorial rows, direct/interaction and nuisance bootstrap summaries,
+complete-grid and finite-draw/regret gates, top-level
+`food101_nonlinearity_supported`, and
+`claim_supported=false`. Custom hashes cannot overwrite canonical artifacts. No
+ranking, accuracy, support flag, or other result should be cited until a conformant
+run has completed and its JSON/CSV artifacts have been inspected.
+
+## Food-101 selector runtime scaling (post-hoc computational benchmark)
+
+`examples/food101_selector_runtime_scaling.py` is intentionally separate from the
+Q1 accuracy protocol above. It measures selector compute only and always writes
+`claim_supported=false`; it is not evidence for the nonlinear-backbone accuracy
+claim. The default grid is `64, 128, 256, 512, 640` nested samples per class over
+the same ten frozen backbones and five timing repeats. Each repeat reuses one
+deterministic class-balanced nested subset for both methods: five-fold
+cross-fitted OverlapIndex (`k=10`) and a five-fold out-of-fold L2 probe.
+
+The driver runs serially with one scoring worker on purpose. Concurrent workers
+would fold scheduling, CPU contention, and process-launch effects into a per-call
+measurement. The timed interval excludes embedding-cache reads, subset
+materialization, imports, warmup, feature extraction, downstream-head evaluation,
+and plotting. The paired speedup is probe elapsed time divided by OverlapIndex
+elapsed time; the figure annotates the paired-cell median speedup with its
+interquartile range. This is descriptive spread across paired backbone/repeat
+cells, not a population confidence interval.
+
+With a completed Food-101 experiment cohort and its local cache manifests, the
+driver discovers the unique cohort, validates sample/label hashes, and excludes
+the fixed official-test rows automatically:
+
+```bash
+poetry run python examples/food101_selector_runtime_scaling.py --output-dir examples/output
+poetry run python examples/plot_food101_selector_runtime_scaling.py
+```
+
+For an exploratory panel, pass repeated `--embedding-manifest` paths and a
+`--labels-manifest`, then pass the completed configuration-hashed JSON to the
+plotter with `--results`. The driver writes planned/completed/failed JSON,
+per-backbone checkpoints, and raw/paired CSV rows, printing progress outside the
+timed intervals; `--resume` reuses validated checkpoints. Runtime artifacts are
+computational diagnostics with explicit boundaries; do not merge them into the
+confirmatory accuracy table or infer total experiment wall-clock time.
+
+In the completed canonical run, the paired median probe-over-OverlapIndex speedup
+rose from `0.70×` at 2,560 embeddings to `2.00×` at 25,600 embeddings. OverlapIndex
+was faster in all 50 paired cells at both 20,480 and 25,600 embeddings. The compact
+tracked summary at
+`examples/assets/food101_selector_runtime_scaling_summary.json` records the plotted
+aggregates and source-artifact checksum; these remain descriptive, hardware-specific
+runtime results rather than representation-quality evidence.
 
 ## Returned diagnostics
 
@@ -202,6 +418,66 @@ intentionally unsupported.
 not formal confidence intervals unless a different statistical protocol is added
 explicitly in a future release.
 
+## Rankable linear-probe scoring
+
+Use `LinearProbeMetric` when candidate selection should also measure how readily a
+fixed linear decoder can read each representation:
+
+```python
+from vertebrae import Benchmark, LinearProbeConfig, LinearProbeMetric
+
+probe = LinearProbeMetric(
+    LinearProbeConfig(
+        n_splits=5,
+        random_state=42,
+        normalize_embeddings=True,
+    )
+)
+
+# OverlapIndex remains the ranking signal; both metrics are reported.
+diagnostic_result = Benchmark(dataset, extractors, metrics=[probe]).run()
+
+# Both metrics are still reported, but the probe selects the ranking.
+probe_ranked_result = Benchmark(
+    dataset,
+    extractors,
+    metrics=[probe],
+    primary_metric="linear_probe",
+).run()
+```
+
+The protocol deliberately fixes model capacity and does not tune hyperparameters on
+the evaluated labels. It uses L2-regularized logistic regression for single-label
+classification, one-vs-rest L2 logistic regression for multi-label targets, and ridge
+regression for regression targets. Each reported score is assembled from out-of-fold
+predictions; an estimator is never scored on a row used to fit that estimator.
+
+The target-aware default primary statistics are:
+
+- balanced accuracy for single-label classification;
+- macro F1 for multi-label classification;
+- variance-weighted R² for regression.
+
+`LinearProbeConfig.primary_metric` can select another supported statistic. MAE, RMSE,
+and mean normalized RMSE correctly rank lower values first. Classification reports
+also retain accuracy, macro F1, and per-class recall; multi-label reports retain micro
+F1, sample Jaccard, and subset accuracy; regression reports retain uniform-average R²
+and per-target error statistics.
+
+When dataset groups are available, the probe uses group-disjoint folds. Single-label
+evaluation uses stratified group folds; multi-label and regression evaluation use
+group folds. Without groups it uses stratified folds for single-label targets and
+ordinary shuffled folds otherwise. The requested fold count is reduced with an
+explicit warning when target or group support is insufficient, and evaluation fails
+rather than falling back to a leaky row-level split.
+
+The metric is opt-in rather than enabled for every benchmark because it fits one
+estimator per fold for every embedding variant. Adding it always preserves the overlap
+result, so users can compare the two signals regardless of which one drives ranking.
+An out-of-fold probe is a candidate-selection diagnostic, not an independent final
+test: all labeled rows participate in training in some folds. Final downstream claims
+still require a separately held-out evaluation protocol.
+
 ## Separatix diagnostics
 
 Use `SeparatixConfig` to control the optional
@@ -215,6 +491,9 @@ config = SeparatixConfig(
     overlap_threshold=0.80,
     random_state=42,
     densify_policy="warn_and_sample",
+    mlp_probes=True,
+    mlp_trigger_skill_threshold=0.75,
+    mlp_min_improvement=0.02,
 )
 ```
 
@@ -229,9 +508,21 @@ Current behavior:
   `target_mode="multilabel"`.
 - Regression targets are passed with `target_mode="regression"`.
 - Optional Separatix MLP probes can be enabled with `mlp_probes=True`.
+- `mlp_trigger_skill_threshold` controls only whether MLP computation is attempted;
+  `mlp_min_improvement` controls whether paired MLP evidence can override the
+  simpler-family guidance. These are intentionally separate so an MLP can be
+  selected when the simpler probes are useful but not already near-perfect.
 - Linear/nonlinear probe comparisons use the declared metric direction: accuracy/F1
   families favor larger values, while MAE/RMSE favor smaller values. Reported
   improvement and favored-family fields follow that same direction.
+- The machine-readable `recommendation` is one of eight shared labels:
+  `linear_likely_sufficient`, `smooth_nonlinear_recommended`,
+  `kernel_or_local_recommended`, `high_capacity_or_partitioning_recommended`,
+  `feedforward_mlp_recommended`, `feature_or_target_bottleneck_likely`,
+  `insufficient_data_or_unreliable_geometry`, or `inconclusive`.
+  These labels are deliberately target-agnostic. Plain-text recommendation
+  headlines and suggested model names still use `target_type`, so a regression
+  result does not lose its regression-specific interpretation.
 - The full Separatix report is preserved in JSON outputs, while Markdown reports
   show a compact recommendation, confidence, decision path, key scores, probe
   evidence, evaluation context, and skips.
@@ -249,22 +540,50 @@ Separatix follows the same normalization convention as overlap scoring when
 `warnings` expose the sparse and memory audit directly; the complete upstream report
 remains available through `SeparatixResult.report`.
 
-Separatix is the only downstream-complexity and probe-style diagnostic path in
-vertebrae. Ranking remains based on overlap scores; Separatix probe fields are
-reported only when the Separatix diagnostic runs and includes them.
+Separatix is the downstream-complexity diagnostic path. Its internal probe evidence
+does not participate in ranking and is reported only when the gated diagnostic runs.
+The separately configured `LinearProbeMetric` is a fixed, rankable evaluation metric;
+it does not replace or populate Separatix's family-comparison fields.
 
 `SeparatixResult.probe_summary` normalizes the existing probe evidence without
 fitting another model. It records the best probe, a target-appropriate primary
 metric when Separatix declares one, the complete reported metric map, comparable
 linear/nonlinear evidence, evaluation and sampling context, grouping counts, and
-probe-specific skip reasons. Single-label fallback summaries use Separatix's
-balanced-accuracy baseline contract. Multi-label and regression summaries never
-invent an accuracy value or select an undeclared primary metric.
+probe-specific skip reasons. Its evaluation context also records whether the
+comparison is estimator-aligned, the cross-validation plan and cohort size, and
+the effective train-size summary (the number of rows available to each fitted
+fold). This makes it possible to distinguish a genuinely different family
+recommendation from a comparison made with a different estimator or training
+budget. Single-label fallback summaries use Separatix's balanced-accuracy
+baseline contract. Multi-label and regression summaries never invent an accuracy
+value or select an undeclared primary metric.
+
+Separatix `0.1.1` also exposes an uncertainty-aware family frontier. The
+`SeparatixResult.family_guidance` mapping contains the guidance status, target
+type, reason when unavailable, `minimum_recommended_family`,
+`plausible_families`, and the `decision_method`. It separately records the
+selected family/probe, the selected recipe id, whether an MLP override is active,
+and the paired-comparison status and method. The minimum family is the simplest
+family supported by the evidence; the plausible set retains alternatives that
+cannot be ruled out. Consumers should not treat a family outside that set as
+equally supported merely because its point estimate is close.
+
+Probe recipes are versioned, JSON-safe Separatix data rather than opaque live
+estimators. Use `separatix_result.probe_recipe(name_or_id)` to retrieve a retained
+recipe or `separatix_result.selected_probe_recipe()` for the family/probe selected
+by the guidance.
+Pass a returned recipe to Separatix's `make_probe_estimator(...)` factory when a
+downstream audit must reproduce the exact preprocessing, sketch, kernel, or MLP
+architecture used by the diagnostic. Missing or unavailable recipes return
+`None`; Vertebrae does not guess a replacement estimator.
 
 These fields are descriptive diagnostics. They do not participate in ranking,
 aggregate validity, or vertebrae's benchmark recommendations. Recommendation
 confidence and probe-comparison confidence are reported separately because they
-describe different evidence.
+describe different evidence. `inconclusive` and
+`insufficient_data_or_unreliable_geometry` retain Separatix's target-specific
+confidence handling; do not infer a high-confidence regression conclusion from
+the shared label alone.
 
 ## Custom embedding metrics
 

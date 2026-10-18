@@ -18,6 +18,7 @@ from vertebrae.cache import create_artifact_store
 from vertebrae.cache.fingerprint import fingerprint_extractor_recipe
 from vertebrae.config import (
     EmbeddingCompressionConfig,
+    LinearProbeConfig,
     OverlapScoringConfig,
     ResourceProfilingConfig,
     RetrievalConfig,
@@ -80,7 +81,7 @@ from vertebrae.execution import (
 )
 from vertebrae.execution.jobs import EmbeddingShardJob
 from vertebrae.extractors._identity import extractor_cache_reuse_decision
-from vertebrae.scoring.metrics import CallableMetric
+from vertebrae.scoring.metrics import CallableMetric, LinearProbeMetric
 from vertebrae.structured import (
     drop_special_rows,
     keep_row_indices,
@@ -372,6 +373,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rank lower custom metric scores ahead of higher scores.",
     )
     score.add_argument("--seed", type=int)
+    score.add_argument(
+        "--linear-probe",
+        action="store_true",
+        help="Also run the built-in fixed-capacity out-of-fold linear probe.",
+    )
+    score.add_argument(
+        "--linear-probe-config-json",
+        help="JSON object used to construct LinearProbeConfig.",
+    )
     score.add_argument("--primary-metric", default="overlap")
     score.add_argument("--output-json")
     score.set_defaults(func=_cmd_score)
@@ -543,6 +553,8 @@ def build_parser() -> argparse.ArgumentParser:
     repeats.add_argument("--metric-name", action="append", default=[])
     repeats.add_argument("--metric-config-json", action="append", default=[])
     repeats.add_argument("--lower-is-better", action="store_true")
+    repeats.add_argument("--linear-probe", action="store_true")
+    repeats.add_argument("--linear-probe-config-json")
     repeats.add_argument("--primary-metric", default="overlap")
     _add_backend_args(repeats, include_local_parallel=True)
     repeats.add_argument("--output-json")
@@ -602,6 +614,13 @@ def build_parser() -> argparse.ArgumentParser:
     slurm_score.add_argument("--plan-json")
     slurm_score.add_argument("--repeats", type=int, required=True)
     slurm_score.add_argument("--random-state", type=int, default=42)
+    slurm_score.add_argument(
+        "--scoring-config-pickle",
+        help=_trusted_pickle_help("Optional pickled overlap scoring configuration."),
+    )
+    slurm_score.add_argument("--linear-probe", action="store_true")
+    slurm_score.add_argument("--linear-probe-config-json")
+    slurm_score.add_argument("--primary-metric", default="overlap")
     slurm_score.add_argument("--script-output", required=True)
     slurm_score.add_argument("--job-name", default="vertebrae-score")
     slurm_score.add_argument("--time", default="04:00:00")
@@ -1560,23 +1579,32 @@ def _cmd_retrieval_from_artifacts(args: argparse.Namespace) -> dict[str, Any]:
     return result.to_dict()
 
 
-def _metrics_from_args(args: argparse.Namespace) -> list[CallableMetric]:
-    if len(args.metric_name) > len(args.metric) or len(args.metric_config_json) > len(args.metric):
+def _metrics_from_args(args: argparse.Namespace) -> list[Any]:
+    metric_paths = list(getattr(args, "metric", []))
+    metric_names = list(getattr(args, "metric_name", []))
+    metric_configs = list(getattr(args, "metric_config_json", []))
+    if len(metric_names) > len(metric_paths) or len(metric_configs) > len(metric_paths):
         raise ValueError("--metric-name and --metric-config-json must correspond to --metric.")
-    metrics = []
-    for index, path in enumerate(args.metric):
-        raw_config = (
-            args.metric_config_json[index] if index < len(args.metric_config_json) else None
-        )
+    metrics: list[Any] = []
+    if getattr(args, "linear_probe_config_json", None) and not getattr(args, "linear_probe", False):
+        raise ValueError("--linear-probe-config-json requires --linear-probe.")
+    if getattr(args, "linear_probe", False):
+        raw_probe_config = getattr(args, "linear_probe_config_json", None)
+        probe_config_data = json.loads(raw_probe_config) if raw_probe_config else {}
+        if not isinstance(probe_config_data, dict):
+            raise ValueError("--linear-probe-config-json must decode to a JSON object.")
+        metrics.append(LinearProbeMetric(LinearProbeConfig(**probe_config_data)))
+    for index, path in enumerate(metric_paths):
+        raw_config = metric_configs[index] if index < len(metric_configs) else None
         config = json.loads(raw_config) if raw_config else {}
         if not isinstance(config, dict):
             raise ValueError("--metric-config-json must decode to a JSON object.")
         metrics.append(
             CallableMetric.from_import_path(
                 path,
-                name=args.metric_name[index] if index < len(args.metric_name) else None,
+                name=metric_names[index] if index < len(metric_names) else None,
                 config=config,
-                higher_is_better=not args.lower_is_better,
+                higher_is_better=not getattr(args, "lower_is_better", False),
             )
         )
     return metrics
@@ -1829,6 +1857,12 @@ def _cmd_run_embedding_shards(args: argparse.Namespace) -> dict[str, Any]:
 def _cmd_slurm_score_array(args: argparse.Namespace) -> dict[str, Any]:
     embedding_key, labels_key, groups_key = _scoring_inputs_from_args(args)
     seeds = _repeat_seeds(args.repeats, args.random_state)
+    scoring_config = (
+        _load_pickle(args.scoring_config_pickle)
+        if args.scoring_config_pickle
+        else OverlapScoringConfig()
+    )
+    metrics = _metrics_from_args(args)
     script = _render_slurm_score_array_script(args=args, seeds=seeds)
     target = Path(args.script_output)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1844,13 +1878,14 @@ def _cmd_slurm_score_array(args: argparse.Namespace) -> dict[str, Any]:
                 seed=seed,
                 labels_key=labels_key,
                 groups_key=groups_key,
-                scoring_config=OverlapScoringConfig(),
-                metrics=(),
-                primary_metric="overlap",
+                scoring_config=scoring_config,
+                metrics=metrics,
+                primary_metric=args.primary_metric,
             )
             for seed in seeds
         ],
         "seeds": seeds,
+        "primary_metric": args.primary_metric,
     }
 
 
@@ -2025,6 +2060,16 @@ def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int])
     )
     if groups_key is not None:
         lines.append(f"  --groups-key {_shell_quote(groups_key)} \\")
+    if args.scoring_config_pickle:
+        lines.append("  --scoring-config-pickle " f"{_shell_quote(args.scoring_config_pickle)} \\")
+    if args.linear_probe:
+        lines.append("  --linear-probe \\")
+    if args.linear_probe_config_json:
+        lines.append(
+            "  --linear-probe-config-json " f"{_shell_quote(args.linear_probe_config_json)} \\"
+        )
+    if args.primary_metric != "overlap":
+        lines.append(f"  --primary-metric {_shell_quote(args.primary_metric)} \\")
     lines.extend(
         [
             '  --seed "${SEED}"',
@@ -2038,14 +2083,19 @@ def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int])
     )
     for index, seed in enumerate(seeds):
         suffix = " \\" if index < len(seeds) - 1 else ""
+        scoring_config = (
+            _load_pickle(args.scoring_config_pickle)
+            if args.scoring_config_pickle
+            else OverlapScoringConfig()
+        )
         score_key = scoring_artifact_key(
             embedding_key,
             seed=seed,
             labels_key=labels_key,
             groups_key=groups_key,
-            scoring_config=OverlapScoringConfig(),
-            metrics=(),
-            primary_metric="overlap",
+            scoring_config=scoring_config,
+            metrics=_metrics_from_args(args),
+            primary_metric=args.primary_metric,
         )
         lines.append(f"#   --score-key {_shell_quote(score_key)}{suffix}")
     lines.append("")

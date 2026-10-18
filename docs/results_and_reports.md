@@ -19,6 +19,7 @@ Each extractor contributes an `ExtractorResult` with:
 - extractor identity and type,
 - `OverlapScoreResult`,
 - a named collection of normalized metric results,
+- an optional rankable `LinearProbeMetric` result,
 - the selected `primary_metric_name` and aggregate `primary_score`,
 - optional stability summary,
 - optional Separatix complexity diagnostic,
@@ -28,6 +29,20 @@ Each extractor contributes an `ExtractorResult` with:
 - recommendation label,
 - weakest-class diagnostics when available.
 - an optional measured `resource_profile` when local resource profiling is enabled.
+
+When the complexity diagnostic runs, `ExtractorResult.separatix` is a
+`SeparatixResult`. In addition to its canonical recommendation and target-aware
+text, it preserves the uncertainty-aware family guidance and versioned probe
+recipes emitted by Separatix 0.1.1. The raw report remains available for audit;
+consumers should use the normalized fields and recipe helpers rather than
+reimplementing Separatix's selection logic.
+
+For single-label overlap, metric metadata records the `prototype_refinement` setting,
+the initial `requested_k`, and upstream `prototype_refinement_` diagnostics under
+`prototype_refinement_diagnostics`. `k_per_class` remains the resolved initial count,
+not the refined count. Internal cross-fitted scoring retains the upstream diagnostics
+per fold. These fields survive JSON and artifact reconstruction; see
+[optional prototype refinement](scoring.md#optional-prototype-refinement-and-backbone-ranking).
 
 ## Resource profiles and quality cohorts
 
@@ -158,29 +173,53 @@ metric is also available as `metric.<name>`, and benchmark stage timings use
 `runtime.<stage>`. Stability mode, repeats, interval level, mean, standard deviation,
 minimum, maximum, interval bounds, and width are flattened alongside warnings,
 overlap, Separatix/probe, compression, target/label-view, and compact resource-profile
-columns. Detailed per-class,
+columns. When configured, the built-in linear probe also contributes
+`linear_probe_score` and `linear_probe_metric`; its complete target-aware metric map,
+fold summaries, and per-class or per-target details remain in the nested metric result.
+Detailed per-class,
 pairwise, complete stability-repeat, and full Separatix data remain in the serialized
 result rather than being expanded into wide DataFrame cells.
 
 `RepresentationMonitor` uses this same row builder with `include_invalid=True`, then
 adds `evaluation_index`, status, evaluation identifiers, `recorded_at`,
 `context_metadata.<key>`, and failure fields. See
-[representation monitoring](monitoring.md) for memory and JSONL history behavior.
+[representation monitoring](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/monitoring.md) for memory and JSONL history behavior.
 Failed snapshots use the same canonical result columns with null values, including
 configured `metric.<name>` and standard `runtime.<stage>` columns.
 
 The Markdown ranking table uses the same metric-aware summary fields. Its current
 core columns are `primary_metric`, `primary_score`, `overlap_score`,
-`overlap_macro`, `overlap_weighted`, `stability_interval`, `weakest_class`,
-`best_probe`, `probe_metric`, and `probe_score`, followed by embedding,
-compression, recommendation, and Separatix fields. Target and label views are
-included explicitly so expanded results remain distinguishable.
+`overlap_macro`, `overlap_weighted`, `linear_probe_score`, `stability_interval`,
+`weakest_class`, `best_probe`, `probe_metric`, and `probe_score`, followed by
+embedding, compression, recommendation, and Separatix fields. Target and label views
+are included explicitly so expanded results remain distinguishable.
 
-Probe fields are target-aware. For example, a single-label diagnostic may select
+The `linear_probe_score` column is present only when `LinearProbeMetric` was
+configured; `linear_probe_metric` names the target-aware statistic behind that score.
+It is distinct from the unprefixed probe fields below, which summarize Separatix.
+
+Separatix probe fields are target-aware. For example, a single-label diagnostic may select
 balanced accuracy, a multi-label diagnostic may select macro/micro F1 or sample
 Jaccard, and a regression diagnostic may select R². Consumers should inspect
 `probe_metric` before interpreting `probe_score`; there is no universal
 `probe_accuracy` field.
+
+The compact Separatix columns also expose the family frontier: the minimum
+recommended family, the plausible family set, the selected family/probe, the
+decision method, paired-comparison status, and effective train-size summary.
+These are summaries for the ranked table; complete paired deltas, CV folds,
+cohort metadata, and recipes remain nested in the serialized result. A missing
+family or recipe is an explicit unavailable state, not permission for a consumer
+to substitute a different estimator. The stable column names are
+`separatix_guidance_status`, `separatix_minimum_family`,
+`separatix_plausible_families`, `separatix_guidance_decision_method`,
+`separatix_selected_family`, `separatix_selected_probe`,
+`separatix_selected_recipe_id`, `separatix_mlp_override`,
+`separatix_paired_status`, and `separatix_paired_method`.
+Probe evaluation columns include `probe_alignment_status`,
+`probe_evaluation_plan_id`, `probe_cv_method`, `probe_cohort_size`,
+`probe_n_splits`, `probe_effective_train_size_summary`, and
+`probe_effective_train_size_mean`.
 
 ## JSON and Markdown output
 
@@ -249,6 +288,17 @@ details:
 | hierarchy or named target views | active and available views | one result variant per evaluated view |
 | dense segmentation | source-image groups and token provenance | per-class token overlap |
 
+Two network-free examples exercise that schema with different target types:
+
+| problem class | generated by | extractor | overlap macro | weakest target | recommendation |
+| --- | --- | --- | ---: | --- | --- |
+| multi-label classification | `examples/multilabel_precomputed_embeddings.py` | `toy_multilabel_embeddings` | 0.0000 | outdoor | `poor_frozen_representation_weak_class_attention` |
+| structured regression | `examples/structured_depth.py` | `depth_samples:depth_cells` | 0.9732 | — | `continuous_structure_above_null` |
+
+The toy multi-label result is intentionally weak: its labels cross the three embedding
+clusters, and the report flags that mismatch. The structured-depth result evaluates
+continuous target structure; it is not RMSE or a depth-estimation benchmark.
+
 These values are diagnostics for the evaluated representation and protocol. They
 are not substitutes for task-native metrics such as IoU, RMSE, retrieval recall,
 or ranking quality.
@@ -283,6 +333,37 @@ per-extractor details show the full descriptive context. When Separatix MLP prob
 are enabled, their trigger, status, reason, and comparison payload remain separate
 from the ordinary baseline probe summary.
 
+For Separatix 0.1.1, the normalized diagnostic also includes
+`family_guidance`. Its fields are `status`, `target_type`, `reason`,
+`minimum_recommended_family`, `plausible_families`, `decision_method`,
+`selected_family`, `selected_probe`, `selected_recipe_id`, `mlp_override`, and
+paired-comparison status/method. `probe_summary.evaluation` records alignment,
+the CV plan, cohort size, and effective train-size information. A retained
+recipe can be recovered with `SeparatixResult.probe_recipe(name_or_id)` or
+`selected_probe_recipe()` and reconstructed through Separatix's
+`make_probe_estimator(...)`; this is the supported way to reproduce a probe.
+When MLP probes are enabled, the compute trigger and the override threshold are
+reported separately. An MLP can therefore be available and selected because its
+paired improvement is clear even when the simpler family is not near-perfect;
+absence of an MLP recipe means that the probe was unavailable or not triggered,
+not that a linear result was proven optimal.
+
+The machine-readable `separatix_recommendation` uses exactly eight shared labels
+across classification, multi-label, and regression reports:
+
+- `linear_likely_sufficient`
+- `smooth_nonlinear_recommended`
+- `kernel_or_local_recommended`
+- `high_capacity_or_partitioning_recommended`
+- `feedforward_mlp_recommended`
+- `feature_or_target_bottleneck_likely`
+- `insufficient_data_or_unreliable_geometry`
+- `inconclusive`
+
+The label is intentionally shared; Markdown prose selects target-specific
+headlines and suggested models from the diagnostic's `target_type`. In particular,
+regression reliability and confidence rules are not inferred from the label text.
+
 Sparse diagnostic runs also expose preprocessing metadata, the effective
 densification policy, structured densification events, skipped diagnostics, and
 warnings. Markdown details render these fields compactly; JSON retains their complete
@@ -307,6 +388,11 @@ Use them as a triage aid:
 Separatix recommendations are complementary. They describe the apparent classifier
 complexity of the labeled embedding space and do not replace vertebrae's overlap-based
 ranking or existing benchmark recommendation label.
+The eight canonical Separatix labels are shared across target modes; use
+`target_type`, confidence, and the family frontier before turning one into an
+engineering action. `minimum_recommended_family` is the least complex family
+supported by the evidence, while `plausible_families` communicates unresolved
+alternatives rather than a second ranking.
 
 ## Reproducibility mindset
 

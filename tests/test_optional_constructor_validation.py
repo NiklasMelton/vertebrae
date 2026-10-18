@@ -112,6 +112,10 @@ def test_optional_extractors_reject_invalid_enum_options(factory, option):
     [
         (lambda: HFTextExtractor("text", "model", tokenizer_kwargs=[]), "tokenizer_kwargs"),
         (lambda: HFAudioExtractor("audio", "model", processor_kwargs=[]), "processor_kwargs"),
+        (
+            lambda: HFVisionExtractor("vision", "model", preprocess_kwargs=[]),
+            "preprocess_kwargs",
+        ),
         (lambda: HFVisionExtractor("vision", "model", model_kwargs=[]), "model_kwargs"),
         (lambda: HFVideoExtractor("video", "model", processor_kwargs=[]), "processor_kwargs"),
         (lambda: HFTimeSeriesExtractor("series", "model", input_kwargs=[]), "input_kwargs"),

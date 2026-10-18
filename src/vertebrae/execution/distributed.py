@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, replace
 from functools import partial
+from importlib import metadata as importlib_metadata
 from itertools import chain
 from typing import Any, Dict, Iterable, Iterator, Optional, Tuple
 from uuid import uuid4
@@ -347,14 +348,31 @@ def separatix_artifact_key(
     if separatix_config is None:
         raise ValueError("separatix_config is required for a Separatix artifact identity.")
     identity = {
-        "identity_schema": 2,
+        # Bump this whenever the serialized Separatix diagnostic contract
+        # changes.  The 0.1.0 report shape is intentionally not reusable after
+        # the 0.1.1 family-guidance/recipe release.
+        "identity_schema": 3,
+        "separatix_contract": _separatix_contract_identity(),
         "embedding_key": embedding_key,
         "labels_key": labels_key,
         "groups_key": groups_key,
         "score_key": score_key,
         "separatix_config": make_json_safe(separatix_config),
     }
-    return f"{embedding_key}/diagnostics/separatix-v2-{hash_json_exact(identity)}"
+    return f"{embedding_key}/diagnostics/separatix-v3-{hash_json_exact(identity)}"
+
+
+def _separatix_contract_identity() -> dict[str, Any]:
+    """Return installed Separatix provenance used in diagnostic cache keys."""
+
+    try:
+        version = importlib_metadata.version("separatix")
+    except importlib_metadata.PackageNotFoundError:
+        version = None
+    return {
+        "distribution_version": version,
+        "diagnostic_schema": "family_guidance_v1_probe_recipe_v1",
+    }
 
 
 def _require_artifact_identity(value: Any, name: str) -> None:
@@ -1152,6 +1170,10 @@ def score_embedding_artifact(
     names = [metric.name for metric in configured]
     if job.primary_metric not in names:
         raise ValueError("primary_metric must name one configured metric.")
+    metric_target_metadata = dict(label_metadata)
+    excluded_classes = getattr(job.scoring_config, "exclude_classes", None)
+    if excluded_classes is not None:
+        metric_target_metadata["exclude_classes"] = excluded_classes
     canonical_labels = canonical_metric_targets(
         labels,
         label_names=label_metadata.get("label_names"),
@@ -1164,11 +1186,11 @@ def score_embedding_artifact(
         result = metric.score(
             embeddings,
             canonical_labels,
-            target_metadata=label_metadata,
+            target_metadata=metric_target_metadata,
             groups=canonical_groups,
             seed=job.seed,
         )
-        result.metadata = {**label_metadata, **result.metadata}
+        result.metadata = {**metric_target_metadata, **result.metadata}
         metric_results[metric.name] = result.to_dict()
     metric_recipes = [make_json_safe(metric.recipe()) for metric in configured]
     metric_identity_safe = _metric_recipes_cache_safe(metric_recipes)
@@ -2132,10 +2154,8 @@ def benchmark_result_from_artifacts(
             weakest_score,
             target_type=overlap.metadata.get("target_type", "single_label"),
         )
-        if primary_metric_name == "overlap" and overlap.metadata.get("aggregate_valid", True)
+        if overlap.metadata.get("aggregate_valid", True)
         else "aggregate_unavailable"
-        if primary_metric_name == "overlap"
-        else f"ranked_by_{primary_metric_name}"
     )
     compression_metadata = embedding_metadata.get("compression", {"method": "none"})
     base_name = embedding_metadata.get("extractor_recipe", {}).get(

@@ -26,6 +26,61 @@ def test_overlap_scorer_uses_minibatch_kmeans_backend(fake_overlapindex):
     assert fake_overlapindex.calls[-1]["kmeans_k"] == {"a": 2, "b": 2}
 
 
+def test_overlap_scorer_cross_fits_fixed_prototypes_with_paired_fold_seeds(
+    fake_overlapindex,
+):
+    embeddings = np.arange(48, dtype=float).reshape(12, 4)
+    labels = np.asarray(["a"] * 6 + ["b"] * 6)
+    scorer = OverlapIndexScorer(OverlapScoringConfig(k=2, min_samples_per_cluster=1))
+
+    result = scorer.score_cross_fitted(
+        embeddings,
+        labels,
+        n_splits=3,
+        seed=11,
+    )
+
+    assert result.metadata["score_kind"] == "classification_overlap_cross_fitted"
+    assert result.metadata["cross_fit"]["n_splits"] == 3
+    assert result.metadata["cross_fit"]["aggregation"] == "mean_fold_macro"
+    assert [row["train_size"] for row in result.metadata["cross_fit"]["folds"]] == [
+        8,
+        8,
+        8,
+    ]
+    assert [row["holdout_size"] for row in result.metadata["cross_fit"]["folds"]] == [
+        4,
+        4,
+        4,
+    ]
+    assert [call["kmeans_kwargs"]["random_state"] for call in fake_overlapindex.calls] == [
+        11,
+        12,
+        13,
+    ]
+    assert all(call["score_fixed_X_shape"] == [4, 4] for call in fake_overlapindex.calls)
+    assert result.k_per_class == {"a": 2, "b": 2}
+
+
+@pytest.mark.parametrize("n_splits", [1, 7])
+def test_overlap_scorer_cross_fit_validates_fold_support(fake_overlapindex, n_splits):
+    embeddings = np.arange(24, dtype=float).reshape(6, 4)
+    labels = np.asarray(["a"] * 3 + ["b"] * 3)
+    scorer = OverlapIndexScorer(OverlapScoringConfig(k=2, min_samples_per_cluster=1))
+
+    with pytest.raises(ValueError, match="n_splits"):
+        scorer.score_cross_fitted(embeddings, labels, n_splits=n_splits)
+
+
+def test_overlap_scorer_cross_fit_rejects_empty_inputs(fake_overlapindex):
+    scorer = OverlapIndexScorer(OverlapScoringConfig(k=2, min_samples_per_cluster=1))
+
+    with pytest.raises(ValueError, match="at least one sample"):
+        scorer.score_cross_fitted(np.empty((0, 4)), np.asarray([], dtype=object))
+
+    assert fake_overlapindex.calls == []
+
+
 def test_overlap_scorer_passes_multilabel_indicator_targets(fake_overlapindex):
     Z = np.array(
         [

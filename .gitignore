@@ -8,9 +8,13 @@ examples/.matplotlib_cache/
 examples/.vertebrae_cache/
 examples/data/
 examples/output/
+examples/assets/
 docs/_build/
 __pycache__/
 *.py[cod]
 dist/
 build/
 *.egg-info/
+.AGENTS.md
+.idea/
+.DS_Store

@@ -54,6 +54,7 @@ class HFVisionExtractor:
         revision: Optional model revision.
         trust_remote_code: Whether to allow remote model code.
         processor_kwargs: Extra keyword arguments for `AutoImageProcessor`.
+        preprocess_kwargs: Extra keyword arguments for processor calls during batching.
         model_kwargs: Extra keyword arguments for `AutoModel`.
     """
 
@@ -72,6 +73,7 @@ class HFVisionExtractor:
         revision: Optional[str] = None,
         trust_remote_code: bool = False,
         processor_kwargs: Optional[Dict[str, Any]] = None,
+        preprocess_kwargs: Optional[Dict[str, Any]] = None,
         model_kwargs: Optional[Dict[str, Any]] = None,
         spatial_outputs: Optional[List[Dict[str, Any]]] = None,
         structured_outputs: Optional[List[Dict[str, Any]]] = None,
@@ -101,6 +103,7 @@ class HFVisionExtractor:
         self.revision = validate_optional_nonblank_string(revision, "revision")
         self.trust_remote_code = validate_bool(trust_remote_code, "trust_remote_code")
         self.processor_kwargs = snapshot_mapping(processor_kwargs, "processor_kwargs")
+        self.preprocess_kwargs = snapshot_mapping(preprocess_kwargs, "preprocess_kwargs")
         self.model_kwargs = snapshot_mapping(model_kwargs, "model_kwargs")
         self._spatial_output_specs = _resolve_spatial_output_specs(spatial_outputs)
         self._structured_output_specs = _resolve_structured_output_specs(structured_outputs)
@@ -176,7 +179,7 @@ class HFVisionExtractor:
                     _coerce_image(item, image_module, self.image_mode, self.alpha_mode)
                     for item in items
                 ]
-                encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
+                encoded = processor(images=batch, return_tensors="pt", **self.preprocess_kwargs)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
                 model_output = model(
                     **encoded,
@@ -229,7 +232,7 @@ class HFVisionExtractor:
                     _coerce_image(item, image_module, self.image_mode, self.alpha_mode)
                     for item in items
                 ]
-                encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
+                encoded = processor(images=batch, return_tensors="pt", **self.preprocess_kwargs)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
                 model_output = model(**encoded, output_hidden_states=need_hidden_states)
                 for spec in self._spatial_output_specs:
@@ -269,7 +272,7 @@ class HFVisionExtractor:
                     _coerce_image(item, image_module, self.image_mode, self.alpha_mode)
                     for item in items
                 ]
-                encoded = processor(images=batch, return_tensors="pt", **self.processor_kwargs)
+                encoded = processor(images=batch, return_tensors="pt", **self.preprocess_kwargs)
                 encoded = {key: value.to(self._device(torch)) for key, value in encoded.items()}
                 model_output = model(**encoded, output_hidden_states=True)
                 for spec in self._structured_output_specs:
@@ -312,6 +315,7 @@ class HFVisionExtractor:
             "revision": self.revision,
             "trust_remote_code": self.trust_remote_code,
             "processor_kwargs": self.processor_kwargs,
+            "preprocess_kwargs": self.preprocess_kwargs,
             "model_kwargs": self.model_kwargs,
             "dependency_versions": optional_dependency_versions("Pillow", "torch", "transformers"),
             "streaming_safe": self.streaming_safe,

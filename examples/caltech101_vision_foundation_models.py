@@ -122,21 +122,11 @@ def main() -> None:
         print("or run with network access so the example can fetch the dataset archive.")
         return
 
-    paths = [str(sample.path) for sample in samples]
-    labels = np.asarray([sample.label for sample in samples])
-    dataset = BenchmarkDataset.from_image_paths(
-        paths,
-        labels,
-        metadata={
-            "example": "caltech101_vision_foundation_models",
-            "source": "Caltech-101 subset",
-            "data_dir": str(data_dir),
-            "classes": list(class_names),
-            "samples_per_class": samples_per_class,
-            "label_rule": "Caltech-101 object-category directory",
-            "default_slice": "moderate related-category pairs for a laptop run",
-        },
-        identity=DatasetIdentity.ephemeral(),
+    dataset = build_caltech101_dataset(
+        samples=samples,
+        data_dir=data_dir,
+        class_names=class_names,
+        samples_per_class=samples_per_class,
     )
 
     benchmark = Benchmark(
@@ -198,6 +188,28 @@ def prepare_caltech101_subset(
         class_names=class_names,
         samples_per_class=samples_per_class,
         random_state=random_state,
+    )
+
+
+def build_caltech101_dataset(
+    samples: Sequence[CaltechImageSample],
+    data_dir: Path,
+    class_names: Sequence[str],
+    samples_per_class: int,
+) -> BenchmarkDataset:
+    return BenchmarkDataset.from_image_paths(
+        [str(sample.path) for sample in samples],
+        np.asarray([sample.label for sample in samples]),
+        metadata={
+            "example": "caltech101_vision_foundation_models",
+            "dataset_source": "Caltech-101 subset",
+            "data_dir": str(data_dir),
+            "classes": list(class_names),
+            "samples_per_class": samples_per_class,
+            "label_rule": "Caltech-101 object-category directory",
+            "default_slice": "moderate related-category pairs for a laptop run",
+        },
+        identity=DatasetIdentity.ephemeral(),
     )
 
 

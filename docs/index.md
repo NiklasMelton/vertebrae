@@ -8,6 +8,8 @@ from the repository README, existing Markdown guides, and generated API referenc
 :caption: Guides
 
 Project Overview <overview>
+Installation <installation>
+Workflows <workflows>
 Datasets <datasets>
 Dense Segmentation <segmentation>
 Feature Extractors <feature_extractors>
@@ -19,5 +21,6 @@ Zero-shot Semantic Alignment <zero_shot>
 Results and Reports <results_and_reports>
 Runnable Examples <examples>
 Distributed Execution <distributed_readiness>
+Draft Nuisance Accessibility Plan <nuisance_accessibility_experiment_plan>
 API Reference <api/vertebrae/index>
 ```

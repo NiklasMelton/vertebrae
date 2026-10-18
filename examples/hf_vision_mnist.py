@@ -59,7 +59,7 @@ def main() -> None:
         modality="image",
         metadata={
             "example": "hf_vision_mnist",
-            "source": DATASET_ID,
+            "dataset_source": DATASET_ID,
             "model_ids": [spec["model_id"] for spec in MODEL_SPECS],
         },
         identity=DatasetIdentity.ephemeral(),

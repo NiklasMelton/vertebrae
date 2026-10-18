@@ -142,14 +142,14 @@ def render_markdown_report(result: Any) -> str:
     lines.append(
         "| rank | extractor | extractor_type | target_view | label_view | "
         "primary_metric | primary_score | overlap_score | overlap_macro | "
-        "overlap_weighted | stability_interval | "
+        "overlap_weighted | linear_probe_score | stability_interval | "
         "weakest_class | best_probe | probe_metric | probe_score | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | "
-        "--- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | "
+        "--- | --- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(ranked_results, start=1):
         interval = _format_interval(item.stability)
@@ -181,6 +181,7 @@ def render_markdown_report(result: Any) -> str:
             f"{_format_float(item.overlap.score if item.overlap else None)} | "
             f"{_format_float(item.overlap.macro_score if item.overlap else None)} | "
             f"{_format_float(item.overlap.weighted_score if item.overlap else None)} | "
+            f"{_format_float(item.linear_probe.score if item.linear_probe else None)} | "
             f"{_markdown_text(interval)} | {_markdown_text(weakest)} | "
             f"{_markdown_text(probe.get('best_probe') or '')} | "
             f"{_markdown_text(primary_probe_metric.get('name') or '')} | "
@@ -291,6 +292,28 @@ def render_markdown_report(result: Any) -> str:
                     f"{_markdown_text(overlap.metadata.get('exclude_classes', []))}",
                 ]
             )
+        linear_probe = item.linear_probe
+        if linear_probe:
+            probe_metrics = linear_probe.diagnostics.get("metrics", {})
+            lines.extend(
+                [
+                    "",
+                    "#### Linear probe",
+                    "",
+                    "- Evaluation: fixed-capacity out-of-fold linear decoder",
+                    "- Primary probe metric: "
+                    f"{_markdown_text(linear_probe.diagnostics.get('primary_metric', ''))}",
+                    f"- Linear-probe score: {_format_float(linear_probe.score)}",
+                    "- Cross-validation: "
+                    f"{_markdown_text(linear_probe.metadata.get('cv_method', ''))}; "
+                    f"{_markdown_text(linear_probe.metadata.get('n_splits', ''))} folds; "
+                    f"group-aware={bool(linear_probe.metadata.get('group_aware', False))}",
+                ]
+            )
+            if probe_metrics:
+                lines.extend(["", "| linear-probe metric | value |", "| --- | ---: |"])
+                for key, value in probe_metrics.items():
+                    lines.append(f"| {_markdown_text(key)} | {_format_float(value)} |")
         segmentation = item.embedding_metadata.get("segmentation")
         if segmentation:
             lines.extend(
@@ -404,6 +427,31 @@ def render_markdown_report(result: Any) -> str:
             lines.append(
                 "- Recommendation confidence: " f"{_markdown_text(item.separatix.confidence or '')}"
             )
+            guidance = item.separatix.family_guidance or {}
+            if guidance:
+                lines.append(
+                    "- Minimum recommended family: "
+                    f"{_markdown_text(guidance.get('minimum_recommended_family') or '')}"
+                )
+                lines.append(
+                    "- Plausible families: "
+                    f"{_markdown_text(guidance.get('plausible_families', []))}"
+                )
+                lines.append(
+                    "- Selected family/probe: "
+                    f"{_markdown_text(guidance.get('selected_family') or '')}/"
+                    f"{_markdown_text(guidance.get('selected_probe') or '')}"
+                )
+                lines.append(
+                    "- Selected recipe id: "
+                    f"{_markdown_text(guidance.get('selected_recipe_id') or '')}"
+                )
+                lines.append("- MLP override: " f"{bool(guidance.get('mlp_override', False))}")
+                lines.append(
+                    "- Paired evidence: "
+                    f"{_markdown_text(guidance.get('paired_status') or '')}"
+                    f" ({_markdown_text(guidance.get('paired_method') or '')})"
+                )
             lines.append(
                 f"- Summary: {_markdown_text((item.separatix.recommendation_text or '').strip())}"
             )
@@ -426,6 +474,22 @@ def render_markdown_report(result: Any) -> str:
             if probe.get("skip_reason"):
                 lines.append(f"- Probe unavailable: {_markdown_text(probe.get('skip_reason'))}")
             lines.append(f"- Probe evaluation mode: {_markdown_text(evaluation.get('mode') or '')}")
+            lines.append(
+                "- Probe alignment: " f"{_markdown_text(evaluation.get('alignment_status') or '')}"
+            )
+            lines.append(
+                "- Probe CV/cohort: "
+                f"{_markdown_text(evaluation.get('cv_method') or '')}; "
+                f"{_markdown_text(evaluation.get('cohort_size') or '')} rows; "
+                f"{_markdown_text(evaluation.get('n_splits') or '')} splits"
+            )
+            effective_train_size = evaluation.get("effective_train_size_summary") or {}
+            if effective_train_size:
+                lines.append(
+                    "- Effective probe train size: "
+                    f"{_markdown_text(effective_train_size.get('mean') or '')} mean "
+                    f"({_markdown_text(effective_train_size.get('basis') or '')})"
+                )
             lines.append(f"- Grouped evaluation: {bool(evaluation.get('grouped', False))}")
             if evaluation.get("n_groups") is not None:
                 lines.append(f"- Independence groups: {evaluation.get('n_groups')}")
