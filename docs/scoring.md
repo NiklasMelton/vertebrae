@@ -3,7 +3,7 @@
 All [OverlapIndex](https://github.com/NiklasMelton/OverlapIndex) scoring in
 `vertebrae` goes through one internal adapter: `OverlapIndexScorer`.
 
-`vertebrae` can also run a default
+`vertebrae` can also run an opt-in, rankable fixed-capacity linear probe and a default
 [Separatix](https://github.com/NiklasMelton/Separatix) complexity diagnostic
 through the internal `SeparatixScorer` adapter. Separatix does not affect
 extractor ranking; it adds classifier-complexity guidance on top of the overlap
@@ -418,6 +418,66 @@ intentionally unsupported.
 not formal confidence intervals unless a different statistical protocol is added
 explicitly in a future release.
 
+## Rankable linear-probe scoring
+
+Use `LinearProbeMetric` when candidate selection should also measure how readily a
+fixed linear decoder can read each representation:
+
+```python
+from vertebrae import Benchmark, LinearProbeConfig, LinearProbeMetric
+
+probe = LinearProbeMetric(
+    LinearProbeConfig(
+        n_splits=5,
+        random_state=42,
+        normalize_embeddings=True,
+    )
+)
+
+# OverlapIndex remains the ranking signal; both metrics are reported.
+diagnostic_result = Benchmark(dataset, extractors, metrics=[probe]).run()
+
+# Both metrics are still reported, but the probe selects the ranking.
+probe_ranked_result = Benchmark(
+    dataset,
+    extractors,
+    metrics=[probe],
+    primary_metric="linear_probe",
+).run()
+```
+
+The protocol deliberately fixes model capacity and does not tune hyperparameters on
+the evaluated labels. It uses L2-regularized logistic regression for single-label
+classification, one-vs-rest L2 logistic regression for multi-label targets, and ridge
+regression for regression targets. Each reported score is assembled from out-of-fold
+predictions; an estimator is never scored on a row used to fit that estimator.
+
+The target-aware default primary statistics are:
+
+- balanced accuracy for single-label classification;
+- macro F1 for multi-label classification;
+- variance-weighted R² for regression.
+
+`LinearProbeConfig.primary_metric` can select another supported statistic. MAE, RMSE,
+and mean normalized RMSE correctly rank lower values first. Classification reports
+also retain accuracy, macro F1, and per-class recall; multi-label reports retain micro
+F1, sample Jaccard, and subset accuracy; regression reports retain uniform-average R²
+and per-target error statistics.
+
+When dataset groups are available, the probe uses group-disjoint folds. Single-label
+evaluation uses stratified group folds; multi-label and regression evaluation use
+group folds. Without groups it uses stratified folds for single-label targets and
+ordinary shuffled folds otherwise. The requested fold count is reduced with an
+explicit warning when target or group support is insufficient, and evaluation fails
+rather than falling back to a leaky row-level split.
+
+The metric is opt-in rather than enabled for every benchmark because it fits one
+estimator per fold for every embedding variant. Adding it always preserves the overlap
+result, so users can compare the two signals regardless of which one drives ranking.
+An out-of-fold probe is a candidate-selection diagnostic, not an independent final
+test: all labeled rows participate in training in some folds. Final downstream claims
+still require a separately held-out evaluation protocol.
+
 ## Separatix diagnostics
 
 Use `SeparatixConfig` to control the optional
@@ -480,9 +540,10 @@ Separatix follows the same normalization convention as overlap scoring when
 `warnings` expose the sparse and memory audit directly; the complete upstream report
 remains available through `SeparatixResult.report`.
 
-Separatix is the only downstream-complexity and probe-style diagnostic path in
-vertebrae. Ranking remains based on overlap scores; Separatix probe fields are
-reported only when the Separatix diagnostic runs and includes them.
+Separatix is the downstream-complexity diagnostic path. Its internal probe evidence
+does not participate in ranking and is reported only when the gated diagnostic runs.
+The separately configured `LinearProbeMetric` is a fixed, rankable evaluation metric;
+it does not replace or populate Separatix's family-comparison fields.
 
 `SeparatixResult.probe_summary` normalizes the existing probe evidence without
 fitting another model. It records the best probe, a target-appropriate primary

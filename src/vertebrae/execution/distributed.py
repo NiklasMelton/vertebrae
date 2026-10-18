@@ -1170,6 +1170,10 @@ def score_embedding_artifact(
     names = [metric.name for metric in configured]
     if job.primary_metric not in names:
         raise ValueError("primary_metric must name one configured metric.")
+    metric_target_metadata = dict(label_metadata)
+    excluded_classes = getattr(job.scoring_config, "exclude_classes", None)
+    if excluded_classes is not None:
+        metric_target_metadata["exclude_classes"] = excluded_classes
     canonical_labels = canonical_metric_targets(
         labels,
         label_names=label_metadata.get("label_names"),
@@ -1182,11 +1186,11 @@ def score_embedding_artifact(
         result = metric.score(
             embeddings,
             canonical_labels,
-            target_metadata=label_metadata,
+            target_metadata=metric_target_metadata,
             groups=canonical_groups,
             seed=job.seed,
         )
-        result.metadata = {**label_metadata, **result.metadata}
+        result.metadata = {**metric_target_metadata, **result.metadata}
         metric_results[metric.name] = result.to_dict()
     metric_recipes = [make_json_safe(metric.recipe()) for metric in configured]
     metric_identity_safe = _metric_recipes_cache_safe(metric_recipes)
@@ -2150,10 +2154,8 @@ def benchmark_result_from_artifacts(
             weakest_score,
             target_type=overlap.metadata.get("target_type", "single_label"),
         )
-        if primary_metric_name == "overlap" and overlap.metadata.get("aggregate_valid", True)
+        if overlap.metadata.get("aggregate_valid", True)
         else "aggregate_unavailable"
-        if primary_metric_name == "overlap"
-        else f"ranked_by_{primary_metric_name}"
     )
     compression_metadata = embedding_metadata.get("compression", {"method": "none"})
     base_name = embedding_metadata.get("extractor_recipe", {}).get(

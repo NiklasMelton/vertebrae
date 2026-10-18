@@ -2,7 +2,7 @@
 
 import importlib
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 import numpy as np
@@ -235,6 +235,71 @@ class OverlapMetric:
             "name": self.name,
             "kind": "overlap_index",
             "config": overlap_scoring_config_recipe(self.config),
+        }
+
+
+@dataclass
+class LinearProbeMetric:
+    """Built-in fixed-capacity out-of-fold linear-probe metric."""
+
+    config: Any = None
+    name: str = "linear_probe"
+
+    def score(
+        self,
+        embeddings: Any,
+        labels: Any,
+        *,
+        target_metadata: Optional[Dict[str, Any]] = None,
+        groups: Optional[Any] = None,
+        seed: Optional[int] = None,
+    ) -> MetricResult:
+        """Fit fold-local linear heads and score their OOF predictions."""
+
+        from vertebrae.scoring.linear_probe import LinearProbeScorer
+
+        probe = LinearProbeScorer(self.config).score(
+            embeddings,
+            labels,
+            target_metadata=target_metadata,
+            groups=groups,
+            seed=seed,
+        )
+        return MetricResult(
+            name=self.name,
+            score=float(probe.score),
+            higher_is_better=probe.primary_metric
+            not in {"mae", "rmse", "normalized_rmse_mean"},
+            kind="linear_probe",
+            diagnostics={
+                "primary_metric": probe.primary_metric,
+                "metrics": probe.metrics,
+                "folds": probe.folds,
+                "per_class_scores": probe.per_class_scores,
+                "per_target_scores": probe.per_target_scores,
+            },
+            warnings=list(probe.warnings),
+            metadata=dict(probe.metadata),
+        )
+
+    def recipe(self) -> Dict[str, Any]:
+        """Return the complete portable linear-probe protocol recipe."""
+
+        import sklearn
+
+        from vertebrae.config import LinearProbeConfig
+
+        config = self.config or LinearProbeConfig()
+        if not isinstance(config, LinearProbeConfig):
+            raise TypeError("LinearProbeMetric.config must be a LinearProbeConfig.")
+        return {
+            "name": self.name,
+            "kind": "linear_probe",
+            "implementation_version": 1,
+            "config": make_json_safe(asdict(config)),
+            "scikit_learn_version": sklearn.__version__,
+            "portable": True,
+            "cache_safe": True,
         }
 
 

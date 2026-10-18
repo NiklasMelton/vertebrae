@@ -24,6 +24,8 @@ RESULT_ROW_STATIC_COLUMNS = (
     "overlap_score",
     "overlap_macro",
     "overlap_weighted",
+    "linear_probe_score",
+    "linear_probe_metric",
     "target_type",
     "target_names",
     "target_view",
@@ -215,6 +217,13 @@ class ExtractorResult:
         return metric if metric and metric.kind == "overlap_index" else None
 
     @property
+    def linear_probe(self) -> Optional[MetricResult]:
+        """Return the native fixed-capacity linear-probe result when configured."""
+
+        metric = self.metrics.get("linear_probe")
+        return metric if metric and metric.kind == "linear_probe" else None
+
+    @property
     def primary_score(self) -> float:
         """Return the aggregate score used for ranking."""
 
@@ -337,6 +346,14 @@ class BenchmarkResult:
                 "overlap_score": item.overlap.score if item.overlap else None,
                 "overlap_macro": item.overlap.macro_score if item.overlap else None,
                 "overlap_weighted": item.overlap.weighted_score if item.overlap else None,
+                "linear_probe_score": (
+                    item.linear_probe.score if item.linear_probe is not None else None
+                ),
+                "linear_probe_metric": (
+                    item.linear_probe.diagnostics.get("primary_metric")
+                    if item.linear_probe is not None
+                    else None
+                ),
                 "target_type": _result_target_metadata(item).get("target_type", "single_label"),
                 "target_names": _result_target_metadata(item).get("target_names"),
                 "target_view": (item.target_view or {}).get("name"),

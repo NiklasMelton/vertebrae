@@ -191,6 +191,73 @@ def overlap_scoring_config_recipe(
 
 
 @dataclass
+class LinearProbeConfig:
+    """Configuration for fixed-capacity out-of-fold linear-probe scoring.
+
+    The probe uses L2-regularized logistic regression for categorical targets
+    and ridge regression for continuous targets. It does not tune estimator
+    hyperparameters on the evaluated labels.
+    """
+
+    n_splits: int = 5
+    random_state: Optional[int] = 42
+    normalize_embeddings: bool = True
+    classification_c: float = 1.0
+    regression_alpha: float = 1.0
+    max_iter: int = 2_000
+    class_weight: Optional[str] = None
+    n_jobs: int = 1
+    primary_metric: str = "auto"
+    max_dense_bytes: int = 2_000_000_000
+
+    def __post_init__(self) -> None:
+        _require_int(self.n_splits, "LinearProbeConfig.n_splits")
+        _require_optional_int(self.random_state, "LinearProbeConfig.random_state")
+        _require_bool(
+            self.normalize_embeddings,
+            "LinearProbeConfig.normalize_embeddings",
+        )
+        _require_real(self.classification_c, "LinearProbeConfig.classification_c")
+        _require_real(self.regression_alpha, "LinearProbeConfig.regression_alpha")
+        _require_int(self.max_iter, "LinearProbeConfig.max_iter")
+        _require_int(self.n_jobs, "LinearProbeConfig.n_jobs")
+        _require_int(self.max_dense_bytes, "LinearProbeConfig.max_dense_bytes")
+        if self.n_splits < 2:
+            raise ValueError("LinearProbeConfig.n_splits must be >= 2.")
+        if self.classification_c <= 0:
+            raise ValueError("LinearProbeConfig.classification_c must be > 0.")
+        if self.regression_alpha <= 0:
+            raise ValueError("LinearProbeConfig.regression_alpha must be > 0.")
+        if self.max_iter < 1:
+            raise ValueError("LinearProbeConfig.max_iter must be >= 1.")
+        if self.n_jobs < 1:
+            raise ValueError("LinearProbeConfig.n_jobs must be >= 1.")
+        if self.max_dense_bytes < 1:
+            raise ValueError("LinearProbeConfig.max_dense_bytes must be >= 1.")
+        if self.class_weight not in {None, "balanced"}:
+            raise ValueError("LinearProbeConfig.class_weight must be None or 'balanced'.")
+        allowed_metrics = {
+            "auto",
+            "accuracy",
+            "balanced_accuracy",
+            "macro_f1",
+            "micro_f1",
+            "sample_jaccard",
+            "subset_accuracy",
+            "r2_variance_weighted",
+            "r2_uniform_average",
+            "mae",
+            "rmse",
+            "normalized_rmse_mean",
+        }
+        if self.primary_metric not in allowed_metrics:
+            raise ValueError(
+                "LinearProbeConfig.primary_metric must be one of "
+                f"{sorted(allowed_metrics)}."
+            )
+
+
+@dataclass
 class RetrievalConfig:
     """Configuration for exact, training-free query--gallery retrieval scoring."""
 

@@ -92,6 +92,9 @@ class Benchmark:
             the benchmark uses the direct in-process path.
         execution_config: Artifact-backed execution and sharding settings used
             only when an explicit backend is provided.
+        metrics: Optional additional metrics. OverlapIndex is always retained;
+            pass `LinearProbeMetric()` to add fixed-capacity OOF probe scores.
+        primary_metric: Configured metric name used to rank extractor results.
     """
 
     def __init__(
@@ -734,6 +737,9 @@ class Benchmark:
             self._admit_scoring_memory(scoring_metadata, dataset)
             target_metadata = dict(dataset.metadata)
             target_metadata["target_type"] = dataset.metadata.get("target_type", "auto")
+            excluded_classes = _scoring_excluded_classes(scoring_config)
+            if excluded_classes is not None:
+                target_metadata["exclude_classes"] = excluded_classes
             groups = dataset.groups() if callable(getattr(dataset, "groups", None)) else None
             canonical_labels = canonical_metric_targets(
                 dataset.y,
@@ -798,11 +804,8 @@ class Benchmark:
                     weakest_score,
                     target_type=overlap.metadata.get("target_type", "single_label"),
                 )
-                if self.primary_metric == "overlap"
-                and overlap.metadata.get("aggregate_valid", True)
+                if overlap.metadata.get("aggregate_valid", True)
                 else "aggregate_unavailable"
-                if self.primary_metric == "overlap"
-                else f"ranked_by_{self.primary_metric}"
             )
             result_name = _qualified_result_name(
                 embedding_metadata.get("extractor_name", extractor.name),

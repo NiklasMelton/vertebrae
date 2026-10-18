@@ -229,7 +229,8 @@ vertebrae compress \
 
 vertebrae score \
   --cache-dir .vertebrae_cache \
-  --plan-json plan.json
+  --plan-json plan.json \
+  --linear-probe
 
 vertebrae score-repeats \
   --cache-dir .vertebrae_cache \
@@ -250,6 +251,13 @@ vertebrae benchmark-from-artifacts \
   --json-output result.json \
   --markdown-output report.md
 ```
+
+`--linear-probe` adds the built-in out-of-fold probe while retaining OverlapIndex.
+Add `--primary-metric linear_probe` to rank or collect by the probe score, and use
+`--linear-probe-config-json '{"n_splits": 5, "random_state": 42}'` to override its
+fixed protocol. The same flags are available on `score-repeats` and
+`slurm-score-array`; generated SLURM score commands and artifact identities preserve
+the complete probe recipe.
 
 Driver-managed execution performs the same single fit before dispatch. Generated
 SLURM workflows include the fit pre-step and quote all shell arguments; every array
