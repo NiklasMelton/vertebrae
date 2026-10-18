@@ -136,8 +136,7 @@ def test_benchmark_scores_both_metrics_and_can_rank_by_linear_probe(fake_overlap
 
     assert default_rank.extractor_results[0].primary_metric_name == "overlap"
     assert all(
-        set(item.metrics) == {"overlap", "linear_probe"}
-        for item in probe_rank.extractor_results
+        set(item.metrics) == {"overlap", "linear_probe"} for item in probe_rank.extractor_results
     )
     assert probe_rank.ranked_results()[0].name == "separable"
     assert probe_rank.ranked_results()[0].linear_probe.score == pytest.approx(1.0)

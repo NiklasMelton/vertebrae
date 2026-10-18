@@ -252,8 +252,7 @@ class LinearProbeConfig:
         }
         if self.primary_metric not in allowed_metrics:
             raise ValueError(
-                "LinearProbeConfig.primary_metric must be one of "
-                f"{sorted(allowed_metrics)}."
+                "LinearProbeConfig.primary_metric must be one of " f"{sorted(allowed_metrics)}."
             )
 
 

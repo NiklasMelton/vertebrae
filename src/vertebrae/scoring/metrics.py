@@ -268,8 +268,7 @@ class LinearProbeMetric:
         return MetricResult(
             name=self.name,
             score=float(probe.score),
-            higher_is_better=probe.primary_metric
-            not in {"mae", "rmse", "normalized_rmse_mean"},
+            higher_is_better=probe.primary_metric not in {"mae", "rmse", "normalized_rmse_mean"},
             kind="linear_probe",
             diagnostics={
                 "primary_metric": probe.primary_metric,

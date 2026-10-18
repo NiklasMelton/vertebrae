@@ -1586,9 +1586,7 @@ def _metrics_from_args(args: argparse.Namespace) -> list[Any]:
     if len(metric_names) > len(metric_paths) or len(metric_configs) > len(metric_paths):
         raise ValueError("--metric-name and --metric-config-json must correspond to --metric.")
     metrics: list[Any] = []
-    if getattr(args, "linear_probe_config_json", None) and not getattr(
-        args, "linear_probe", False
-    ):
+    if getattr(args, "linear_probe_config_json", None) and not getattr(args, "linear_probe", False):
         raise ValueError("--linear-probe-config-json requires --linear-probe.")
     if getattr(args, "linear_probe", False):
         raw_probe_config = getattr(args, "linear_probe_config_json", None)
@@ -1597,9 +1595,7 @@ def _metrics_from_args(args: argparse.Namespace) -> list[Any]:
             raise ValueError("--linear-probe-config-json must decode to a JSON object.")
         metrics.append(LinearProbeMetric(LinearProbeConfig(**probe_config_data)))
     for index, path in enumerate(metric_paths):
-        raw_config = (
-            metric_configs[index] if index < len(metric_configs) else None
-        )
+        raw_config = metric_configs[index] if index < len(metric_configs) else None
         config = json.loads(raw_config) if raw_config else {}
         if not isinstance(config, dict):
             raise ValueError("--metric-config-json must decode to a JSON object.")
@@ -2065,16 +2061,12 @@ def _render_slurm_score_array_script(args: argparse.Namespace, seeds: list[int])
     if groups_key is not None:
         lines.append(f"  --groups-key {_shell_quote(groups_key)} \\")
     if args.scoring_config_pickle:
-        lines.append(
-            "  --scoring-config-pickle "
-            f"{_shell_quote(args.scoring_config_pickle)} \\"
-        )
+        lines.append("  --scoring-config-pickle " f"{_shell_quote(args.scoring_config_pickle)} \\")
     if args.linear_probe:
         lines.append("  --linear-probe \\")
     if args.linear_probe_config_json:
         lines.append(
-            "  --linear-probe-config-json "
-            f"{_shell_quote(args.linear_probe_config_json)} \\"
+            "  --linear-probe-config-json " f"{_shell_quote(args.linear_probe_config_json)} \\"
         )
     if args.primary_metric != "overlap":
         lines.append(f"  --primary-metric {_shell_quote(args.primary_metric)} \\")

@@ -484,10 +484,7 @@ def _fit_predict(
         python_warnings.simplefilter("always")
         estimator.fit(train_embeddings, train_targets)
         predictions = estimator.predict(holdout_embeddings)
-    warnings = [
-        f"Fold {fold}: {item.category.__name__}: {item.message}"
-        for item in caught
-    ]
+    warnings = [f"Fold {fold}: {item.category.__name__}: {item.message}" for item in caught]
     return predictions, warnings
 
 
