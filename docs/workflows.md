@@ -22,7 +22,8 @@ The ordinary `Benchmark` and `Evaluator` workflows support:
 - scikit-learn transformers and pipelines, custom Python callables, local PyTorch,
   Keras, and ONNX models, and the optional extractor families listed in the
   [extractor guide](https://github.com/NiklasMelton/vertebrae/blob/develop/docs/feature_extractors.md);
-- the built-in OverlapIndex metric, additional custom full-batch embedding metrics,
+- the built-in OverlapIndex metric, an optional rankable out-of-fold linear probe,
+  and additional custom full-batch embedding metrics,
   repeated-run stability analysis, and gated Separatix diagnostics.
 
 Classification and multi-label workflows use discrete OverlapIndex. Explicit

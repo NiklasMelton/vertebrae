@@ -1,9 +1,11 @@
 """Scoring helpers."""
 
+from vertebrae.scoring.linear_probe import LinearProbeScorer, LinearProbeScoreResult
 from vertebrae.scoring.metrics import (
     CallableMetric,
     EmbeddingMetric,
     LabelRetrievalMetric,
+    LinearProbeMetric,
     MetricResult,
     OverlapMetric,
     as_embedding_metric,
@@ -26,6 +28,9 @@ __all__ = [
     "CallableMetric",
     "EmbeddingMetric",
     "LabelRetrievalMetric",
+    "LinearProbeMetric",
+    "LinearProbeScorer",
+    "LinearProbeScoreResult",
     "MetricResult",
     "OverlapMetric",
     "as_embedding_metric",

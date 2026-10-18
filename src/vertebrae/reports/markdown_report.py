@@ -142,14 +142,14 @@ def render_markdown_report(result: Any) -> str:
     lines.append(
         "| rank | extractor | extractor_type | target_view | label_view | "
         "primary_metric | primary_score | overlap_score | overlap_macro | "
-        "overlap_weighted | stability_interval | "
+        "overlap_weighted | linear_probe_score | stability_interval | "
         "weakest_class | best_probe | probe_metric | probe_score | embedding_dim | compression | "
         "compressed_dim | recommendation | separatix_recommendation | "
         "separatix_confidence |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | "
-        "--- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | "
+        "--- | --- | --- | ---: | ---: | --- | ---: | --- | --- | --- |"
     )
     for rank, item in enumerate(ranked_results, start=1):
         interval = _format_interval(item.stability)
@@ -181,6 +181,7 @@ def render_markdown_report(result: Any) -> str:
             f"{_format_float(item.overlap.score if item.overlap else None)} | "
             f"{_format_float(item.overlap.macro_score if item.overlap else None)} | "
             f"{_format_float(item.overlap.weighted_score if item.overlap else None)} | "
+            f"{_format_float(item.linear_probe.score if item.linear_probe else None)} | "
             f"{_markdown_text(interval)} | {_markdown_text(weakest)} | "
             f"{_markdown_text(probe.get('best_probe') or '')} | "
             f"{_markdown_text(primary_probe_metric.get('name') or '')} | "
@@ -291,6 +292,28 @@ def render_markdown_report(result: Any) -> str:
                     f"{_markdown_text(overlap.metadata.get('exclude_classes', []))}",
                 ]
             )
+        linear_probe = item.linear_probe
+        if linear_probe:
+            probe_metrics = linear_probe.diagnostics.get("metrics", {})
+            lines.extend(
+                [
+                    "",
+                    "#### Linear probe",
+                    "",
+                    "- Evaluation: fixed-capacity out-of-fold linear decoder",
+                    "- Primary probe metric: "
+                    f"{_markdown_text(linear_probe.diagnostics.get('primary_metric', ''))}",
+                    f"- Linear-probe score: {_format_float(linear_probe.score)}",
+                    "- Cross-validation: "
+                    f"{_markdown_text(linear_probe.metadata.get('cv_method', ''))}; "
+                    f"{_markdown_text(linear_probe.metadata.get('n_splits', ''))} folds; "
+                    f"group-aware={bool(linear_probe.metadata.get('group_aware', False))}",
+                ]
+            )
+            if probe_metrics:
+                lines.extend(["", "| linear-probe metric | value |", "| --- | ---: |"])
+                for key, value in probe_metrics.items():
+                    lines.append(f"| {_markdown_text(key)} | {_format_float(value)} |")
         segmentation = item.embedding_metadata.get("segmentation")
         if segmentation:
             lines.extend(

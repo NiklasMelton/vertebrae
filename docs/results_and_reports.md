@@ -19,6 +19,7 @@ Each extractor contributes an `ExtractorResult` with:
 - extractor identity and type,
 - `OverlapScoreResult`,
 - a named collection of normalized metric results,
+- an optional rankable `LinearProbeMetric` result,
 - the selected `primary_metric_name` and aggregate `primary_score`,
 - optional stability summary,
 - optional Separatix complexity diagnostic,
@@ -172,7 +173,10 @@ metric is also available as `metric.<name>`, and benchmark stage timings use
 `runtime.<stage>`. Stability mode, repeats, interval level, mean, standard deviation,
 minimum, maximum, interval bounds, and width are flattened alongside warnings,
 overlap, Separatix/probe, compression, target/label-view, and compact resource-profile
-columns. Detailed per-class,
+columns. When configured, the built-in linear probe also contributes
+`linear_probe_score` and `linear_probe_metric`; its complete target-aware metric map,
+fold summaries, and per-class or per-target details remain in the nested metric result.
+Detailed per-class,
 pairwise, complete stability-repeat, and full Separatix data remain in the serialized
 result rather than being expanded into wide DataFrame cells.
 
@@ -185,12 +189,16 @@ configured `metric.<name>` and standard `runtime.<stage>` columns.
 
 The Markdown ranking table uses the same metric-aware summary fields. Its current
 core columns are `primary_metric`, `primary_score`, `overlap_score`,
-`overlap_macro`, `overlap_weighted`, `stability_interval`, `weakest_class`,
-`best_probe`, `probe_metric`, and `probe_score`, followed by embedding,
-compression, recommendation, and Separatix fields. Target and label views are
-included explicitly so expanded results remain distinguishable.
+`overlap_macro`, `overlap_weighted`, `linear_probe_score`, `stability_interval`,
+`weakest_class`, `best_probe`, `probe_metric`, and `probe_score`, followed by
+embedding, compression, recommendation, and Separatix fields. Target and label views
+are included explicitly so expanded results remain distinguishable.
 
-Probe fields are target-aware. For example, a single-label diagnostic may select
+The `linear_probe_score` column is present only when `LinearProbeMetric` was
+configured; `linear_probe_metric` names the target-aware statistic behind that score.
+It is distinct from the unprefixed probe fields below, which summarize Separatix.
+
+Separatix probe fields are target-aware. For example, a single-label diagnostic may select
 balanced accuracy, a multi-label diagnostic may select macro/micro F1 or sample
 Jaccard, and a regression diagnostic may select R². Consumers should inspect
 `probe_metric` before interpreting `probe_score`; there is no universal

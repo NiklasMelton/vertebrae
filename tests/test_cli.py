@@ -1808,6 +1808,11 @@ def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
                 "3",
                 "--random-state",
                 "7",
+                "--linear-probe",
+                "--linear-probe-config-json",
+                '{"n_splits": 3}',
+                "--primary-metric",
+                "linear_probe",
                 "--script-output",
                 str(script_path),
                 "--python-executable",
@@ -1822,6 +1827,9 @@ def test_cli_slurm_score_array_generates_repeat_score_commands(tmp_path):
     assert "python -m vertebrae.cli score" in script
     assert '--seed "${SEED}"' in script
     assert "--groups-key groups/example" in script
+    assert "--linear-probe" in script
+    assert "--linear-probe-config-json" in script
+    assert "--primary-metric linear_probe" in script
     assert "collect-scores" in script
 
 

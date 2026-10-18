@@ -244,7 +244,7 @@ class ScoringJob:
         groups_key: Optional artifact-store key for aligned independence groups.
         output_key: Artifact-store key for scoring results.
         scoring_config: Optional OverlapIndex scoring configuration.
-        metrics: Optional custom embedding metrics. OverlapIndex is always included.
+        metrics: Optional additional embedding metrics. OverlapIndex is always included.
         primary_metric: Metric name selected for aggregate score collection.
         seed: Optional scoring seed, commonly used for stability repeats.
         resources: Resource request for scoring.
