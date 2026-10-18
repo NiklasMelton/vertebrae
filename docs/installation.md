@@ -6,6 +6,15 @@ Install the core package from PyPI:
 pip install vertebrae
 ```
 
+The planned `1.1.0` release requires `overlapindex>=0.1.5,<0.2.0` for opt-in
+single-label prototype refinement. During integration, upstream `0.1.5` is not yet
+published: validation uses the exact local candidate wheel recorded in
+`artifacts/oi_refinement_integration/handoff.json`. The checked-in `poetry.lock` still
+records registry release `0.1.4` and is intentionally not a resolved `1.1.0` lock.
+After the approved upstream release is available, run `poetry lock`, review the
+registry version and hashes, then run `poetry install --with dev` and the tests before
+release. Do not substitute a machine-local path or guessed registry hash in the lock.
+
 The core distribution requires the supported Separatix diagnostic API at
 `separatix>=0.1.1`. That version is required for the canonical recommendation
 labels, paired family evidence, and versioned probe recipes described in the

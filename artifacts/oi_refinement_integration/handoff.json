@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "status": "implementation_complete_pending_upstream_registry_release",
+  "repository": "vertebrae",
+  "branch": "oi-refinement-integration",
+  "base_branch": "develop",
+  "base_commit_at_review": "e75c96bd0eb47c53960fbdd5046a5183d6d508dc",
+  "starting_commit": "c703f8e393b4d781ad7c1a70fee59b03203a2f1d",
+  "baseline_preservation_commits": [
+    "b39e7a6",
+    "7e2fc15"
+  ],
+  "implementation_commits": [
+    "f850d49"
+  ],
+  "baseline_preserved_file": "docs/nuisance_accessibility_experiment_plan.md",
+  "excluded_starting_files": [],
+  "pr_diff_review": "Compared with origin/develop: only the preserved draft plan/navigation and this adapter, tests, docs, and version metadata are added. The inherited linear-experiment history is already in develop.",
+  "upstream": {
+    "pr_url": "https://github.com/NiklasMelton/OverlapIndex/pull/47",
+    "candidate_version": "0.1.5",
+    "candidate_wheel_local_path": "/Users/niklasmelton/code/OverlapIndex/artifacts/native_oi_refinement_integration/dist/overlapindex-0.1.5-py3-none-any.whl",
+    "candidate_wheel_sha256": "25f78fa32d45939be77b973d07540c4eccc02501e4c8a6cf9d287435da934302",
+    "source_commit": "77e08e68bfe0a568c32a83e9efb79ba437a50435",
+    "handoff_local_path": "/Users/niklasmelton/code/OverlapIndex/artifacts/native_oi_refinement_integration/handoff.json"
+  },
+  "validation": {
+    "wheel_installed_in_poetry_environment": true,
+    "real_wheel_targeted_tests": "28 passed",
+    "full_pytest": "1297 passed, 29 skipped",
+    "ruff": "passed",
+    "mypy_src": "passed",
+    "sphinx_warning_as_error_build": "passed",
+    "poetry_build_1_1_0": "wheel and sdist built",
+    "poetry_check_lock": "fails because pyproject requires unpublished overlapindex>=0.1.5 and the registry lock still records 0.1.4"
+  },
+  "documentation": {
+    "scoring": "docs/scoring.md",
+    "installation": "docs/installation.md",
+    "result_metadata": "docs/results_and_reports.md",
+    "canonical_upstream_evidence": "https://github.com/NiklasMelton/OverlapIndex/blob/native-oi-refinement-release/docs/native_refinement_evidence.md"
+  },
+  "dependency_state": "pyproject.toml declares overlapindex>=0.1.5,<0.2.0; poetry.lock retains the real 0.1.4 registry hashes. After upstream 0.1.5 publication, run poetry lock, review the resolved registry files/hashes, poetry install --with dev, and the checks. No machine-local dependency or fabricated hash is committed.",
+  "pr_url": "https://github.com/NiklasMelton/vertebrae/pull/84",
+  "pr_state": "open draft",
+  "release_or_merge_performed": false
+}

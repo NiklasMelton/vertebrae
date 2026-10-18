@@ -24,6 +24,7 @@ class OverlapScoringConfig:
         normalize_embeddings: Whether to L2-normalize embeddings before scoring.
         max_dense_bytes: Fallback dense-operation limit for downstream diagnostics.
         exclude_classes: Reporting-only classes omitted from global aggregation.
+        prototype_refinement: Opt-in upstream refinement for single-label targets only.
     """
 
     k: Union[int, str, Dict[Any, int]] = "auto"
@@ -35,8 +36,10 @@ class OverlapScoringConfig:
     normalize_embeddings: bool = True
     max_dense_bytes: int = 2_000_000_000
     exclude_classes: Any = None
+    prototype_refinement: bool = False
 
     def __post_init__(self) -> None:
+        _require_bool(self.prototype_refinement, "OverlapScoringConfig.prototype_refinement")
         if isinstance(self.k, bool) or not isinstance(self.k, (Integral, str, dict)):
             raise TypeError("OverlapScoringConfig.k must be an int, dict, or 'auto'.")
         if isinstance(self.k, str) and self.k != "auto":

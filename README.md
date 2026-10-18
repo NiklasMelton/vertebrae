@@ -708,6 +708,16 @@ poetry run python examples/tiny_shakespeare_transformer_visual_suite.py
 
 ### Choosing backbones and downstream heads
 
+Single-label scoring can optionally enable upstream prototype refinement with
+`OverlapScoringConfig(prototype_refinement=True)` (OverlapIndex `>=0.1.5,<0.2.0`).
+It remains off by default and retains Vertebrae's MiniBatchKMeans backend, normalization,
+adaptive `k`, and ranking behavior. The
+[scoring guide](docs/scoring.md#optional-prototype-refinement-and-backbone-ranking)
+describes the separate prospective evidence for OI-first shortlisting and its limits:
+the tested KMeans16 plus refinement protocol does not validate unchanged MiniBatchKMeans
+defaults or establish refinement alone as the cause. Finalist selection and downstream
+head training remain outside this adapter. The historical examples below are unchanged.
+
 [`oxford_pets_backbone_selection.py`](https://github.com/NiklasMelton/vertebrae/blob/develop/examples/oxford_pets_backbone_selection.py)
 shows the two decisions separately: use OverlapIndex to shortlist frozen backbone
 outputs, then use Separatix to decide which downstream family is worth testing. On

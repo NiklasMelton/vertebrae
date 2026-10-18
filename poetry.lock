@@ -6086,14 +6086,14 @@ tiering-service = ["aiosqlite", "fire", "greenlet", "grpcio-tools (>=1.80.0)", "
 
 [[package]]
 name = "overlapindex"
-version = "0.1.4"
+version = "0.1.5"
 description = "OverlapIndex (OI), an Incremental Cluster Validity index for identifying the degree of overlap of data classes."
 optional = false
 python-versions = "<3.15,>=3.9"
 groups = ["main"]
 files = [
-    {file = "overlapindex-0.1.4-py3-none-any.whl", hash = "sha256:41e28419214fc11439a083cb2fe99e69450deecdc0af7c866ce70bcb0a86315c"},
-    {file = "overlapindex-0.1.4.tar.gz", hash = "sha256:c9ca424bc9fab0f5bbb8e0822b300f9c7b4c13160e174770604f10d195d76b6b"},
+    {file = "overlapindex-0.1.5-py3-none-any.whl", hash = "sha256:2822f6a7d8a25bce3db84d11e847dd48b11cef9b00350a961ade29068f0e0343"},
+    {file = "overlapindex-0.1.5.tar.gz", hash = "sha256:4596f1a9279993d0f473c80dd4b7d2763d9188ba4c94f29d561011a82f615cab"},
 ]
 
 [package.dependencies]
@@ -11333,4 +11333,4 @@ visuals = ["matplotlib", "torch", "torchvision"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<3.15"
-content-hash = "041cb9edf7f33934863b12625e95b4a3b83d00d222181d2cacaf93e81b6a57f5"
+content-hash = "5af770a5de078eb23f6faa74ed89e7be40ff79521fc2b572a7d4a260b7112dfd"
